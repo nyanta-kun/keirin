@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/
+
+# データファイル（大容量・再生成可能）
+data/keirin.db
+data/keirin.db-shm
+data/keirin.db-wal
+data/raw/
+data/features/
+data/processed/
+data/logs/
+
+# モデルファイル: lgbm_v4 と lgbm.pkl のみ保持
+data/models/*.pkl
+!data/models/lgbm_v4.pkl
+!data/models/lgbm.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/

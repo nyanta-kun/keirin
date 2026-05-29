@@ -1,0 +1,35 @@
+database:
+  path: data/keirin.db
+
+scraping:
+  delay_min: 2.0       # リクエスト間の最小待機秒数
+  delay_max: 5.0       # リクエスト間の最大待機秒数
+  timeout: 30
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+data_collection:
+  years_back: 2        # 過去何年分を収集するか
+  start_date: "2024-01-01"
+
+sources:
+  keirin_station:
+    base_url: "https://keirin-station.com/keirindb"
+    enabled: true
+  oddspark:
+    base_url: "https://www.oddspark.com/keirin"
+    enabled: true
+  netkeirin:
+    base_url: "https://keirin.netkeiba.com/db"
+    enabled: true
+    use_selenium: true
+
+model:
+  random_seed: 42
+  test_size: 0.2
+  validation_size: 0.1
+  target_column: "top3_flag"  # 3着以内なら1
+
+prediction:
+  top_n_combinations: 20    # 出力する組み合わせ上位N点
+  min_expected_value: 1.0   # 期待値フィルター（オッズ×確率）

@@ -1,0 +1,31 @@
+# Data collection
+requests==2.31.0
+beautifulsoup4==4.12.3
+selenium==4.18.1
+webdriver-manager==4.0.1
+lxml==5.1.0
+
+# Data processing
+pandas==2.2.1
+numpy==1.26.4
+sqlalchemy==2.0.28
+
+# Machine learning
+scikit-learn==1.4.1
+xgboost==2.0.3
+lightgbm==4.3.0
+optuna==3.5.0
+
+# Analysis
+jupyter==1.0.0
+matplotlib==3.8.3
+seaborn==0.13.2
+
+# CLI
+click==8.1.7
+
+# Database
+# sqlite3 is built-in
+
+# Testing
+pytest==8.1.0
