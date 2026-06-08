@@ -63,7 +63,13 @@ def main():
 
     picks = _parse_picks_full(target_date)
     if not picks:
-        send(f"⚠️ 競輪AI[wt] [{target_date}] 予想ファイルが見つかりません")
+        # ファイル不在(真のエラー) と 推奨(SS/S/A)0件(=Bランクのみ/静かな日・正常) を区別する
+        picks_file = Path(__file__).parent.parent / "data" / "picks" / f"wave_picks_wt_{target_date}.txt"
+        if not picks_file.exists():
+            send(f"⚠️ 競輪AI[wt] [{target_date}] 予想ファイルが見つかりません")
+        else:
+            send(f"📊 競輪AI[wt] [{target_date}] 推奨買い目(SS/S/A)なし＝採点対象なし"
+                 f"（Bランク=各自判断のみ、または対象レースなしの日）")
         return
 
     with get_connection() as conn:

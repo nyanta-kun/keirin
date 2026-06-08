@@ -57,3 +57,34 @@ def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
     assert picks[("京王閣", 3)][0] == "A"
     assert ("いわき平", 6) not in picks, "Bランクは採点対象から除外されるべき"
     assert len(picks) == 1
+
+
+# ── notify_results_wt.main: Bランクのみ(推奨0件)を「ファイル無し」と誤通知しない ──
+_B_ONLY_DATE = "2099-12-30"
+_B_ONLY = """\
+【SSランク】 0件
+  (該当なし)
+【Sランク】 0件
+  (該当なし)
+【Aランク】 0件
+  (該当なし)
+【Bランク】 1件  ※各自判断
+  17:48  いわき平 6R  [6車]  (元A) 3連複: 2-3-1,5,4  (3点/300円)  [9999.9倍]
+"""
+
+
+def test_results_b_only_not_filemissing(monkeypatch):
+    import sys as _sys
+    path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_B_ONLY_DATE}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_B_ONLY, encoding="utf-8")
+    msgs = []
+    monkeypatch.setattr(nr, "send", lambda m: msgs.append(m))
+    monkeypatch.setattr(_sys, "argv", ["notify_results_wt.py", _B_ONLY_DATE])
+    try:
+        nr.main()
+    finally:
+        path.unlink(missing_ok=True)
+    assert msgs, "通知が送られていない"
+    assert "見つかりません" not in msgs[0], "Bランクのみを『ファイル無し』と誤通知している"
+    assert "採点対象なし" in msgs[0] or "推奨買い目" in msgs[0]
