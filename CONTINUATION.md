@@ -13,6 +13,13 @@
 - **③** ⚠️ レポート§3の `top2_sum<0.80`(607%)は**スケール誤りのアーティファクト＝撤回**（実際 top2_sum中央値1.40でほぼ該当なし）。`docs/analysis/03` 冒頭に訂正注記済。最終オッズフィルタは上限値、**朝7:00確定で問題なし**。
 - **★統合検証(`scripts/exp_upset_gate_wt.py`)**: 正しい頑健シグナルは **`top3_sum`(上位3頭pred_prob合計)のloose四分位**。TRAIN四分位カット[1.70,1.90,2.08]をTEST(OOS)適用→ **Q1_loose(top3_sum<1.70): TRAIN ROI 1224% / TEST 1136%(125R・最大払戻除外でも934%)** vs Q4_chalk 107%。単調・train/test一致・volume十分・万車券単発非依存。
 
+### ★ガミ回避レーススキップ採用（2026-06-08・本番cron反映済）
+ユーザー判断で「朝オッズ3点中1点でも閾値未満ならレース見送り」を採用。閾値スイープ(`scripts/analyze_gami_threshold_wt.py`)で決定:
+- 総損益は<3〜6倍でほぼ横ばい・ROIは単調上昇・購入R半減 → **<3倍点を含むレースは集団で収支ゼロの鉄板**。「安い目カット」より「**レーススキップ**」が ROI・総損益とも上（TEST 全件286%→<5倍636%、総利益ほぼ維持）。
+- **既定=5.0倍**（総利益維持×ROI/資金効率×落車クッションのバランス）。`wave-picks-wt --gami-skip-odds 5.0` を `daily_picks_wt.sh` に組込済。
+- ⚠️ 朝オッズ基準＝朝→直前ドリフトの影響を受ける（`snapshot_morning_odds_wt.py --report` で計測中）。オッズ不要の同義代替 = `--upset-gate`(top3_sum)。
+- スクリプト: `scripts/analyze_gami_policy_wt.py`（カット vs スキップ）, `scripts/analyze_gami_threshold_wt.py`（閾値3〜8倍スイープ）。
+
 ### 実装済み（試験実装・本番挙動は不変）
 - `src/strategy_wt.py`（新規）: `race_signals()` / `upset_tier()` / `passes_upset_gate()`。カット定数 `UPSET_TOP3SUM_CUTS=(1.70,1.90,2.08)`（**再学習で確率分布が変わったら再計測**）。
 - `wave-picks-wt`: 各pickに `top3_sum`/`upset_tier` を**タグ付け（既定・detail.jsonに記録）**＋ **opt-in `--upset-gate Q1_loose|Q2|Q3`** で本命堅レースを見送り。既定は全件出力で本番不変＝前向き検証用。

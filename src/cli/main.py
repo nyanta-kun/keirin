@@ -1039,7 +1039,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
               type=click.Choice(["Q1_loose", "Q2", "Q3"]),
               help="波乱/非本命ゲート: 指定帯まで(loose側)のみ出力し本命堅レースを見送る。"
                    "省略時は全件出力（各pickにupset_tierをタグ付けのみ＝本番挙動不変・前向き検証用）")
-def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate):
+@click.option("--gami-skip-odds", "gami_skip_odds", default=0.0, show_default=True,
+              type=float,
+              help="ガミ回避: 3点(SS=3連単/S・A=3連複)のうち1点でも朝オッズ<この倍率なら"
+                   "レースごと見送り（鉄板=低価値レースの除外）。0=無効。推奨5.0")
+def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate, gami_skip_odds):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1161,6 +1165,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
     ss_races, s_races, a_races = [], [], []
     skipped_odds = 0
+    skipped_gami = 0
 
     for race_key, grp in df.groupby("race_key"):
         grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
@@ -1196,6 +1201,19 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
         # オッズ取得
         odds = _load_odds(race_key)
+
+        # ガミ回避: 3点中1点でも朝オッズ<閾値ならレースごと見送り（鉄板=低価値の除外）
+        if gami_skip_odds > 0:
+            is_ss = (gap12 >= 0.15 and ratio < 1.3)
+            leg_odds = []
+            for tdr in thirds:
+                if is_ss:
+                    leg_odds.append(_find_trifecta_odds(odds, pivot1, pivot2, [tdr]))
+                else:
+                    leg_odds.append(_find_trio_odds(odds, [pivot1, pivot2, tdr]))
+            if any(o is not None and o < gami_skip_odds for o in leg_odds):
+                skipped_gami += 1
+                continue
 
         # riders_detail（PDF生成との互換性を保つ）
         riders_detail = []
@@ -1272,6 +1290,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         msg = "本日は6車立て以下の対象レース（gap12≥0.06）がありません。"
         if skipped_odds > 0:
             msg += f"（オッズフィルターで {skipped_odds} 件スキップ）"
+        if skipped_gami > 0:
+            msg += f"（ガミ回避<{gami_skip_odds:.0f}倍で {skipped_gami} 件スキップ）"
         click.echo(msg, err=True)
         raise SystemExit(1)
 
@@ -1294,6 +1314,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     lines.append(f" モデル: {model_name}  生成: {now_str}")
     if min_trio_odds > 0:
         lines.append(f" オッズフィルター: ≥{min_trio_odds:.1f}倍  (スキップ: {skipped_odds}件)")
+    if gami_skip_odds > 0:
+        lines.append(f" ガミ回避: 3点中<{gami_skip_odds:.0f}倍を含むレースを除外  (スキップ: {skipped_gami}件)")
     lines.append("=" * 70)
     lines.append(" 対象: 6車立て以下  gap12≥0.06 のみ")
     lines.append(" SS: gap12≥0.15&ratio<1.3(3連単)  S: gap12≥0.15&ratio[1.3,1.6)(3連複)  A: gap12[0.06,0.15)(3連複)")
