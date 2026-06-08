@@ -1,6 +1,6 @@
 # システムアーキテクチャ
 
-> 最終更新: 2026-06-06
+> 最終更新: 2026-06-08
 
 ---
 
@@ -9,9 +9,9 @@
 競輪AI予想システム「穴車AI」。6車立て以下レースを3段階ランク（SS/S/A）で予想し、
 Discord 通知と X(Twitter) 配信を自動化する CLI ベースのシステム。
 
-**2ルート構成:**
-- **keirin-station ルート** — 本番稼働中。競輪ステーション（keirin-station.com）経由でデータ収集・学習
-- **winticket ルート** — 実装済み・収集前。winticket.jp 経由。ライン情報・事前オッズが追加取得可能
+**2ルート構成（2026-06-08 winticketへ完全移行）:**
+- **winticket ルート（★本番稼働中）** — winticket.jp 経由。ライン情報・全組合せ事前オッズを取得。lgbm_wt（39特徴）。
+- **keirin-station ルート（収集停止・ロールバック保持）** — keirin-station.com 経由。lgbm_v6（24特徴）。2026-06-08で収集凍結。
 
 ---
 
@@ -27,9 +27,10 @@ keirin/
 │   │   ├── winticket.py               # winticket スクレイパー（PRELOADED_STATE JSON解析）
 │   │   └── pipeline_wt.py             # wt収集パイプライン（並列2会場・オッズ同時取得）
 │   ├── preprocessing/
-│   │   ├── feature_engineer.py        # FEATURE_COLS（24特徴量）・build_features()
-│   │   ├── feature_wt.py              # FEATURE_COLS_WT（30特徴量）・build_features_wt()
+│   │   ├── feature_engineer.py        # FEATURE_COLS（24特徴量・ks/ロールバック）・build_features()
+│   │   ├── feature_wt.py              # FEATURE_COLS_WT（39特徴量・rolling込/DNS処理済）・build_features_wt()
 │   │   └── rolling_stats.py           # compute-stats（6ヶ月勝率・場別勝率・前走日数）
+│   ├── strategy_wt.py                  # 波乱/非本命ゲート（top3_sum・upset_tier・passes_upset_gate）
 │   ├── models/
 │   │   └── trainer.py                 # train_lgbm/train_baseline/save_model/load_model
 │   ├── prediction/
@@ -42,12 +43,16 @@ keirin/
 │   └── cli/
 │       └── main.py                    # CLIエントリーポイント（全コマンド定義）
 ├── scripts/
+│   ├── daily_picks_wt.sh              # ★本番日次（cron 7:00）
+│   ├── weekly_retrain_wt.sh           # ★本番週次（cron 日23:30）
 │   ├── notify_picks.py                # wave-picks 通知 + PDF生成 → Discord
-│   └── notify_results.py              # 前日結果 + 的中履歴 → Discord
+│   ├── notify_results_wt.py           # wt前日結果採点 + picks_history(route='wt') → Discord
+│   ├── snapshot_morning_odds_wt.py    # 朝オッズ退避(wt_odds_snapshot) / --report ドリフト計測
+│   └── analyze_*/backtest_*_wt.py     # 各種検証スクリプト
 ├── data/
-│   ├── keirin.db                      # SQLite DB（94,830レース / WALモード）
-│   ├── models/                        # lgbm.pkl（v6）/ lgbm_wt.pkl（未学習）等
-│   └── picks/                         # wave_picks_YYYY-MM-DD.txt / _detail.json / _detail.pdf
+│   ├── keirin.db                      # SQLite DB（wt 96,455R + ks凍結 / WALモード）
+│   ├── models/                        # lgbm_wt.pkl（=v1・本番）/ lgbm.pkl（=v6・ロールバック）等
+│   └── picks/                         # wave_picks_wt_YYYY-MM-DD.txt / _detail.json / _detail.pdf
 ├── config/                            # 設定ファイル（.env: DISCORD_WEBHOOK_URL）
 ├── docs/                              # ドキュメント
 ├── notebooks/                         # Jupyter（探索・分析用）
@@ -60,38 +65,27 @@ keirin/
 
 ## CLI コマンド一覧
 
-### keirin-station ルート
-
-| コマンド | 説明 |
-|---------|------|
-| `init` | DB初期化（初回のみ） |
-| `status` | 収集状況確認 |
-| `collect --date` | 1日分収集 |
-| `collect-month --year --month` | 1ヶ月分収集 |
-| `collect-range --from [--to]` | 年月範囲を順方向収集 |
-| `collect-reverse --from [--to]` | 年月範囲を逆順収集（最新優先） |
-| `compute-stats [--force]` | rolling統計計算（6ヶ月勝率・場別勝率等） |
-| `train [--model] [--from] [--test-from] [--save-as]` | LightGBM学習 |
-| `backtest` | 戦略別バックテスト |
-| `analyze` | 閾値フィルター分析 |
-| `weekly [--days]` | 直近N日の日別・場別集計 |
-| `day-sim --date` | 1日分の購入シミュレーション |
-| `venue` | 会場別的中率・回収率 |
-| `predict --race-key` | 1レース予想 |
-| `wave-picks [--date]` | SS/S/A 3段階ランク予想生成 |
-| `upset-train` | 波乱レース予測モデル学習 |
-| `upset-backtest` | 波乱モデル × 戦略バックテスト |
-
-### winticket ルート
+### winticket ルート（★本番）
 
 | コマンド | 説明 |
 |---------|------|
 | `status-wt` | 収集状況確認 |
-| `collect-wt [--date]` | 1日分収集（レース+オッズ） |
+| `collect-wt [--date]` | 1日分収集（レース+オッズ同時） |
 | `collect-wt-range --from [--to]` | 年月範囲を逆順収集 |
-| `train-wt [--from] [--test-from] [--save-as]` | winticket 用LightGBM学習 |
-| `backtest-wt [--from] [--to] [--model] [--max-riders] [--min-gap12]` | winticket 用 買い目バックテスト（wt_odds の実オッズ使用） |
-| `wave-picks-wt [--date] [--min-trio-odds]` | オッズフィルター付き予想生成 |
+| `train-wt [--from] [--test-from] [--save-as]` | winticket 用LightGBM学習（39特徴） |
+| `backtest-wt [--from] [--to] [--model] [--max-riders] [--min-gap12] [--tiered] [--value]` | 買い目バックテスト（wt_odds 実オッズ使用） |
+| `wave-picks-wt [--date] [--min-trio-odds] [--gami-skip-odds] [--b-rank-odds] [--upset-gate]` | SS/S/A 予想生成＋ガミ3段階／波乱ゲート |
+
+**wave-picks-wt の主要フラグ（2026-06-08 追加）:**
+- `--gami-skip-odds 3.0`：3点中1点でも朝オッズ<3倍ならレース見送り
+- `--b-rank-odds 5.0`：最安目が3〜5倍未満ならBランク（購入は各自判断・別枠）
+- `--upset-gate Q1_loose|Q2|Q3`：top3_sum波乱ゲート（opt-in。省略時は全pickに upset_tier タグ付けのみ）
+
+補助スクリプト: `scripts/snapshot_morning_odds_wt.py [date]`（朝オッズ退避）/ `--report`（朝→最終ドリフト計測）。
+
+### keirin-station ルート（収集停止・ロールバック保持）
+
+`init` / `status` / `collect[-month/-range/-reverse]` / `compute-stats` / `train` / `backtest` / `analyze` / `weekly` / `day-sim` / `venue` / `predict` / `wave-picks` / `upset-train` / `upset-backtest`（2026-06-08 以降 日常運用では未使用）。
 
 ---
 
@@ -146,8 +140,9 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 | テーブル | 内容 |
 |--------|------|
 | `wt_races` | レース情報（cup_id, day_index, grade, start_at 等） |
-| `wt_entries` | 出走情報（34カラム: race_point, 脚質, lineup情報, 戦術率 等） |
-| `wt_odds` | 事前オッズ（bet_type: trifecta/trio/exacta/quinella 等, odds_value） |
+| `wt_entries` | 出走情報（34カラム: race_point, 脚質, lineup情報, 戦術率, finish_order 等） |
+| `wt_odds` | 事前オッズ（bet_type: trifecta/trio/exacta/quinella 等, odds_value・最終値で上書き） |
+| `wt_odds_snapshot` | 朝オッズ退避（snapshot_type='morning'・初回値保持。朝→最終ドリフト計測用） |
 
 ---
 
@@ -165,16 +160,18 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 
 ---
 
-## 毎朝の自動実行フロー（想定）
+## 毎朝の自動実行フロー（本番稼働中）
 
 **2026-06-08 以降: winticketルートへ完全移行（ks収集停止）。** 本番日次は `scripts/daily_picks_wt.sh`（cron 7:00）:
 ```
 AM 7:00 （daily_picks_wt.sh）
-  ① collect-wt --date $(yesterday)            # 前日結果 再収集（finish_order>=1のみスキップ）
-  ② notify_results_wt.py $(yesterday)         # 前日成績採点 → Discord / picks_history(route='wt')
-  ③ collect-wt --date $(today)                # 当日出走表+オッズ収集
-  ④ wave-picks-wt --date $(today)             # 予想生成（lgbm_wt 39特徴・SS/S/A）
-  ⑤ notify_picks.py $(today) wave_picks_wt    # 予想 + PDF → Discord
+  ① collect-wt --date $(yesterday)               # 前日結果 再収集（finish_order>=1のみスキップ）
+  ② notify_results_wt.py $(yesterday)            # 前日成績採点 → Discord / picks_history(route='wt')
+  ③ collect-wt --date $(today)                   # 当日出走表+オッズ収集
+  ④ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
+  ⑤ wave-picks-wt --date $(today) \
+       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 39特徴・SS/S/A＋ガミ3段階）
+  ⑥ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord（Bは各自判断・成績/ツイート対象外）
 週次（日 23:30, weekly_retrain_wt.sh）: train-wt 再学習。
 ```
 （旧ksフロー daily_picks.sh / notify_results.py / wave-picks は廃止。lgbm_v6等は保持＝ロールバック用）
@@ -188,6 +185,7 @@ AM 7:00 （daily_picks_wt.sh）
 | 2026-02 | v1.0 本番稼働（LightGBM 13特徴量 / AUC 0.7444） |
 | 2026-05 | v2〜v4: 特徴量24個・時系列CVへ修正・データ拡張 |
 | 2026-06-02 | wave-picks SS/S/A 3段階ランク戦略策定 |
-| 2026-06-04 | v6: 2023年〜データ追加収集（94,722R）/ AUC 0.7575 / ホールドアウト9ヶ月検証 |
+| 2026-06-04 | ks v6: 2023年〜追加収集 / AUC 0.7575 / ホールドアウト9ヶ月検証 |
 | 2026-06-05 | S ランクに ratio<1.6 上限追加（低配当レース除外） |
-| 2026-06-06 | winticket ルート実装完了（未収集）|
+| 2026-06-07 | winticket 全期間収集（96k）。ローリング特徴移植・ks比較検証 |
+| **2026-06-08** | **DNS(欠車)バグ修正 → winticket本番移行**（lgbm_wt_v1・39特徴・CV AUC 0.7720）。3タスク分析（`docs/analysis/`）→ 波乱ゲート(`strategy_wt.py`)・ガミ回避3段階・朝オッズ前向き計測を実装 |

@@ -143,7 +143,11 @@ ks vs wt のデータ差を精査した結果、得点・勝率は同一(相関0
 - 必要なら collect-wt の当日収集タイミング最適化（朝7:00時点の出走表確定度）。
 - ks資産(lgbm_v6等)は当面保持（ロールバック用）。
 
-## 🔄 ON RESUME（2026-06-07時点・winticket全期間収集中）
+## 🗄 アーカイブ: 2026-06-07 収集フェーズ＆検証ログ（記録として保持・以下すべて履歴）
+
+> **以下はすべて履歴**。winticket 全期間収集は**完了済**（96,455R）。当時の否定的結論（EV妙味なし・本命バイアス・利益条件なし・wtがksに劣る等）は**DNS(欠車)バグ汚染が原因で撤回済**（最新の正しい結論は本ファイル冒頭の「★★現在の本番構成」「★★真因判明」を参照）。「現在の状態」テーブルのみ現行情報。収集手順・暫定モデル・各種実験は再現性のため残置。
+
+### 🔄 (旧) ON RESUME（2026-06-07時点・winticket全期間収集中）
 
 **1. 収集状況を確認:**
 ```bash
@@ -365,78 +369,31 @@ interim結果（train〜2026-02 / test 2026-02〜）:
 
 ---
 
-## 現行の予想戦略（keirin-station ルート）
+### (旧/参考) keirin-station 戦略（ロールバック用・ホールドアウト=上限値）
 
-**wave-picks コマンド**（`src/cli/main.py wave_picks`）
+ks `wave-picks`（lgbm_v6）のホールドアウトROI（2025-06〜2026-02）: SS 3944% / S 158% / A 228%。**最終データbacktest=上限値**（実運用は修正後1週間49%）。閾値定義は wt と共通（gap12/ratio）。
 
-| ランク | 条件 | 買い目 | ホールドアウトROI |
-|--------|------|--------|----------------|
-| SS | gap12≥0.15 & ratio<1.3 | 3連単 1→2→{3,4,5} 3点300円 | **3,944%** |
-| S | gap12≥0.15 & ratio [1.3, 1.6) | 3連複 pivot1-pivot2-{3,4,5} 3点300円 | **158%** |
-| A | gap12 [0.06, 0.15) | 3連複 pivot1-pivot2-{3,4,5} 3点300円 | **228%** |
-
-```
-gap12 = AI予測1位確率 − 2位確率
-ratio = AI予測1位確率 ÷ (3/n_riders)
-```
+> （アーカイブここまで。以下は現行情報）
 
 ---
 
-## 次にやること（優先順）
-
-### 1. winticket データ収集（未着手）
+## 確認コマンド（最新・winticket 本番）
 
 ```bash
 source .venv/bin/activate
 
-# 動作確認（1日分）
-python -m src.cli.main collect-wt --date 2026-06-05 --dry-run
-
-# 本収集（直近1年分）
-python -m src.cli.main collect-wt-range --from 2025-06
-
-# 状況確認
+# 状況・予想・成績
 python -m src.cli.main status-wt
+python -m src.cli.main wave-picks-wt --date $(date +%F) --gami-skip-odds 3.0 --b-rank-odds 5.0
+python scripts/notify_results_wt.py $(date -v-1d +%F)          # 前日成績（mac）
+
+# バックテスト/検証
+python -m src.cli.main backtest-wt --from 2026-03-01 --tiered
+python scripts/backtest_monthly_rank_wt.py                      # 月×ランク（ガミ3段階込み）
+python scripts/snapshot_morning_odds_wt.py --report            # 朝→最終オッズ ドリフト
 ```
 
-- 43会場をスキャン（MAX_VENUE_WORKERS=2, 2.0秒間隔）
-- 1日の収集には約30〜60分かかる見込み
-- `wt_races`, `wt_entries`, `wt_odds` に保存
-
-### 2. winticket モデル学習（収集後）
-
-最低 2,000レース以上集まったら実施。
-
-```bash
-python -m src.cli.main train-wt --from 2025-06-01 --test-from 2026-03-01
-```
-
-### 3. winticket vs keirin-station 比較
-
-両ルートの wave-picks 結果を同日に出力して比較。  
-**winticket の優位性が確認できればルート移行。確認できなければ廃棄（keirin-station ルートはそのまま残す）。**
-
-### 4. keirin-station モデル更新（任意）
-
-春季データ（2026-06〜）が 30R 以上蓄積されたら lgbm_v7 を検討。  
-目安: **実運用で SS 30件以上**（約2ヶ月）。
-
----
-
-## 確認コマンド
-
-```bash
-source .venv/bin/activate
-
-# keirin-station ルート
-python -m src.cli.main status
-python -m src.cli.main weekly --days 7
-python -m src.cli.main wave-picks --date 2026-06-06
-
-# winticket ルート
-python -m src.cli.main status-wt
-python -m src.cli.main wave-picks-wt --date 2026-06-06 --min-trio-odds 3.0
-```
+cron: `daily_picks_wt.sh`(7:00) / `weekly_retrain_wt.sh`(日23:30)。
 
 ---
 

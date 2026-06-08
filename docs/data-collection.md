@@ -1,6 +1,6 @@
 # データ収集ガイド
 
-> 最終更新: 2026-06-06  
+> 最終更新: 2026-06-08  
 > ※旧 `docs/data-sources.md` の内容を本ファイルに統合済み
 
 ---
@@ -9,14 +9,16 @@
 
 | ソース | URL | 方式 | 用途 |
 |--------|-----|------|------|
-| **競輪ステーション** | keirin-station.com | requests + BS4 | メイン収集（本番稼働中）|
-| **winticket** | winticket.jp | requests / SSR JSON | 並び情報・事前オッズ（実装済み・収集前）|
+| **winticket** | winticket.jp | requests / SSR JSON | ★本番。並び情報・全組合せ事前オッズ・選手データ |
+| **競輪ステーション** | keirin-station.com | requests + BS4 | 収集停止（2026-06-08 凍結・ロールバック保持）|
 
-> 公式APIは存在しない。どちらも認証不要。
+> 公式APIは存在しない。どちらも認証不要。**2026-06-08 winticketへ完全移行**（日次cronは `collect-wt`。ks `collect` 系は日常運用では未使用）。
 
 ---
 
-## 1. keirin-station ルート
+> **収集の現況（2026-06-08）**: winticket は全期間 **96,455R**（2022-12〜2026-06）・オッズ約3,380万・結果率99.88% を収集済で日次更新中。keirin-station は同日に収集凍結（下記は仕様の記録）。
+
+## 1. keirin-station ルート（収集停止・凍結）
 
 ### 概要
 
@@ -87,19 +89,16 @@ python -m src.cli.main compute-stats --force
 python -m src.cli.main status
 ```
 
-### 収集状況（2026-06-08 時点）
+### 収集状況（2026-06-08 凍結時点）
 
 | 項目 | 値 |
 |------|---|
-| 収録開始 | 2022-12-30 |
-| 収録終了 | 2026-06-08（最新） |
-| 総レース数 | **94,830 レース** |
-| race_entries | 670,168件 |
-| race_results | 659,024件（カバー率 98.3%） |
+| 収録範囲 | 2022-12-30 〜 2026-06-08 |
+| 総レース数 | 約 94,830 レース（**2026-06-08で収集凍結**・以降更新なし） |
 
 ---
 
-## 2. winticket ルート
+## 2. winticket ルート（★本番）
 
 ### 概要
 
@@ -167,6 +166,24 @@ python -m src.cli.main collect-wt-range --from 2025-06
 
 # 収集状況確認
 python -m src.cli.main status-wt
+```
+
+### 収集状況（2026-06-08 時点・日次更新中）
+
+| 項目 | 値 |
+|------|---|
+| 収録範囲 | 2022-12 〜 2026-06-08 |
+| 総レース数 | **96,455 レース** |
+| wt_odds | 約 33,80万行（全組合せ事前オッズ） |
+| 結果カバー率 | 99.88% |
+
+### 朝オッズ前向き計測（2026-06-08〜）
+
+`wt_odds` は `INSERT OR REPLACE` で最終オッズに上書きされるため、過去データからは朝→直前のオッズ変動を測定できない。日次cronの当日 `collect-wt` 直後に `snapshot_morning_odds_wt.py` で朝オッズを `wt_odds_snapshot`（初回値保持）へ退避し、後日の最終オッズと突合してドリフトを計測する。
+
+```bash
+PYTHONPATH=. .venv/bin/python3 scripts/snapshot_morning_odds_wt.py 2026-06-09   # 退避
+PYTHONPATH=. .venv/bin/python3 scripts/snapshot_morning_odds_wt.py --report     # 朝→最終ドリフト集計
 ```
 
 ---

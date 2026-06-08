@@ -1,9 +1,9 @@
 # 予想ファクター仕様書
 
 > **最終更新**: 2026-06-08  
-> **現行モデル（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC **0.7575**  
-> **winticket モデル**: lgbm_wt（lgbm_wt_v1）/ **39特徴量** / CV AUC **0.7720** / Test AUC 0.7742（2022-12〜2026-06 全期間収集済 96,355R）  
-> **現行戦略**: 6車立て以下 SS/S/A 3段階ランク（2026-06-05改定）
+> **本番モデル（winticket）**: `lgbm_wt`（=lgbm_wt_v1）/ **39特徴量** / CV AUC **0.7720** / Test AUC 0.7742（2022-12〜2026-06 全期間 96,455R・DNS処理修正済）  
+> **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
+> **現行戦略**: 6車立て以下 SS/S/A 3段階＋ガミ回避3段階（<3倍見送り/3〜5倍Bランク/≥5倍推奨）＋波乱ゲート（opt-in）
 
 ---
 
@@ -18,7 +18,7 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 
 ---
 
-## 1. keirin-station ルート（本番稼働中）
+## 1. keirin-station ルート（収集停止・ロールバック保持 / 2026-06-08〜）
 
 ### 1-1. 現行特徴量（v6実用版 / 24特徴量）
 
@@ -114,7 +114,7 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 
 ---
 
-## 2. winticket ルート（収集済み・本番モデル稼働）
+## 2. winticket ルート（★本番稼働中 / 2026-06-08〜）
 
 ### 2-1. 特徴量一覧（FEATURE_COLS_WT / 39特徴量）
 
@@ -235,11 +235,14 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 課題 | 状況 | 方針 |
 |------|------|------|
-| winticket データ収集・モデル検証 | **未着手** | keirin-station との比較検証。優位性なければ廃棄 |
-| SS 的中率 95%CI 改善（現 ±6.2%） | 実運用中 | 約2〜3ヶ月の実績蓄積で ±5% 未満へ |
-| 春季ホールドアウト（2026-06〜）| 未蓄積 | 2026年夏以降に再評価 |
-| lgbm_v7 再学習 | 未定 | 実運用SS 30件以上または実績が大幅乖離した場合 |
-| line_leader_score の有効化 | 未実装 | keirin-station の `line_group` 収集が先決（winticket では取得可能）|
+| wt実運用ROIの実測 | 蓄積中 | `picks_history(route='wt')` で朝-確定ズレ込みの真のROIを測定。backtestは最終データ上限値（実測ks 1週間49%）|
+| 朝→最終オッズ ドリフト計測 | 2026-06-08〜蓄積開始 | `snapshot_morning_odds_wt.py --report`。ガミ3段階(3倍/5倍)が朝オッズで妥当か検証 |
+| 波乱ゲート(top3_sum)の本番反映可否 | 検証中 | detail.json `upset_tier` × picks_history で帯別live ROIを確認後に判断 |
+| Bランク(3〜5倍)の実成績検証 | 蓄積中 | 「Bを買うべきだったか」を detail.json `rank=B` × 結果で事後検証 |
+| 週次再学習でのカット定数再計測 | 随時 | 再学習で確率分布が動くため `UPSET_TOP3SUM_CUTS` を `exp_upset_gate_wt.py` で再確認 |
+| L級（ガールズ）クラス未マッピング | 既知の軽微課題 | `_CLASS_MAP` に L級追加を検討（全体約8%・`player_class_enc=-1`）|
+
+> 詳細な検証レポートは `docs/analysis/01〜03`（特徴ablation・波乱予測・オッズ活用）を参照。
 
 ---
 
