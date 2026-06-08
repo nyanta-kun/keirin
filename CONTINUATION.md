@@ -48,6 +48,14 @@
 
 ---
 
+## ★精度・回収率向上 方針A: 波乱ステーク傾斜（2026-06-08・実装済opt-in）
+
+ユーザー選択（精度より選択/賭け方）。波乱スコア `top3_sum` 帯で賭け金を傾斜配分。
+- 検証 `scripts/exp_stake_tilt_wt.py`（eval model OOS=2026-03〜・最終オッズ上限値）: フラット vs 傾斜を train→test、ブートストラップCI併記。**TEST ROI: flat 351% → gate(Q1+Q2)604% → 推奨傾斜(Q1×2/Q2×1/Q3,Q4見送り)745% → tilt3/1/0/0 815% → Q1のみ1022%**。単調・train/test順序一致・最大払戻除去でも順位維持。傾斜強化ほどROI↑だが件数↓・分散↑。
+- 実装: `strategy_wt.STAKE_TILT_DEFAULT={Q1:2,Q2:1,Q3:0,Q4:0}`・`stake_units()`、`wave-picks-wt --stake-tilt`（opt-in・既定off）。出力に傾斜額・★傾斜x2表示、detail.jsonに stake。テスト36件pass。
+- **既定off の理由**: ROIは上限値・小標本でCI広（TEST 745% [460,1100]）・**分散増（高配当ゾーン集中で的中率低下＝資金ブレ大）**。bankroll余力＋picks_history実測を見て cron 有効化を判断。`top3_sum` はオッズ不要・朝確定で安定（#7）。
+- 次: live実測で傾斜の妥当性確認 → 良ければ daily_picks_wt.sh に `--stake-tilt` 追加。代替方向B(特徴強化)/C(LambdaRank等)は未着手。
+
 ## ★コードレビュー指摘の修正（2026-06-08・レポート docs/analysis/code-review-2026-06-08.md）
 
 PM主導4ロールレビュー（総合 sound-with-issues・致命バグなし・リーク無し確認）の High/安価項目に対応:

@@ -1093,8 +1093,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
               help="Bランク閾値: 見送りはしないが、3点中1点でも朝オッズ<この倍率なら"
                    "Bランク（購入者判断にゆだねる）として別枠表示。0=無効。推奨5.0"
                    "（gami-skip-odds≤オッズ<b-rank-odds がBランク帯）")
+@click.option("--stake-tilt/--no-stake-tilt", "stake_tilt", default=False,
+              help="波乱スコア(top3_sum)で賭け金を傾斜配分（Q1_loose=2倍/Q2=1倍/Q3,Q4=見送り）。"
+                   "波乱帯に資金を厚く本命堅は見送り。OOS検証でROI改善（最終オッズ上限値）")
 def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate,
-                  gami_skip_odds, b_rank_odds):
+                  gami_skip_odds, b_rank_odds, stake_tilt):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1113,7 +1116,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     )
     from src.models.trainer import load_model
     from src.database import get_connection
-    from src.strategy_wt import race_signals, passes_upset_gate
+    from src.strategy_wt import race_signals, passes_upset_gate, stake_units
     from pathlib import Path
 
     if target_date is None:
@@ -1217,6 +1220,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     ss_races, s_races, a_races, b_races = [], [], [], []
     skipped_odds = 0
     skipped_gami = 0
+    skipped_tilt = 0
 
     for race_key, grp in df.groupby("race_key"):
         grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
@@ -1275,6 +1279,15 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 if b_rank_odds > 0 and min_leg < b_rank_odds:
                     gami_zone = "B"
 
+        # ステーク傾斜（波乱スコア・opt-in）: 3点300円 × 帯別倍率。倍率0=見送り。
+        stake = 300
+        if stake_tilt:
+            mult = stake_units(sig["top3_sum"])
+            if mult <= 0:
+                skipped_tilt += 1
+                continue
+            stake = 300 * mult
+
         # riders_detail（PDF生成との互換性を保つ）
         riders_detail = []
         for rank_idx, row in enumerate(grp_sorted.itertuples(index=False)):
@@ -1329,6 +1342,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             "odds_label": odds_label,
             "top3_sum":   round(float(sig["top3_sum"]), 4),
             "upset_tier": upset_t,
+            "stake":      int(stake),
         }
 
         if is_ss:
@@ -1359,6 +1373,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             msg += f"（オッズフィルターで {skipped_odds} 件スキップ）"
         if skipped_gami > 0:
             msg += f"（ガミ回避<{gami_skip_odds:.0f}倍で {skipped_gami} 件スキップ）"
+        if skipped_tilt > 0:
+            msg += f"（傾斜Q3/Q4見送り {skipped_tilt} 件）"
         click.echo(msg, err=True)
         raise SystemExit(1)
 
@@ -1370,9 +1386,11 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         n_str = f"{entry['n_riders']}車"
         odds_str = f"  [{entry['odds_label']}]" if entry.get("odds_label") else ""
         base = f"(元{entry['base_rank']}) " if entry.get("base_rank") else ""
+        stk = int(entry.get("stake", 300))
+        tilt_str = f"  ★傾斜x{stk//300}" if stake_tilt and stk != 300 else ""
         return (
             f"  {entry['start_time']}  {entry['venue_name']:<6} {entry['race_no']:>2}R  "
-            f"[{n_str}]  {base}{entry['bet_type']}: {entry['combo_str']}  (3点/300円){odds_str}"
+            f"[{n_str}]  {base}{entry['bet_type']}: {entry['combo_str']}  (3点/{stk:,}円){odds_str}{tilt_str}"
         )
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1386,6 +1404,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         lines.append(f" ガミ回避(見送り): 3点中<{gami_skip_odds:.0f}倍を含むレースを除外  (スキップ: {skipped_gami}件)")
     if b_rank_odds > 0:
         lines.append(f" Bランク: 最安目が{gami_skip_odds:.0f}〜{b_rank_odds:.0f}倍未満（購入は各自判断）")
+    if stake_tilt:
+        lines.append(f" 波乱ステーク傾斜: Q1_loose=600円/Q2=300円/Q3,Q4=見送り(スキップ:{skipped_tilt}件)")
     lines.append("=" * 70)
     lines.append(" 対象: 6車立て以下  gap12≥0.06 のみ")
     lines.append(" SS: gap12≥0.15&ratio<1.3(3連単)  S: gap12≥0.15&ratio[1.3,1.6)(3連複)  A: gap12[0.06,0.15)(3連複)")
@@ -1414,16 +1434,15 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         lines.append("")
 
     lines.append("=" * 70)
-    ss_cost = len(ss_races) * 300
-    s_cost  = len(s_races)  * 300
-    a_cost  = len(a_races)  * 300
+    _cost = lambda lst: sum(int(e.get("stake", 300)) for e in lst)
+    ss_cost, s_cost, a_cost = _cost(ss_races), _cost(s_races), _cost(a_races)
     total_cost = ss_cost + s_cost + a_cost
-    lines.append(f"  SS: {len(ss_races)}件 × 300円 = {ss_cost:,}円  (3連単)")
-    lines.append(f"  S : {len(s_races)}件 × 300円 = {s_cost:,}円  (3連複)")
-    lines.append(f"  A : {len(a_races)}件 × 300円 = {a_cost:,}円  (3連複)")
+    lines.append(f"  SS: {len(ss_races)}件 = {ss_cost:,}円  (3連単)")
+    lines.append(f"  S : {len(s_races)}件 = {s_cost:,}円  (3連複)")
+    lines.append(f"  A : {len(a_races)}件 = {a_cost:,}円  (3連複)")
     lines.append(f"  推奨合計投資額: {total_cost:,}円  (SS/S/A)")
     if b_rank_odds > 0:
-        lines.append(f"  B : {len(b_races)}件 × 300円 = {len(b_races)*300:,}円  (購入は各自判断・上記合計に含めず)")
+        lines.append(f"  B : {len(b_races)}件 = {_cost(b_races):,}円  (購入は各自判断・上記合計に含めず)")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)

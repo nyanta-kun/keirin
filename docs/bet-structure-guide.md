@@ -105,6 +105,24 @@ python -m src.cli.main wave-picks-wt --gami-skip-odds 3.0 --b-rank-odds 5.0   # 
 - Bランクは `推奨合計投資額` に含めない（detail.json では `rank="B"`・`base_rank` に元のSS/S/Aを保持）。
 - ⚠️ 朝オッズ基準。朝→直前ドリフトは `snapshot_morning_odds_wt.py --report` で前向き計測中。オッズ不要で同義の代替として `--upset-gate`（`top3_sum`）も利用可。
 
+### 波乱ステーク傾斜（方針A）— 2026-06-08 実装（opt-in）
+
+```bash
+python -m src.cli.main wave-picks-wt --gami-skip-odds 3.0 --b-rank-odds 5.0 --stake-tilt
+```
+
+波乱スコア `top3_sum`（上位3頭pred_prob合計）で賭け金を傾斜配分（フラットでなく波乱帯に厚く）:
+
+| 波乱帯 | 倍率 | 賭け金(3点) | 意味 |
+|---|---|---|---|
+| Q1_loose（最も波乱余地大） | ×2 | 600円 | 高ROIゾーンに厚く |
+| Q2 | ×1 | 300円 | 標準 |
+| Q3 / Q4_chalk（本命堅） | ×0 | 見送り | 低ROI＝張らない |
+
+- 検証（`scripts/exp_stake_tilt_wt.py`・eval model OOS・最終オッズ上限値）: **TEST ROI フラット351% → 傾斜745%**（最大払戻除去640%・train969%/test745%で順序一致）。傾斜を強めるほどROI↑だが件数↓・分散↑。
+- カット定数は `strategy_wt.STAKE_TILT_DEFAULT` / `stake_units()`（週次再計測の `upset_cuts_wt.json` に追従）。
+- ⚠️ **既定はoff（フラット）**。ROIは上限値・小標本でCI広・**分散増（高配当ゾーン集中＝的中率低）**のため、bankroll余力とlive実測(picks_history)を見て有効化を判断。`top3_sum` はオッズ不要・朝確定で安定。
+
 ---
 
 ## 廃止戦略（参考記録）

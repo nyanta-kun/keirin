@@ -250,6 +250,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-06-08(夜8) | **波乱ステーク傾斜(方針A)実装**: `--stake-tilt`（top3_sum帯で賭け金傾斜 Q1_loose×2/Q2×1/Q3,Q4見送り。`strategy_wt.stake_units`）。検証 `scripts/exp_stake_tilt_wt.py`（eval OOS・上限値）: **TEST ROI フラット351%→傾斜745%**（最大除640%・train/test順序一致）。既定off（分散増・上限値のためlive実測後に有効化判断）。テスト36件pass。|
 | 2026-06-08(夜7) | **M-1/M-2 修正**: M-1 推論特徴を `prepare_X`(fillna0) に統一（wave-picks/eval/backtest）＋ build_features_wt 末尾で FEATURE_COLS_WT 保証fill（dropna vs fillna の skew排除）。M-2 学習母集団を `finish_order≥1` に統一（DNS負例除去）。再学習で **holdout AUC 0.7741→0.7777 改善**（fit 562,265行）。テスト30件pass。|
 | 2026-06-08(夜6) | **コードレビュー指摘の修正**（`docs/analysis/code-review-2026-06-08.md`）: H-1 配信/評価モデル分離（`train-wt --full-refit`で全データ配信・`--no-promote`・メタsidecar、weeklyを評価→配信→カット→世代退避に再編）/ M-5 世代退避(`data/models/archive/`) / L-5 pipefail / L-13 recompute非ゼロ終了 / H-2 pytest基盤(tests/・26件)。配信モデルを全データ再学習に切替（holdout監視AUC 0.7741 維持）。|
 | 2026-06-08(夜5) | **波乱ゲート カット定数の自動再計測**: `weekly_retrain_wt.sh` に `recompute_upset_cuts_wt.py` を追加。再学習後の train分布で top3_sum 四分位を再計測→`data/models/upset_cuts_wt.json`(gitignore)→`strategy_wt._load_cuts()` が優先採用（無ければ既定値）。現行再計測値 (1.693/1.901/2.075)＝既定とほぼ不変。|

@@ -78,3 +78,15 @@ def test_load_cuts_equal_values_rejected(monkeypatch, tmp_path):
     p = _write(tmp_path, json.dumps({"cuts": [1.7, 1.7, 2.0]}))   # 等値は単調NG
     monkeypatch.setattr(sw, "_CUTS_PATH", p)
     assert sw._load_cuts() == sw.UPSET_TOP3SUM_CUTS_DEFAULT
+
+
+# ── stake_units（波乱ステーク傾斜） ──
+@pytest.mark.parametrize("top3_sum, expected_mult", [
+    (1.5, 2),    # Q1_loose → 2倍
+    (1.8, 1),    # Q2 → 1倍
+    (2.0, 0),    # Q3 → 見送り
+    (2.3, 0),    # Q4_chalk → 見送り
+])
+def test_stake_units(monkeypatch, top3_sum, expected_mult):
+    monkeypatch.setattr(sw, "UPSET_TOP3SUM_CUTS", sw.UPSET_TOP3SUM_CUTS_DEFAULT)
+    assert sw.stake_units(top3_sum) == expected_mult

@@ -80,6 +80,18 @@ def race_signals(probs_desc: list[float], n_riders: int) -> dict:
     }
 
 
+# ステーク傾斜の既定方針（方針A・scripts/exp_stake_tilt_wt.py で検証）。
+# 波乱帯(Q1_loose)に厚く、本命堅(Q3/Q4)は見送り。100円単位の整数倍率。
+# TEST(OOS) ROI: flat 351% → この傾斜 745%（最大払戻除去640%・上限値）。
+STAKE_TILT_DEFAULT = {"Q1_loose": 2, "Q2": 1, "Q3": 0, "Q4_chalk": 0}
+
+
+def stake_units(top3_sum: float, policy: dict | None = None) -> int:
+    """波乱帯に応じた賭け金倍率（×100円単位）。0=見送り。"""
+    pol = policy or STAKE_TILT_DEFAULT
+    return int(pol.get(upset_tier(top3_sum), 1))
+
+
 def passes_upset_gate(top3_sum: float, max_tier: str = "Q1_loose") -> bool:
     """ゲート通過判定。max_tier までの帯（loose側）のみ通す。
 
