@@ -6,8 +6,8 @@
     "race_no": 6,
     "start_time": "17:43",
     "n_riders": 6,
-    "gap12": 0.08064983451150787,
-    "ratio": 1.7333135043058072,
+    "gap12": 0.08885248987374761,
+    "ratio": 1.7173017587246964,
     "pivot1": 4,
     "pivot2": 1,
     "thirds": [
@@ -24,7 +24,7 @@
         "racing_score": 101.3,
         "win_rate_3m": 11.1,
         "line_position": "逃",
-        "pred_prob_pct": 86.7,
+        "pred_prob_pct": 85.9,
         "role": "軸1"
       },
       {
@@ -35,7 +35,7 @@
         "racing_score": 98.9,
         "win_rate_3m": 13.7,
         "line_position": "追",
-        "pred_prob_pct": 78.6,
+        "pred_prob_pct": 77.0,
         "role": "軸2"
       },
       {
@@ -46,7 +46,7 @@
         "racing_score": 96.3,
         "win_rate_3m": 0.0,
         "line_position": "追",
-        "pred_prob_pct": 56.7,
+        "pred_prob_pct": 55.6,
         "role": "流し"
       },
       {
@@ -57,7 +57,7 @@
         "racing_score": 100.0,
         "win_rate_3m": 17.2,
         "line_position": "両",
-        "pred_prob_pct": 47.2,
+        "pred_prob_pct": 45.5,
         "role": "流し"
       },
       {
@@ -68,7 +68,7 @@
         "racing_score": 94.7,
         "win_rate_3m": 2.9,
         "line_position": "追",
-        "pred_prob_pct": 17.0,
+        "pred_prob_pct": 19.0,
         "role": "流し"
       },
       {
@@ -79,12 +79,12 @@
         "racing_score": 93.7,
         "win_rate_3m": 0.0,
         "line_position": "両",
-        "pred_prob_pct": 10.4,
+        "pred_prob_pct": 10.2,
         "role": "-"
       }
     ],
     "odds_label": "4.7倍",
-    "top3_sum": 2.2193,
+    "top3_sum": 2.1844,
     "upset_tier": "Q4_chalk",
     "combo_str": "4-1-5,2,3",
     "bet_type": "3連複",
