@@ -18,7 +18,16 @@ _STYLE_MAP: dict[str | None, int] = {
     "": -1,
 }
 
-_CLASS_MAP = {"SS": 6, "S1": 5, "S2": 4, "A1": 3, "A2": 2, "A3": 1, "B": 0}
+_CLASS_MAP = {
+    "SS": 6, "S1": 5, "S2": 4, "A1": 3, "A2": 2, "A3": 1, "B": 0,
+    # ガールズ L級（grade='L級'・girls-only レース）。winticket の
+    # playerCurrentTermClass=4 がフォールバックで "cls4" として保存される。
+    # 男子の 0-6 とは別カテゴリのため、別軸の識別子として 7 を付与
+    # （girls レースは全車同クラス＝レース内では不変。男子と同一レースに混在しない）。
+    "cls4": 7,
+    # S級でグループ情報が欠損した稀な値（S級レースに S1/S2 と混在・約0.3%）→ S2 相当に寄せる
+    "cls1": 4,
+}
 
 
 def load_raw_data_wt(min_date: str = "2025-01-01", max_date: str | None = None) -> pd.DataFrame:
