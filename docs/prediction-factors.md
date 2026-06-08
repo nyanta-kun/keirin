@@ -207,7 +207,7 @@ python -m src.cli.main wave-picks-wt --date 2026-06-06 --min-trio-odds 3.0
 | Q3 | 1.90–2.08 | 112% | 103% |
 | Q4_chalk（本命堅） | ≥ 2.08 | 88% | 107% |
 
-- カット定数 `UPSET_TOP3SUM_CUTS=(1.70, 1.90, 2.08)` は TRAIN 2023-07〜2026-02 の四分位。**モデル再学習で確率分布が変わったら `scripts/exp_upset_gate_wt.py` で再計測すること**。
+- カット定数の既定値 `UPSET_TOP3SUM_CUTS_DEFAULT=(1.70, 1.90, 2.08)`（TRAIN 2023-07〜2026-02 の四分位）。**週次再学習後に `scripts/recompute_upset_cuts_wt.py` が train分布で自動再計測し `data/models/upset_cuts_wt.json` に保存**、`strategy_wt._load_cuts()` がこれを優先採用（無ければ既定値）。手動再計測も同スクリプトで可能。
 - `wave-picks-wt` は各pickに `top3_sum`/`upset_tier` を**タグ付け（既定・detail.json記録）**。`--upset-gate Q1_loose|Q2|Q3` で本命堅レースを見送るopt-inフィルター。**既定は全件出力＝本番挙動不変**（前向き検証用）。
 - ⚠️ ROIは**最終データbacktest=実運用上限値**。live検証は picks_history(route='wt') × detail.jsonの `upset_tier` で別途。
 
@@ -239,7 +239,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 | 朝→最終オッズ ドリフト計測 | 2026-06-08〜蓄積開始 | `snapshot_morning_odds_wt.py --report`。ガミ3段階(3倍/5倍)が朝オッズで妥当か検証 |
 | 波乱ゲート(top3_sum)の本番反映可否 | 検証中 | detail.json `upset_tier` × picks_history で帯別live ROIを確認後に判断 |
 | Bランク(3〜5倍)の実成績検証 | 蓄積中 | 「Bを買うべきだったか」を detail.json `rank=B` × 結果で事後検証 |
-| 週次再学習でのカット定数再計測 | 随時 | 再学習で確率分布が動くため `UPSET_TOP3SUM_CUTS` を `exp_upset_gate_wt.py` で再確認 |
+| ~~週次再学習でのカット定数再計測~~ | **解決済(2026-06-08・自動化)** | `weekly_retrain_wt.sh` が `recompute_upset_cuts_wt.py` を実行→`upset_cuts_wt.json` 更新→`strategy_wt` が自動採用 |
 | ~~L級（ガールズ）クラス未マッピング~~ | **解決済(2026-06-08)** | `feature_wt._CLASS_MAP` に `cls4`(L級ガールズ→7)・`cls1`(S級下位→4)を追加し再学習。AUC中立(0.7719/0.7741)・`player_class_enc=-1` 解消 |
 
 > 詳細な検証レポートは `docs/analysis/01〜03`（特徴ablation・波乱予測・オッズ活用）を参照。
@@ -250,6 +250,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-06-08(夜5) | **波乱ゲート カット定数の自動再計測**: `weekly_retrain_wt.sh` に `recompute_upset_cuts_wt.py` を追加。再学習後の train分布で top3_sum 四分位を再計測→`data/models/upset_cuts_wt.json`(gitignore)→`strategy_wt._load_cuts()` が優先採用（無ければ既定値）。現行再計測値 (1.693/1.901/2.075)＝既定とほぼ不変。|
 | 2026-06-08(夜4) | **L級(ガールズ)クラスのマッピング追加**: `feature_wt._CLASS_MAP` に `cls4`(L級→7)・`cls1`(S級下位→4)。約7.7%が `player_class_enc=-1` だった問題を解消し再学習（CV AUC 0.7719/Test 0.7741＝中立）。モデルは新マッピングで再学習済（lgbm_wt 上書き）。|
 | 2026-06-08(夜3) | **ガミ回避を3段階化**: `--gami-skip-odds 3.0 --b-rank-odds 5.0`。最安目<3倍=見送り / 3〜5倍未満=**Bランク（購入者判断にゆだねる別枠）** / ≥5倍=通常推奨。Bランクは推奨合計に含めず（detail.json `rank="B"`/`base_rank`）。日次cron反映。|
 | 2026-06-08(夜2) | ガミ回避レーススキップ採用（当初 `--gami-skip-odds 5.0` 単一閾値・後に夜3で3段階化）。検証 `scripts/analyze_gami_threshold_wt.py`（<3倍点含むレースは集団で収支ゼロ＝スキップが「安い目カット」より ROI・総損益とも上、TEST 286%→636%@5倍）。|

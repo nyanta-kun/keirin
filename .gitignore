@@ -45,3 +45,6 @@ data/models/*.pkl
 # Jupyter
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
+
+# 波乱ゲート カット定数（週次再計測・再生成可能）
+data/models/upset_cuts_wt.json

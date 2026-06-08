@@ -18,4 +18,11 @@ echo "[$(date '+%H:%M:%S')] === winticket週次再学習 $DATE (test-from=$TEST_
 .venv/bin/python3 -m src.cli.main train-wt \
   --from 2023-07-01 --test-from "$TEST_FROM" --save-as lgbm_wt_v1 \
   2>&1 | tee -a "$LOG_DIR/train_wt_${DATE}.log"
+
+# 波乱ゲート top3_sum カット定数を新モデルのtrain分布で再計測（test期間は除外）
+echo "[$(date '+%H:%M:%S')] 波乱カット定数を再計測..."
+.venv/bin/python3 scripts/recompute_upset_cuts_wt.py --to "$TEST_FROM" \
+  2>&1 | tee -a "$LOG_DIR/train_wt_${DATE}.log" || \
+  echo "[$(date '+%H:%M:%S')] カット再計測に失敗（既定値を維持・処理は継続）"
+
 echo "[$(date '+%H:%M:%S')] === 完了 ==="

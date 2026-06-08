@@ -18,10 +18,35 @@
 """
 from __future__ import annotations
 
-# TRAIN(2023-07-01〜2026-02-28) の top3_sum 四分位カット。
-# 再学習でモデル確率分布が変わったら再計測すること（scripts/exp_upset_gate_wt.py）。
-UPSET_TOP3SUM_CUTS = (1.70, 1.90, 2.08)
+import json
+from pathlib import Path
+
+# TRAIN(2023-07-01〜2026-02-28) の top3_sum 四分位カット（既定値＝コミット済フォールバック）。
+# 再学習でモデル確率分布が変わると四分位がズレるため、週次再学習後に
+# scripts/recompute_upset_cuts_wt.py が data/models/upset_cuts_wt.json を更新し、
+# 下記 _load_cuts() がそれを優先採用する（無ければこの既定値）。
+UPSET_TOP3SUM_CUTS_DEFAULT = (1.70, 1.90, 2.08)
 UPSET_TIERS = ("Q1_loose", "Q2", "Q3", "Q4_chalk")
+
+_CUTS_PATH = Path(__file__).resolve().parent.parent / "data" / "models" / "upset_cuts_wt.json"
+
+
+def _load_cuts() -> tuple[float, float, float]:
+    """再計測済みカット(JSON)を読む。無効/不在なら既定値。"""
+    try:
+        d = json.loads(_CUTS_PATH.read_text(encoding="utf-8"))
+        c = d.get("cuts")
+        if isinstance(c, (list, tuple)) and len(c) == 3:
+            cuts = tuple(float(x) for x in c)
+            if cuts[0] < cuts[1] < cuts[2]:   # 単調性チェック
+                return cuts  # type: ignore[return-value]
+    except Exception:
+        pass
+    return UPSET_TOP3SUM_CUTS_DEFAULT
+
+
+# 実効カット（プロセス起動時に確定。日次cronは毎回新プロセスなので最新を反映）
+UPSET_TOP3SUM_CUTS = _load_cuts()
 
 
 def upset_tier(top3_sum: float) -> str:

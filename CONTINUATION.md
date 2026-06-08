@@ -31,6 +31,11 @@
 - `feature_wt._CLASS_MAP` に `"cls4":7`(L級・別軸識別子)・`"cls1":4`(S2相当)を追加。**winticket.py は変更不要**（保存済み文字列を直接マッピング＝既存96kに即効・旧/新ラベル不整合なし）。
 - 再学習: CV AUC **0.7719** / Test **0.7741**（旧0.7720/0.7742と中立）。`-1`残存ゼロ。`train-wt --save-as` は `lgbm_wt.pkl` も同時保存するため**本番モデルは新マッピング版に更新済**（週次cronでも再現）。
 
+### ★#8 解決: 波乱カット定数の自動再計測（2026-06-08）
+- 課題: 週次再学習で pred_prob 分布が動くと `top3_sum` 四分位カットがズレる。
+- 対応: `scripts/recompute_upset_cuts_wt.py`（train分布で四分位再計測→`data/models/upset_cuts_wt.json`保存・gitignore）を新設し `weekly_retrain_wt.sh` に組込。`src/strategy_wt.py` を `_load_cuts()`（JSON優先・無ければ `UPSET_TOP3SUM_CUTS_DEFAULT`・単調性チェック付）に変更。
+- 現行再計測 (1.693/1.901/2.075) は既定(1.70/1.90/2.08)とほぼ不変＝新マッピングでも分布安定。JSON削除時は既定値にフォールバックを確認済。
+
 ### 実装済み（試験実装・本番挙動は不変）
 - `src/strategy_wt.py`（新規）: `race_signals()` / `upset_tier()` / `passes_upset_gate()`。カット定数 `UPSET_TOP3SUM_CUTS=(1.70,1.90,2.08)`（**再学習で確率分布が変わったら再計測**）。
 - `wave-picks-wt`: 各pickに `top3_sum`/`upset_tier` を**タグ付け（既定・detail.jsonに記録）**＋ **opt-in `--upset-gate Q1_loose|Q2|Q3`** で本命堅レースを見送り。既定は全件出力で本番不変＝前向き検証用。
