@@ -48,6 +48,15 @@
 
 ---
 
+## ★oddspark予想基礎ページ監査（2026-06-09）— 展開(先行)次元の空白を発見
+oddspark.com/club/keirin/.../keirin_yosou.html のファクターを当システムと突合。
+- **ほぼ取り込み済**: 競走得点(race_point)/ライン構成(line_*)/近走・調子(rolling)/B回数(b_count)/バンク(bank_length,is_indoor)/ギヤ(gear_ratio)/枠番(frame_no,is_inner/outer)。
+- **唯一の明確なギャップ=「展開予想（先行争い・先行人数・本命脚質）」**。しかも今日まで `style_enc` が死んでいた(全件-1)ため計算不能だった。
+- 検証(eval OOS): **先行人数(n_senko)は n_lines と独立(相関-0.01)の新シグナル**。先行0人→line_break71%/配当1510円・本命=両→67%/1510円（堅いのは先行1人44%・本命逃46%）。
+- ただし**選択フィルターとしてはQ1_looseを明確に超えない**（先行0/本命両単独 429-514% vs ALL397%・分散大／Q1_loose併用1167→1256%だがCI重複=誤差内）。
+- **示唆**: 選択条件でなく**モデル特徴量**として活かすのが筋。`n_senko`(レース内逃げ人数)は現FEATURE_COLS_WTに無い新規race-level特徴で独立シグナル＝波乱判別改善の候補。`style_enc`も復活したばかり。→ 次段: n_senko等を特徴追加し再学習・OOS検証（未着手）。
+- 取り込み不要: 天候/風はページも重視せず・winticket欠落。
+
 ## ★7車以上レースの収益化検討 → 撤退維持で確定（2026-06-08・docs/analysis/05-7plus-races.md）
 
 ユーザー要望で7+を再検討。`scripts/exp_7plus_wt.py`(三連複std3/wide5/box4/box5)・`exp_7plus_2car_wt.py`(二車複/ワイド)。大標本 TRAIN 64,766R / TEST 6,559R(7+のみ・大半7車)。
