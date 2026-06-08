@@ -1035,7 +1035,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
 @click.option("--min-trio-odds", "min_trio_odds", default=0.0, show_default=True,
               type=float,
               help="3連複の最低オッズ（この値未満の組み合わせのみの場合はスキップ）。0=フィルター無効")
-def wave_picks_wt(target_date, output_path, model_name, min_trio_odds):
+@click.option("--upset-gate", "upset_gate", default=None,
+              type=click.Choice(["Q1_loose", "Q2", "Q3"]),
+              help="波乱/非本命ゲート: 指定帯まで(loose側)のみ出力し本命堅レースを見送る。"
+                   "省略時は全件出力（各pickにupset_tierをタグ付けのみ＝本番挙動不変・前向き検証用）")
+def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1054,6 +1058,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds):
     )
     from src.models.trainer import load_model
     from src.database import get_connection
+    from src.strategy_wt import race_signals, passes_upset_gate
     from pathlib import Path
 
     if target_date is None:
@@ -1172,6 +1177,13 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds):
         if gap12 < 0.06:
             continue
 
+        # 波乱/非本命シグナル（確定前・朝算出可）
+        sig = race_signals(p, n_riders)
+        upset_t = sig["upset_tier"]
+        # opt-in ゲート: 指定帯まで(loose側)のみ。省略時は全件タグ付けのみ（本番挙動不変）。
+        if upset_gate is not None and not passes_upset_gate(sig["top3_sum"], upset_gate):
+            continue
+
         venue_id = grp_sorted["venue_id"].iloc[0]
         venue_name = venue_map.get(str(venue_id), str(venue_id))
         race_no = int(grp_sorted["race_no"].iloc[0])
@@ -1237,6 +1249,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds):
             "thirds":     [int(t) for t in thirds],
             "riders":     riders_detail,
             "odds_label": odds_label,
+            "top3_sum":   round(float(sig["top3_sum"]), 4),
+            "upset_tier": upset_t,
         }
 
         if gap12 >= 0.15 and ratio < 1.3:

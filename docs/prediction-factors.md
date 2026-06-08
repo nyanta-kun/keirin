@@ -196,6 +196,21 @@ python -m src.cli.main wave-picks-wt --date 2026-06-06 --min-trio-odds 3.0
 
 ---
 
+### 2-4. 波乱/非本命ゲート（`src/strategy_wt.py`・2026-06-08 試験実装）
+
+3タスク分析（`docs/analysis/01〜03`）が収束した「本命が堅いレースは低ROI、本命が割れた波乱余地レースが高ROI」を、確定前指標 **`top3_sum`（上位3頭の pred_prob 合計）** のloose四分位で実装。
+
+| 帯（TRAIN四分位カット） | top3_sum | TRAIN ROI | TEST(OOS) ROI |
+|---|---|---|---|
+| Q1_loose（波乱余地大） | < 1.70 | 1224% | **1136%**（125R・最大払戻除外934%）|
+| Q2 | 1.70–1.90 | 193% | 224% |
+| Q3 | 1.90–2.08 | 112% | 103% |
+| Q4_chalk（本命堅） | ≥ 2.08 | 88% | 107% |
+
+- カット定数 `UPSET_TOP3SUM_CUTS=(1.70, 1.90, 2.08)` は TRAIN 2023-07〜2026-02 の四分位。**モデル再学習で確率分布が変わったら `scripts/exp_upset_gate_wt.py` で再計測すること**。
+- `wave-picks-wt` は各pickに `top3_sum`/`upset_tier` を**タグ付け（既定・detail.json記録）**。`--upset-gate Q1_loose|Q2|Q3` で本命堅レースを見送るopt-inフィルター。**既定は全件出力＝本番挙動不変**（前向き検証用）。
+- ⚠️ ROIは**最終データbacktest=実運用上限値**。live検証は picks_history(route='wt') × detail.jsonの `upset_tier` で別途。
+
 ## 3. 場マスタデータ（venue_info）
 
 `src/database.py` の `VENUE_STATIC` で管理。55会場分登録済み。  
@@ -225,6 +240,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-06-08(夜) | 3タスク分析（`docs/analysis/01〜03`）→ 全タスクが「波乱/非本命レースが高ROI」に収束。**波乱ゲート `src/strategy_wt.py` 試験実装**（`top3_sum` loose四分位・Q1_loose TEST ROI 1136%）。`wave-picks-wt` に `upset_tier` タグ付け＋`--upset-gate` opt-inフィルター。③レポート`top2_sum<0.80`はスケール誤りで撤回。朝オッズ前向き計測（`wt_odds_snapshot`＋`snapshot_morning_odds_wt.py`）を仕込み。AUC↑≠ROI↑・AI印はROI低下を再確認、閾値は現状維持。|
 | 2026-06-08 | winticket 全期間収集完了（96,355R）。**DNS(finish_order=0)バグ修正**（着外を3着内に誤算入していた）でwt性能大幅改善（A層ROI 70%→187%・S 364%・SS 1205%・合計336%、ks同等以上）。**ks流ローリング特徴9項目追加→FEATURE_COLS_WT 30→39特徴**。lgbm_wt_v1 学習（CV AUC 0.7720/Test 0.7742）。wave-picks-wt 実運用化（発走時刻バグ修正）。notify_results 成績バグ修正（公開予想採点・月次ROI 102%→49%再採点）。|
 | 2026-06-06 | winticket ルート（30特徴量 FEATURE_COLS_WT）設計・実装完了を追記。model-overview.md を本ファイルに統合。|
 | 2026-06-05 | S ランクに ratio<1.6 上限追加（低配当レース除外）。ホールドアウト再検証: S 727R→392R / ROI 149.8%→177.1% / avg配当 928円→1,170円 |
