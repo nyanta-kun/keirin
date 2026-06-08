@@ -57,6 +57,13 @@ oddspark.com/club/keirin/.../keirin_yosou.html のファクターを当システ
 - **示唆**: 選択条件でなく**モデル特徴量**として活かすのが筋。`n_senko`(レース内逃げ人数)は現FEATURE_COLS_WTに無い新規race-level特徴で独立シグナル＝波乱判別改善の候補。`style_enc`も復活したばかり。→ 次段: n_senko等を特徴追加し再学習・OOS検証（未着手）。
 - 取り込み不要: 天候/風はページも重視せず・winticket欠落。
 
+### 追加2サイト監査（2026-06-09）
+- winticket column(92oqWqhtLYufkoaVCFVemb): 買い方戦略(3連単をtop3抜けたレースで等)中心、新規ファクターなし。
+- keirin-marche(otarie/rie05): 「**333バンク初日は感覚ズレで波乱/高配当**」「会場別万車券傾向」「調子良い選手の全-全」等。
+  - **「333初日=波乱」は当データで否定**（≤6車2917R: day1 48%/day2 51%/day3 49%、bank 333:49%/400:50%/500:47%、333×初日48%＝完全フラット）。day_index/bank周長は波乱率に効かず＝棄却。
+  - 会場別波乱傾向は venue-as-feature 過学習リスクで非採用（選手IDと同じ轍）。
+- **3サイト監査の総括**: 新規で有望なのは oddspark由来の「展開＝先行人数(n_senko)/脚質構成」のみ（独立シグナル・検証済）。他の外部着眼点は既取込 or データで非再現。次の唯一の検証候補=n_senko等の特徴追加→再学習OOS。
+
 ## ★7車以上レースの収益化検討 → 撤退維持で確定（2026-06-08・docs/analysis/05-7plus-races.md）
 
 ユーザー要望で7+を再検討。`scripts/exp_7plus_wt.py`(三連複std3/wide5/box4/box5)・`exp_7plus_2car_wt.py`(二車複/ワイド)。大標本 TRAIN 64,766R / TEST 6,559R(7+のみ・大半7車)。
