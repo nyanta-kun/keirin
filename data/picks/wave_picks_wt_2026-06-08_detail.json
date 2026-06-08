@@ -1,6 +1,6 @@
 [
   {
-    "rank": "A",
+    "rank": "B",
     "race_key": "20260608_13_06",
     "venue_name": "いわき平",
     "race_no": 6,
@@ -84,7 +84,10 @@
       }
     ],
     "odds_label": "4.7倍",
+    "top3_sum": 2.2193,
+    "upset_tier": "Q4_chalk",
     "combo_str": "4-1-5,2,3",
-    "bet_type": "3連複"
+    "bet_type": "3連複",
+    "base_rank": "A"
   }
 ]
