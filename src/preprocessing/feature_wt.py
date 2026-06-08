@@ -188,6 +188,10 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     n_in_race = df.groupby("race_key")["frame_no"].transform("count")
     df["line_frac"] = (df["line_size"] / n_in_race.replace(0, 1)).clip(0, 1)
 
+    # 脚質構成（展開シグナル・レース内の逃げ人数）。n_lines と独立(相関-0.01)の新シグナル。
+    # 先行0人=展開不分明で波乱・高配当（oddspark/競輪keirin 監査＋自前検証 2026-06-09）。
+    df["n_senko"] = (df["style_enc"] == 0).astype(int).groupby(df["race_key"]).transform("sum")
+
     # ks流ローリング特徴（point-in-time。履歴 wt_entries から計算）
     df = add_rolling_features_wt(df)
 
@@ -316,6 +320,7 @@ FEATURE_COLS_WT = [
     "n_lines",
     "is_isolated",
     "line_frac",
+    "n_senko",          # 展開: レース内の逃げ(先行)人数（n_linesと独立の波乱シグナル）
     # セクター回数
     "s_count",
     "h_count",
