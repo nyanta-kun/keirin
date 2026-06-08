@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _db_lock = threading.Lock()
 
 MAX_VENUE_WORKERS = 4   # 並列処理する最大会場数（増やしすぎるとBANリスク）
+MAX_DAY_WORKERS = 3     # collect_month で並列処理する最大日数（3日×4会場×2=24同時リクエスト）
 
 
 class CollectionPipeline:
@@ -53,19 +54,26 @@ class CollectionPipeline:
         return stats
 
     def collect_month(self, year: int, month: int, dry_run: bool = False) -> dict:
-        """指定年月のデータを一括収集（全日付に対して全会場スキャン）"""
+        """指定年月のデータを一括収集（全日付を並列処理）"""
         from calendar import monthrange
         from datetime import date, timedelta
 
         _, n_days = monthrange(year, month)
         start = date(year, month, 1)
+        days = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n_days)]
         total = {"venues": 0, "races": 0, "results": 0, "errors": 0}
 
-        for i in range(n_days):
-            d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
-            stats = self.collect_date(d, dry_run=dry_run)
-            for k in total:
-                total[k] += stats.get(k, 0)
+        with ThreadPoolExecutor(max_workers=MAX_DAY_WORKERS) as executor:
+            futures = {executor.submit(self.collect_date, d, dry_run): d for d in days}
+            for future in as_completed(futures):
+                d = futures[future]
+                try:
+                    stats = future.result()
+                    for k in total:
+                        total[k] += stats.get(k, 0)
+                except Exception as e:
+                    logger.error(f"Day {d} failed: {e}")
+                    total["errors"] += 1
 
         logger.info(f"collect_month {year}/{month:02d} complete: {total}")
         return total
@@ -181,29 +189,25 @@ def _collect_one_venue(schedule: dict, dry_run: bool) -> dict:
 
 def _fetch_race_parallel(scraper: KeirinStationScraper, race_key: str) -> tuple:
     """出走表と結果を並列取得する"""
-    # 別スクレイパーインスタンスで同時リクエスト
     scraper2 = _make_scraper()
-
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_detail = ex.submit(scraper.scrape_race_detail, race_key)
         f_result = ex.submit(scraper2.scrape_race_result, race_key)
-        detail = f_detail.result()
-        result = f_result.result()
-
-    return detail, result
+        return f_detail.result(), f_result.result()
 
 
 def _get_collected_race_keys(race_keys: list[str]) -> set[str]:
-    """出走表が存在し、かつ quinella_rate が取得済みの race_key セットを返す。
-    quinella_rate が NULL のレースは新フィールド未取得として再スクレイピング対象とする。"""
+    """出走表・結果の両方が揃っている race_key のみスキップ対象とする。
+    出走表があっても結果が未取得のレースは再スクレイピングして結果を保存する。"""
     if not race_keys:
         return set()
     placeholders = ",".join("?" * len(race_keys))
     with get_connection() as conn:
         rows = conn.execute(
-            f"""SELECT DISTINCT race_key FROM race_entries
-                WHERE race_key IN ({placeholders})
-                AND quinella_rate IS NOT NULL""",
+            f"""SELECT DISTINCT re.race_key FROM race_entries re
+                JOIN race_results rr ON re.race_key = rr.race_key
+                WHERE re.race_key IN ({placeholders})
+                AND re.quinella_rate IS NOT NULL""",
             race_keys,
         ).fetchall()
     return {row[0] for row in rows}
@@ -226,9 +230,11 @@ def _write_race(conn, race_info: dict, detail: dict, result: dict | None, venue_
 
     race_meta = detail.get("race_info", {})
     conn.execute("""
-        INSERT OR IGNORE INTO races
-        (race_key, venue_code, race_date, race_no, grade, distance)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO races
+        (race_key, venue_code, race_date, race_no, grade, distance, start_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(race_key) DO UPDATE SET
+            start_time = excluded.start_time
     """, (
         race_info["race_key"],
         race_info["venue_code"],
@@ -236,6 +242,7 @@ def _write_race(conn, race_info: dict, detail: dict, result: dict | None, venue_
         race_info["race_no"],
         race_meta.get("grade_text"),
         race_meta.get("distance"),
+        race_meta.get("start_time"),
     ))
 
     frame_to_player: dict[int, dict] = {}
@@ -257,7 +264,10 @@ def _write_race(conn, race_info: dict, detail: dict, result: dict | None, venue_
     for i, entry in enumerate(detail.get("entries", [])):
         frame_no = i + 1
         player_info = frame_to_player.get(frame_no, {})
-        player_id = player_info.get("player_id") or f"frame_{frame_no}"
+        # 優先順: 結果ページ → 出走表 → frame_N フォールバック
+        player_id = (player_info.get("player_id")
+                     or entry.get("player_id")
+                     or f"frame_{frame_no}")
         conn.execute("""
             INSERT INTO race_entries
             (race_key, player_id, frame_no, line_position,

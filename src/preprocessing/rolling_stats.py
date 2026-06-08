@@ -47,7 +47,7 @@ def _run(dry_run: bool, force: bool) -> dict:
         """, conn)
 
         # 更新対象エントリ
-        where = "" if force else "WHERE e.recent_win_rate_6m IS NULL"
+        where = "" if force else "WHERE e.recent_win_rate_6m IS NULL OR e.venue_win_rate IS NULL"
         entries_df = pd.read_sql_query(f"""
             SELECT e.id, e.race_key, e.player_id, r.race_date, r.venue_code
             FROM race_entries e
@@ -101,9 +101,9 @@ def _run(dry_run: bool, force: bool) -> dict:
         last_race_date = past["race_date"].max()
         days_since = (race_date - last_race_date).days
 
-        # 同場勝率（全期間）
+        # 同場勝率（全期間、1走以上あれば計算）
         venue_past = past[past["venue_code"] == venue]
-        if len(venue_past) >= 3:
+        if len(venue_past) >= 1:
             venue_wr = (venue_past["finish_position"] == 1).mean()
         else:
             venue_wr = None

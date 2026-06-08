@@ -258,6 +258,11 @@ class KeirinStationScraper(BaseScraper):
                 info["grade_text"] = gp
                 break
 
+        # 発走時間（例: "発走時間23:21"）
+        m = re.search(r"発走時間(\d{1,2}:\d{2})", text)
+        if m:
+            info["start_time"] = m.group(1)
+
         return info
 
     def _parse_entry_table(self, table) -> dict | None:
@@ -269,6 +274,13 @@ class KeirinStationScraper(BaseScraper):
             return None
 
         entry = {}
+
+        # 選手詳細ページリンクから player_id を取得
+        player_link = table.find("a", href=re.compile(r"/player/detail/(\d+)/"))
+        if player_link:
+            m = re.search(r"/player/detail/(\d+)/", player_link["href"])
+            if m:
+                entry["player_id"] = m.group(1)
 
         # 選手名（カタカナ+漢字パターン）
         name_match = _RE_NAME.search(all_text)

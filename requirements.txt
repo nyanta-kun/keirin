@@ -29,3 +29,6 @@ click==8.1.7
 
 # Testing
 pytest==8.1.0
+
+# SNS
+tweepy==4.14.0

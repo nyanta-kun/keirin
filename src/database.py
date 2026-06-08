@@ -177,6 +177,28 @@ def migrate_db():
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        try:
+            conn.execute("ALTER TABLE races ADD COLUMN start_time TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS picks_history (
+                id INTEGER PRIMARY KEY,
+                race_date TEXT NOT NULL,
+                race_key TEXT NOT NULL UNIQUE,
+                rank TEXT NOT NULL,
+                pred_combo TEXT,
+                n_combos INTEGER,
+                hit INTEGER DEFAULT 0,
+                payout INTEGER DEFAULT 0,
+                bet_amount INTEGER
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(race_date)"
+        )
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS venue_info (
                 venue_code TEXT PRIMARY KEY,
@@ -190,6 +212,80 @@ def migrate_db():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_race_results_player ON race_results(player_id)"
         )
+
+        # winticket 専用テーブル
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wt_races (
+                race_key  TEXT PRIMARY KEY,
+                venue_id  TEXT NOT NULL,
+                race_date TEXT NOT NULL,
+                race_no   INTEGER NOT NULL,
+                cup_id    TEXT NOT NULL,
+                day_index INTEGER NOT NULL,
+                grade     TEXT,
+                race_type TEXT,
+                distance  INTEGER,
+                n_entries INTEGER,
+                start_at  TEXT,
+                status    INTEGER DEFAULT 0,
+                cancel    INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wt_entries (
+                id              INTEGER PRIMARY KEY,
+                race_key        TEXT NOT NULL,
+                frame_no        INTEGER NOT NULL,
+                player_id       INTEGER,
+                name            TEXT,
+                prefecture      TEXT,
+                player_class    TEXT,
+                term            INTEGER,
+                gear_ratio      REAL,
+                style           TEXT,
+                race_point      REAL,
+                comment         TEXT,
+                prediction_mark INTEGER,
+                s_count         INTEGER,
+                h_count         INTEGER,
+                b_count         INTEGER,
+                front_runner    INTEGER,
+                stalker         INTEGER,
+                deep_closer     INTEGER,
+                marker          INTEGER,
+                first_rate      REAL,
+                second_rate     REAL,
+                third_rate      REAL,
+                ex_spurt_pct    REAL,
+                ex_thrust_pct   REAL,
+                ex_left_behind_pct REAL,
+                ex_split_line_pct  REAL,
+                ex_snatch_pct   REAL,
+                line_group      INTEGER,
+                line_size       INTEGER,
+                line_pos        INTEGER,
+                is_line_leader  INTEGER,
+                n_lines         INTEGER,
+                finish_order    INTEGER,
+                factor          TEXT,
+                UNIQUE(race_key, frame_no)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wt_odds (
+                id           INTEGER PRIMARY KEY,
+                race_key     TEXT NOT NULL,
+                bet_type     TEXT NOT NULL,
+                combination  TEXT NOT NULL,
+                odds_value   REAL,
+                collected_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(race_key, bet_type, combination)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_races_date   ON wt_races(race_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_entries_race ON wt_entries(race_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_race    ON wt_odds(race_key)")
 
         for code, (name, bank_length, is_indoor, prefecture) in VENUE_STATIC.items():
             conn.execute(

@@ -1,194 +1,236 @@
 # 予想ファクター仕様書
 
-> **最終更新**: 2026-05-27  
-> **モデルバージョン**: v1（13特徴量、lgbm_v1.pkl）→ v1.5（20特徴量）→ v2（24特徴量）→ **v3実用版（24特徴量、lgbm.pkl = lgbm_v3.pkl）**
+> **最終更新**: 2026-06-08  
+> **現行モデル（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC **0.7575**  
+> **winticket モデル**: lgbm_wt（lgbm_wt_v1）/ **39特徴量** / CV AUC **0.7720** / Test AUC 0.7742（2022-12〜2026-06 全期間収集済 96,355R）  
+> **現行戦略**: 6車立て以下 SS/S/A 3段階ランク（2026-06-05改定）
 
 ---
 
 ## 概要
 
-本システムは LightGBM を使用した3着内確率予測モデル。  
-特徴量は `src/preprocessing/feature_engineer.py` の `FEATURE_COLS` で管理し、  
-DBカラムの定義は `src/database.py` で管理する。
+LightGBM を使用した「3着以内（top3）確率」の二値分類モデル。  
+選手×レースを1行として特徴量化し、wave-picks コマンドで予想を生成する。
+
+特徴量管理:
+- keirin-station ルート: `src/preprocessing/feature_engineer.py` の `FEATURE_COLS`
+- winticket ルート: `src/preprocessing/feature_wt.py` の `FEATURE_COLS_WT`
 
 ---
 
-## 特徴量一覧
+## 1. keirin-station ルート（本番稼働中）
 
-### v1（バックアップ / 13特徴量）
+### 1-1. 現行特徴量（v6実用版 / 24特徴量）
 
-モデルファイル: `data/models/lgbm_v1.pkl`  
-CV AUC: **0.7444**
+モデルファイル: `data/models/lgbm.pkl`（= `lgbm_v6.pkl`）
 
-| # | 変数名 | カテゴリ | 説明 | DBカラム |
-|---|--------|----------|------|----------|
-| 1 | `racing_score` | 選手成績 | JKA競走得点（総合評価指標） | `race_entries.racing_score` |
-| 2 | `gear_ratio` | 選手成績 | ギヤ倍数（例: 3.92） | `race_entries.gear_ratio` |
-| 3 | `recent_win_rate_3m` | 選手成績 | 直近3ヶ月勝率（サイト掲載値） | `race_entries.recent_win_rate_3m` |
-| 4 | `recent_top3_rate_3m` | 選手成績 | 直近3ヶ月3着内率 | `race_entries.recent_top3_rate_3m` |
-| 5 | `line_pos_enc` | 戦術 | 脚質エンコード（先行=0/捲り=1/差し=2/追い込み=3） | `race_entries.line_position` |
-| 6 | `frame_no` | 枠・位置 | 車番（1〜9） | `race_entries.frame_no` |
-| 7 | `score_rank` | レース内相対 | 競走得点のレース内順位（1=最高） | 派生 |
-| 8 | `score_z` | レース内相対 | 競走得点のレース内偏差値（clip±5） | 派生 |
-| 9 | `wr_rank` | レース内相対 | 3ヶ月勝率のレース内順位 | 派生 |
-| 10 | `top3r_rank` | レース内相対 | 3ヶ月3着内率のレース内順位 | 派生 |
-| 11 | `is_inner` | 枠・位置 | 内枠フラグ（車番1〜3 = 1） | 派生 |
-| 12 | `is_outer` | 枠・位置 | 外枠フラグ（車番7以上 = 1） | 派生 |
-| 13 | `grade_enc` | レース条件 | グレードエンコード（GP=7/G1=6/G2=5/G3=4/F1=3/F2=2/A=1） | `races.grade` |
+#### 選手成績（7項目）
 
----
-
-### v1.5（旧バージョン / 20特徴量）
-
-モデルファイル: `data/models/lgbm_v15_final.pkl`（2026-05-27に lgbm_v2 へ更新）  
-CV AUC: **0.7495**  
-追加条件: `compute-stats` 実行済み + `venue_info` 登録済み
-
-v1に以下を追加:
-
-| 変数名 | 説明 | 備考 |
-|--------|------|------|
-| `recent_win_rate_6m` | 直近6ヶ月勝率 | compute-stats |
-| `recent_top3_rate_6m` | 直近6ヶ月3着内率 | compute-stats |
+| 変数名 | 説明 | DBカラム |
+|--------|------|----------|
+| `racing_score` | JKA競走得点 | `race_entries.racing_score` |
+| `gear_ratio` | ギヤ倍数（例: 3.92） | `race_entries.gear_ratio` |
+| `recent_win_rate_3m` | 直近3ヶ月勝率（0-1） | `race_entries.recent_win_rate_3m` |
+| `recent_top3_rate_3m` | 直近3ヶ月3着内率 | `race_entries.recent_top3_rate_3m` |
+| `recent_win_rate_6m` | 直近6ヶ月勝率（compute-stats） | `race_entries.recent_win_rate_6m` |
+| `recent_top3_rate_6m` | 直近6ヶ月3着内率 | `race_entries.recent_top3_rate_6m` |
 | `wr_trend` | 勝率トレンド（3m − 6m） | 派生 |
-| `venue_win_rate` | 同場通算勝率 | compute-stats |
-| `days_since_last_race` | 前走経過日数 | compute-stats |
-| `bank_length_enc` | バンク長 / 100 | venue_info静的データ |
-| `is_indoor` | 屋内バンクフラグ | venue_info静的データ |
+
+#### 会場・場別（3項目）
+
+| 変数名 | 説明 | DBカラム |
+|--------|------|----------|
+| `venue_win_rate` | 同会場での通算勝率（compute-stats） | `race_entries.venue_win_rate` |
+| `bank_length_enc` | バンク周長 / 100 | `venue_info.bank_length` |
+| `is_indoor` | 屋内バンクフラグ（千葉のみ 1） | `venue_info.is_indoor` |
+
+#### レース内相対（6項目）
+
+| 変数名 | 説明 |
+|--------|------|
+| `score_rank` | 競走得点のレース内順位（1=最高） |
+| `score_z` | 競走得点のレース内偏差値（clip±5） |
+| `wr_rank` | 3ヶ月勝率のレース内順位 |
+| `top3r_rank` | 3ヶ月3着内率のレース内順位 |
+| `is_inner` | 内枠フラグ（車番1〜3） |
+| `is_outer` | 外枠フラグ（車番7以上） |
+
+#### 戦術・選手属性（5項目）
+
+| 変数名 | 説明 | DBカラム |
+|--------|------|----------|
+| `line_pos_enc` | 脚質（先行=0/捲り=1/差し=2/追い込み=3） | `race_entries.line_position` |
+| `frame_no` | 車番（1〜9） | `race_entries.frame_no` |
+| `quinella_rate` | 2着内率（連対率） | `race_entries.quinella_rate` |
+| `player_class_enc` | クラス（SS=6/S1=5/S2=4/A1=3/A2=2/A3=1/B=0） | `race_entries.player_class` |
+| `is_home` | 地元フラグ（登録府県 == 開催場府県） | 派生 |
+
+#### レース条件（3項目）
+
+| 変数名 | 説明 | DBカラム |
+|--------|------|----------|
+| `grade_enc` | グレード（GP=7/G1=6/G2=5/G3=4/F1=3/F2=2/A=1） | `races.grade` |
+| `days_since_last_race` | 前走からの経過日数（compute-stats） | `race_entries.days_since_last_race` |
+| `period_norm` | 期別 / 100（小さい=ベテラン） | `race_entries.period` |
 
 ---
 
-### v2（旧 / 24特徴量）
+### 1-2. モデル履歴
 
-モデルファイル: `data/models/lgbm_v2.pkl`  
-CV AUC: **0.7526** ± 0.0021（**過楽観**: GroupKFold に未来漏洩あり）  
-データ期間: 2024-06-01〜2026-04（54,422レース）
-
----
-
-### v3実用版（現在使用中 / 24特徴量）
-
-モデルファイル: `data/models/lgbm.pkl`（= `lgbm_v3.pkl`）  
-CV AUC: **0.7490** ± 0.0034（日付ベース時系列CV・漏洩なし）  
-データ期間: 2024-06-01〜2026-05（54,491レース）
-
-v2 と特徴量は同一。**CV手法を GroupKFold → 日付ベース時系列 fold に修正。**
-
-> **修正背景**: GroupKFold は同一レースを同一 fold に入れるが、時系列順を保証しない。結果として全 fold で訓練・検証の日付範囲が重複し CV AUC が +0.0036 過楽観だった。正しい時系列 CV では 0.7490、ホールドアウト（2026-05）実測値 0.7481 と整合。
-
-v1.5 に以下4特徴量を追加（v2から継続）:
-
-| 変数名 | 説明 | DBカラム | カバレッジ |
-|--------|------|----------|----------|
-| `quinella_rate` | 2連対率（2着内率） | `race_entries.quinella_rate` | 100% |
-| `period_norm` | 期別 / 100（小さい値=ベテラン） | `race_entries.period` | 100% |
-| `player_class_enc` | 登録クラス（SS=6/S1=5/S2=4/A1=3/A2=2/A3=1/B=0） | `race_entries.player_class` | 92%（欠損=-1） |
-| `is_home` | 地元フラグ（登録府県 == 開催場府県 = 1） | 派生（`player_prefecture` vs `venue_prefecture`） | 6.9%が1（スパース） |
-
-> **除外特徴量**: `line_leader_score` は `line_group` データ 0% のため除外。`FEATURE_COLS_V2` 定義（25特徴量）には残すが、`FEATURE_COLS`（現行）には含まない。
-
-#### バックテスト（テスト期間: 2026-05 / 1947レース）
-
-| 戦略 | v1.5 | v2 | v3 |
-|------|------|----|----|
-| 3連複上位3頭BOX(1点) | 109.6% | 116.4% | **118.5%** |
-| 3連単上位3頭マルチ(6点) | 106.2% | 115.5% | **116.3%** |
-| 3連単1着固定×4頭(12点) | - | 100.5% | **102.1%** |
+| バージョン | 特徴量数 | CV AUC | データ期間 | 備考 |
+|-----------|---------|--------|-----------|------|
+| v1 | 13 | 0.7444 | 〜2026-02 | ベースライン |
+| v1.5 | 20 | 0.7495 | 〜2026-03 | rolling stats 追加 |
+| v2 | 24 | 0.7526 | 〜2026-04 | GroupKFold（未来漏洩あり）|
+| v3 | 24 | 0.7490 | 〜2026-05 | 日付ベース時系列CV（漏洩修正）|
+| v4 | 24 | 0.7467 | 〜2026-02 | テスト期間3ヶ月に拡大 |
+| v5 | 24 | 0.7466 | 〜2026-06-04 | 全DB再学習 |
+| **v6（現行）** | 24 | **0.7575** | 〜2025-05（学習）| 2023年〜追加収集・ホールドアウト9ヶ月検証 |
 
 ---
 
-### 取得済みだが未使用の項目
+### 1-3. バックテスト結果（v6 / ホールドアウト 2025-06〜2026-02）
 
-DBには存在するが現在のモデルに組み込んでいない項目。データが揃い次第評価する。
+> **真の独立テスト（戦略チューニング未使用）**
+
+| ランク | 条件 | 買い目 | 件数 | 的中率 | ROI | avg的中払戻 |
+|--------|------|--------|------|--------|-----|------------|
+| **SS** | gap12≥0.15 & ratio<1.3 | 3連単 3点300円 | 157R | 19.7% | **3,944%** | 52,287円 |
+| **S** | gap12≥0.15 & ratio [1.3, 1.6) | 3連複 3点300円 | 691R | 50.9% | **158%** | 928円 |
+| **A** | gap12 [0.06, 0.15) | 3連複 3点300円 | 767R | 44.6% | **228%** | 1,515円 |
+| **合計** | — | — | **1,615R** | 44.9% | **519%** | — |
+
+月別安定性（2025-06〜2026-02）: **9ヶ月連続プラス**。SS のみ 2025-08 が月 ROI 56%（唯一の赤字月）。
+
+---
+
+### 1-4. 取得済みだが未使用の項目
 
 | DBカラム | 説明 | 課題 |
 |----------|------|------|
-| `races.distance` | レース距離（m） | 欠損が多い（スクレイピング精度） |
-| `races.weather` | 天候 | 欠損が多い |
-| `races.track_condition` | 路面状態 | 欠損が多い |
-| `race_entries.line_group` | 何番目のライン班か | パイプライン未保存（要実装） |
-| `race_entries.prefecture` | 登録府県（is_home算出に使用済み） | 単体特徴量としては未追加 |
+| `races.distance` | レース距離（m） | 欠損多い |
+| `races.weather` | 天候 | 欠損多い |
+| `race_entries.line_group` | ライン班番号 | パイプライン未保存 |
 
 ---
 
-### 今後の課題（未実装）
+## 2. winticket ルート（収集済み・本番モデル稼働）
 
-| ファクター | 実装難易度 | 説明 |
-|-----------|-----------|------|
-| S/H/B分類 | 中 | 競走タイプ（スプリント/ハーフ/バランス）の分類。出走表要調査 |
-| コメント解析 | 高 | 「好調」「練習中」等のテキストを調子スコアに変換 |
-| オッズ活用 | 中 | 市場オッズを特徴量化（逆張り戦略との組み合わせ） |
-| 対戦成績 | 高 | 同一レース出場選手間の過去着順関係（相性指標） |
-| 決勝進出率 | 高 | グレードレースでの決勝進出実績 |
-| ライン相性 | 高 | 同ライン選手の組み合わせ実績 |
-| ライン人数 | 中 | 同ライン内の選手数（多い=先行有利の傾向） |
+### 2-1. 特徴量一覧（FEATURE_COLS_WT / 39特徴量）
+
+モデルファイル: `data/models/lgbm_wt.pkl`（= lgbm_wt_v1, 2023-07〜2026-02学習 / CV AUC 0.7720）
+
+> **重要（DNS処理）**: `finish_order=0` は欠車/失格＝着外。`top3_flag` および全評価で `between(1,3)` 判定（0を3着内に誤算入していたバグを2026-06-08修正）。これがwt性能を大きく改善した（A層ROI 70%→187%）。
+
+#### keirin-station ルートと共通の概念
+
+| winticket 変数名 | 対応する ks 変数 | 説明 |
+|-----------------|----------------|------|
+| `race_point` | `racing_score` | JKA競走得点相当（winticket 表示値） |
+| `first_rate_norm` | `recent_win_rate_3m` | 勝率（winticket は%表記 → /100 変換）|
+| `third_rate_norm` | `recent_top3_rate_3m` | 3着内率 |
+| `style_enc` | `line_pos_enc` | 脚質エンコード |
+| `period_norm` | `period_norm` | 期 / 100 |
+| `player_class_enc` | `player_class_enc` | クラスエンコード（同一マッピング）|
+| `gear_ratio` | `gear_ratio` | ギヤ比 |
+| `grade_enc` / `bank_length_enc` / `is_indoor` | 同 | 共通 |
+| `is_inner` / `is_outer` / `frame_no` | 同 | 枠番 |
+| `score_rank` / `score_z` / `wr_rank` / `top3r_rank` | 同 | レース内相対 |
+| `is_home` | `is_home` | 地元フラグ |
+
+#### winticket 固有の新特徴量（12項目）
+
+| 変数名 | 説明 | DBカラム |
+|--------|------|----------|
+| `line_size` | 同ライン内の選手数 | `wt_entries.line_size` |
+| `line_pos` | ライン内ポジション（1=先頭） | `wt_entries.line_pos` |
+| `is_line_leader` | ライン先頭フラグ | `wt_entries.is_line_leader` |
+| `n_lines` | レース内のライン数 | `wt_entries.n_lines` |
+| `is_isolated` | 単騎（line_size==1）フラグ | 派生 |
+| `line_frac` | レース内でのライン規模比率 | 派生 |
+| `s_count` | 先行セクター回数 | `wt_entries.s_count` |
+| `h_count` | ホームセクター回数 | `wt_entries.h_count` |
+| `b_count` | バックセクター回数 | `wt_entries.b_count` |
+| `ex_spurt_pct` | 追い込み率（0-1に正規化） | `wt_entries.ex_spurt_pct` |
+| `ex_thrust_pct` | 捲り率（0-1に正規化） | `wt_entries.ex_thrust_pct` |
+| `prediction_mark` | winticket AI印（0=なし/1=本命/2=対抗/3=単穴/4=連下） | `wt_entries.prediction_mark` |
+
+#### ks流ローリング特徴（9項目・2026-06-08追加 / `add_rolling_features_wt`）
+
+選手の過去成績から point-in-time（現レース日より前のみ・欠車除外）で計算。学習時は履歴 merge、予測時は当日 as-of 計算。
+
+| 変数名 | 説明 |
+|--------|------|
+| `win_3m` / `win_6m` | 直近3ヶ月 / 6ヶ月の1着率 |
+| `top3_3m` / `top3_6m` | 直近3ヶ月 / 6ヶ月の3着内率 |
+| `quin_3m` / `quin_6m` | 直近3ヶ月 / 6ヶ月の2着内率 |
+| `venue_wr` | 当該会場での過去勝率 |
+| `days_since` | 前走からの日数 |
+| `wr_trend` | 勝率トレンド（win_3m − win_6m） |
 
 ---
 
-## 場マスタデータ（venue_info）
+### 2-2. オッズ活用方針
 
-`src/database.py` の `VENUE_STATIC` で管理。55会場分を登録済み。
+> オッズはモデルの特徴量に**含めない**。AI予想後の購入判断に使用する。
+
+- AI が予想を生成
+- `wt_odds` テーブルから対象組み合わせのオッズを取得・表示
+- `wave-picks-wt --min-trio-odds N` で N 倍未満の組み合わせを自動フィルタ
+- 低オッズ = 市場が既に織り込み済み → 配当価値が低い
+
+---
+
+### 2-3. winticket ルートの学習・実行手順
+
+```bash
+# 1. データ収集（最低2,000レース推奨）
+python -m src.cli.main collect-wt-range --from 2025-06
+
+# 2. モデル学習
+python -m src.cli.main train-wt --from 2025-06-01 --test-from 2026-03-01
+
+# 3. 予想生成（オッズフィルター付き）
+python -m src.cli.main wave-picks-wt --date 2026-06-06 --min-trio-odds 3.0
+```
+
+---
+
+## 3. 場マスタデータ（venue_info）
+
+`src/database.py` の `VENUE_STATIC` で管理。55会場分登録済み。  
+winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS` を参照。
 
 | 項目 | 説明 |
 |------|------|
 | `bank_length` | バンク周長（m）: 250 / 333 / 400 / 500 |
-| `is_indoor` | 屋内バンク: 1（千葉のみ） |
-| `prefecture` | 開催府県（地元フラグ算出に使用） |
+| `is_indoor` | 屋内バンク: 1（千葉のみ）|
+| `prefecture` | 開催府県（地元フラグ算出に使用）|
 
 ---
 
-## 実装場所
+## 4. 今後の課題
 
-```
-src/
-├── database.py                      # DBスキーマ・venue_infoマスタ・migrate_db()
-├── scraper/
-│   ├── keirin_station.py            # スクレイピング（_parse_entry_table）
-│   └── pipeline.py                  # DB保存ロジック（_write_race）
-└── preprocessing/
-    ├── feature_engineer.py          # FEATURE_COLS・build_features()
-    └── rolling_stats.py             # compute-stats（6ヶ月勝率・場別勝率等を算出）
-```
+| 課題 | 状況 | 方針 |
+|------|------|------|
+| winticket データ収集・モデル検証 | **未着手** | keirin-station との比較検証。優位性なければ廃棄 |
+| SS 的中率 95%CI 改善（現 ±6.2%） | 実運用中 | 約2〜3ヶ月の実績蓄積で ±5% 未満へ |
+| 春季ホールドアウト（2026-06〜）| 未蓄積 | 2026年夏以降に再評価 |
+| lgbm_v7 再学習 | 未定 | 実運用SS 30件以上または実績が大幅乖離した場合 |
+| line_leader_score の有効化 | 未実装 | keirin-station の `line_group` 収集が先決（winticket では取得可能）|
 
 ---
 
-## フェーズ別データ収集・モデル更新手順
+## 5. 更新履歴
 
-段階的にデータを拡充しながらモデルを順次改善する。各フェーズ完了後に以下を実行。
-
-```bash
-# Phase 1: 直近4ヶ月（2026-02〜2026-05）→ v1.5モデル
-python -m src.cli.main collect-reverse --from 2026-02 --to 2026-05
-python -m src.cli.main compute-stats --force
-python -m src.cli.main train --model lgbm --from 2025-11-01 --test-from 2026-05-01 --save-as lgbm_v15
-
-# Phase 2: 半年追加（2025-08〜2026-01）→ v1.5再学習
-python -m src.cli.main collect-reverse --from 2025-08 --to 2026-01
-python -m src.cli.main compute-stats --force
-python -m src.cli.main train --model lgbm --from 2025-08-01 --test-from 2026-05-01 --save-as lgbm_v15_p2
-
-# Phase 3: 半年追加（2025-02〜2025-07）→ 再学習
-python -m src.cli.main collect-reverse --from 2025-02 --to 2025-07
-python -m src.cli.main compute-stats --force
-python -m src.cli.main train --model lgbm --from 2025-02-01 --test-from 2026-05-01 --save-as lgbm_v15_p3
-
-# Phase 4: 残り（2024-06〜2025-01）+ v2特徴量へ切り替え → 再学習
-python -m src.cli.main collect-reverse --from 2024-06 --to 2025-01
-python -m src.cli.main compute-stats --force
-# feature_engineer.py の FEATURE_COLS = FEATURE_COLS_V2 に変更
-python -m src.cli.main train --model lgbm --from 2024-06-01 --test-from 2026-05-01 --save-as lgbm_v2
-```
-
----
-
-## 更新履歴
-
-| 日付 | バージョン | 変更内容 |
-|------|-----------|---------|
-| 2026-05-27 | **v3実用版** | CV手法を GroupKFold → 日付ベース時系列 fold に修正（未来漏洩解消）。特徴量は v2 と同一（24特徴量）。CV AUC 0.7490（正直値）。バックテスト 2026-05: 3連複3頭BOX 118.5% |
-| 2026-05-27 | **v2実用版** | quinella_rate / period_norm / player_class_enc / is_home の4特徴量を追加（24特徴量）。全期間データ（2024-06〜）で再学習。CV AUC 0.7526（GroupKFold漏洩により過楽観）。line_leader_score は line_group データ未収集のため除外 |
-| 2026-05-27 | コードレビュー | backtest.py: venues→venue_info統一・run_threshold_analysis高速化・print_venue_analysis閾値動的化。pipeline.py: スキップ時stats誤カウント修正。database.py: player_idインデックス追加。feature_engineer.py: top3_flag NaNガード追加 |
-| 2026-05-26 | v1.5設計・移行 | FEATURE_COLS を v1.5（20特徴量）に更新。スキップロジックを quinella_rate IS NOT NULL に変更。フェーズ別再収集・再学習計画を策定。train コマンドに --save-as / --test-from 追加 |
-| 2026-05-26 | v2設計 | quinella_rate / period / player_class / is_home / bank_length / venue_win_rate / days_since_last_race / line_leader_score を追加設計。venue_infoテーブル作成。collect-reverseコマンド追加 |
-| 2026-05-25 | v1.1 | 場×戦略フィルター廃止（過学習のため）。collect_dateを全会場スキャン方式に変更 |
-| 2026-02-24 | v1.0 | LightGBM v1モデル本番稼働（CV AUC 0.7444） |
+| 日付 | 内容 |
+|------|------|
+| 2026-06-08 | winticket 全期間収集完了（96,355R）。**DNS(finish_order=0)バグ修正**（着外を3着内に誤算入していた）でwt性能大幅改善（A層ROI 70%→187%・S 364%・SS 1205%・合計336%、ks同等以上）。**ks流ローリング特徴9項目追加→FEATURE_COLS_WT 30→39特徴**。lgbm_wt_v1 学習（CV AUC 0.7720/Test 0.7742）。wave-picks-wt 実運用化（発走時刻バグ修正）。notify_results 成績バグ修正（公開予想採点・月次ROI 102%→49%再採点）。|
+| 2026-06-06 | winticket ルート（30特徴量 FEATURE_COLS_WT）設計・実装完了を追記。model-overview.md を本ファイルに統合。|
+| 2026-06-05 | S ランクに ratio<1.6 上限追加（低配当レース除外）。ホールドアウト再検証: S 727R→392R / ROI 149.8%→177.1% / avg配当 928円→1,170円 |
+| 2026-06-04 | lgbm_v6 学習完了。学習 52,472R / ホールドアウト 1,615R（9ヶ月）。ROI: SS 3,944% / S 158% / A 228% |
+| 2026-06-03 | SS/S/A 3段階ランク戦略導入。7車立て・upset_prob戦略検討（不採用）。バックテスト全面再検証 |
+| 2026-06-02 | wave-picks 6車立て以下 jiku2_3 戦略確定。lgbm_v5 再学習（AUC 0.7466） |
+| 2026-05-27 | v3（時系列CV修正）→ v2（24特徴量）→ v1.5（20特徴量）段階的改善 |
+| 2026-05-26 | v2 設計（quinella_rate / period / player_class / is_home / bank_length 追加）|
+| 2026-02-24 | v1.0 本番稼働（13特徴量 / AUC 0.7444）|

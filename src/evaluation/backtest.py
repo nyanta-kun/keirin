@@ -287,7 +287,10 @@ VENUE_STRATEGY_FILTER: dict[str, frozenset] = {}
 # ---------------------------------------------------------------------------
 
 def _apply_pred_prob(model, df: pd.DataFrame) -> pd.DataFrame:
-    """pred_probを計算してdfに追加（FEATURE_COLS欠損行は除去）"""
+    """pred_probを計算してdfに追加（DNS選手・FEATURE_COLS欠損行は除去）"""
+    # finish_positionがNULLのDNS選手を先に除去（ファントムベット防止）
+    if "finish_position" in df.columns:
+        df = df[df["finish_position"].notna()].copy()
     df = df.dropna(subset=FEATURE_COLS + [TARGET_COL]).copy()
     X = pd.DataFrame(df[FEATURE_COLS].values, columns=FEATURE_COLS)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
@@ -298,6 +301,13 @@ def _filter_by_top1(df: pd.DataFrame, max_top1_prob: float) -> pd.DataFrame:
     """レース内top1_probが閾値を超えるレースを除外"""
     top1 = df.groupby("race_key")["pred_prob"].max()
     valid = top1[top1 <= max_top1_prob].index
+    return df[df["race_key"].isin(valid)]
+
+
+def _filter_by_n_riders(df: pd.DataFrame, max_riders: int) -> pd.DataFrame:
+    """出走頭数が max_riders を超えるレースを除外"""
+    race_sizes = df.groupby("race_key")["frame_no"].count()
+    valid = race_sizes[race_sizes <= max_riders].index
     return df[df["race_key"].isin(valid)]
 
 
@@ -409,17 +419,23 @@ def _accum_to_df(accum: dict, strategies: list[BetStrategy],
 
 def run_backtest(model, df: pd.DataFrame,
                  strategies: list[BetStrategy] = None,
-                 max_top1_prob: float | None = None) -> pd.DataFrame:
+                 max_top1_prob: float | None = None,
+                 max_riders: int | None = None) -> pd.DataFrame:
     """
     複数の買い目戦略でバックテストを実行し、結果DataFrameを返す。
 
     max_top1_prob: レース内の最高pred_probがこの値を超えるレースをスキップ。
+                  None=全レース対象。
+    max_riders:   出走頭数がこの値を超えるレースをスキップ。
+                  6を指定すると6車立て以下のみ（実運用と同じ母集団）。
                   None=全レース対象。
     """
     if strategies is None:
         strategies = STRATEGIES
 
     df = _apply_pred_prob(model, df)
+    if max_riders is not None:
+        df = _filter_by_n_riders(df, max_riders)
     if max_top1_prob is not None:
         df = _filter_by_top1(df, max_top1_prob)
 

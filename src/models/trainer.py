@@ -32,14 +32,28 @@ def train_baseline(df: pd.DataFrame) -> tuple:
     return model
 
 
-def train_lgbm(df: pd.DataFrame, n_splits: int = 5) -> lgb.LGBMClassifier:
-    """LightGBMモデルを日付ベース時系列CVで学習（未来漏洩なし）"""
-    df = df.dropna(subset=FEATURE_COLS + [TARGET_COL])
+def train_lgbm(
+    df: pd.DataFrame,
+    n_splits: int = 5,
+    feature_cols: list[str] | None = None,
+    target_col: str | None = None,
+    weight_col: str | None = None,
+) -> lgb.LGBMClassifier:
+    """LightGBMモデルを日付ベース時系列CVで学習（未来漏洩なし）
+
+    weight_col: 指定するとその列を sample_weight として使用。
+                頭数バイアス対策（1/n_riders で各レースの寄与を均等化）等に使う。
+    """
+    fcols = feature_cols if feature_cols is not None else FEATURE_COLS
+    tcol  = target_col  if target_col  is not None else TARGET_COL
+    subset = fcols + [tcol] + ([weight_col] if weight_col else [])
+    df = df.dropna(subset=subset)
     df = df.sort_values("race_date")
 
-    X = df[FEATURE_COLS].values
-    y = df[TARGET_COL].values
+    X = df[fcols].values
+    y = df[tcol].values
     dates = df["race_date"].values
+    w = df[weight_col].values if weight_col else None
 
     params = {
         "objective": "binary",
@@ -78,14 +92,16 @@ def train_lgbm(df: pd.DataFrame, n_splits: int = 5) -> lgb.LGBMClassifier:
 
         X_tr, y_tr   = X[tr_mask], y[tr_mask]
         X_val, y_val = X[val_mask], y[val_mask]
+        w_tr = w[tr_mask] if w is not None else None
 
         model = lgb.LGBMClassifier(**params)
         model.fit(
             X_tr, y_tr,
+            sample_weight=w_tr,
             eval_set=[(X_val, y_val)],
             callbacks=[lgb.early_stopping(50, verbose=False), lgb.log_evaluation(0)],
         )
-        preds = model.predict_proba(pd.DataFrame(X_val, columns=FEATURE_COLS))[:, 1]
+        preds = model.predict_proba(pd.DataFrame(X_val, columns=fcols))[:, 1]
         oof_preds[val_mask] = preds
         auc = roc_auc_score(y_val, preds)
         fold_aucs.append(auc)
@@ -97,9 +113,9 @@ def train_lgbm(df: pd.DataFrame, n_splits: int = 5) -> lgb.LGBMClassifier:
         print(f"OOF AUC: {roc_auc_score(y[val_covered], oof_preds[val_covered]):.4f}")
 
     # 全データで最終モデルを学習
-    df_X = pd.DataFrame(X, columns=FEATURE_COLS)
+    df_X = pd.DataFrame(X, columns=fcols)
     final_model = lgb.LGBMClassifier(**params)
-    final_model.fit(df_X, y, callbacks=[lgb.log_evaluation(0)])
+    final_model.fit(df_X, y, sample_weight=w, callbacks=[lgb.log_evaluation(0)])
     return final_model
 
 

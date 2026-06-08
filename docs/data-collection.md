@@ -1,199 +1,189 @@
 # データ収集ガイド
 
-## 概要
-
-競輪ステーション（https://keirin-station.com）をデータソースとして、レース情報・出走表・結果・払戻金をスクレイピングし SQLite DBに格納する。
+> 最終更新: 2026-06-06  
+> ※旧 `docs/data-sources.md` の内容を本ファイルに統合済み
 
 ---
 
-## データソース
+## データソース一覧
 
-### 競輪ステーション（メイン）
+| ソース | URL | 方式 | 用途 |
+|--------|-----|------|------|
+| **競輪ステーション** | keirin-station.com | requests + BS4 | メイン収集（本番稼働中）|
+| **winticket** | winticket.jp | requests / SSR JSON | 並び情報・事前オッズ（実装済み・収集前）|
+
+> 公式APIは存在しない。どちらも認証不要。
+
+---
+
+## 1. keirin-station ルート
+
+### 概要
 
 | 項目 | 内容 |
 |------|------|
-| URL | https://keirin-station.com/keirindb/ |
-| 認証 | 不要（ログインなし） |
-| スクレイピング方式 | requests + BeautifulSoup4 |
-| レート制限 | リクエスト間 2〜5秒のランダムウェイト |
+| URL | `https://keirin-station.com/keirindb/` |
+| 認証 | 不要 |
+| 方式 | requests + BeautifulSoup4 |
+| レート制限 | リクエスト間 1.5秒固定（`KeirinStationScraper`） |
 
-#### URL構造
+### URL 構造
 
 ```
-スケジュール検索: POST /keirindb/search/race/
-開催情報:         GET  /keirindb/stadium/information/{venue_code}/{yyyymmdd}/
-出走表:           GET  /keirindb/race/member/{venue_code}/{yyyymmdd}/{race_no}/
-オッズ:           GET  /keirindb/race/odds/{venue_code}/{yyyymmdd}/{race_no}/{bet_type_no}/
-結果:             GET  /keirindb/race/result/{venue_code}/{yyyymmdd}/{race_no}/
+出走表: GET /keirindb/race/member/{venue_code}/{yyyymmdd}/{race_no}/
+結果:   GET /keirindb/race/result/{venue_code}/{yyyymmdd}/{race_no}/
+オッズ: GET /keirindb/race/odds/{venue_code}/{yyyymmdd}/{race_no}/{bet_type_no}/
 ```
 
-#### 開催場コード（主要）
+### 収集データ
 
-| コード | 開催場 | コード | 開催場 |
-|--------|--------|--------|--------|
-| 11 | 函館 | 31 | 岐阜 |
-| 14 | 弥彦 | 34 | 富山 |
-| 21 | 立川 | 37 | 福井 |
-| 22 | 松戸 | 44 | 防府 |
-| 23 | 千葉 | 46 | 小倉 |
-| 24 | 川崎 | 47 | 久留米 |
-| 28 | 静岡 | 50 | 別府 |
+| テーブル | 主要カラム |
+|--------|-----------|
+| `races` | race_key, venue_code, race_date, race_no, grade, distance, start_time |
+| `race_entries` | frame_no, player_id, racing_score, gear_ratio, recent_win_rate_3m, recent_top3_rate_3m, line_position, quinella_rate, period, player_class, prefecture |
+| `race_results` | finish_position |
+| `odds` | bet_type（trifecta/trio/quinella/exacta/win/place/wide）, combination, payout |
 
----
+> keirin-station の `racing_score` = JKA 競走得点。`recent_win_rate_3m` は直近3ヶ月勝率（0.0〜1.0スケール）。
 
-## 取得データ項目
+### 並列処理の仕組み
 
-### レース情報（`races` テーブル）
-- `race_key` : 一意識別子（例: `20250401_21_01`）
-- `venue_code` / `race_date` / `race_no`
-- `grade` : グレード（G1/G2/G3/A級等）
-- `distance` : 距離（m）
+```
+collect-date
+  └── _scan_all_venues （全会場コードを並列スキャン）
+        └── _collect_venues_parallel （最大4会場同時）
+              └── _collect_one_venue
+                    ├── _get_collected_race_keys（DBスキップ判定）
+                    └── _fetch_race_parallel（出走表+結果を同時取得）
+```
 
-### 出走情報（`race_entries` テーブル）
-- `frame_no` : 枠番（1〜9）
-- `player_id` : 選手ID（競輪ステーション管理番号）
-- `gear_ratio` : ギア比（例: 3.92）
-- `racing_score` : 競走得点
-- `recent_win_rate_3m` : 直近3ヶ月勝率
-- `recent_top3_rate_3m` : 直近3ヶ月3着内率
-- `line_position` : 脚質（先行/差し/追い込み等）
+| 設定 | 値 |
+|------|---|
+| `MAX_VENUE_WORKERS` | 4 |
+| リクエスト間隔 | 1.5秒 |
+| 再試行 | 最大3回（1秒・3秒・6秒待機） |
 
-### 結果（`race_results` テーブル）
-- `finish_position` : 着順（1〜9）
-- `frame_no` / `player_id`
-
-### 払戻金（`odds` テーブル）
-
-| `bet_type` | 賭式 | 組み合わせ例 |
-|------------|------|-------------|
-| `win` | 単勝 | `1` |
-| `place` | 複勝 | `1` |
-| `quinella` | 2車複 | `1=3` |
-| `exacta` | 2車単 | `1-3` |
-| `wide` | ワイド | `1=3` |
-| `trifecta_box` | 3連複 | `1=2=3` |
-| `trifecta` | 3連単 | `1-3-2` |
-
-> `=` 区切りは複式（順不同）、`-` 区切りは単式（着順あり）
-
----
-
-## CLI コマンド
-
-### 環境のアクティベート
+### CLI コマンド
 
 ```bash
 source .venv/bin/activate
+
+# DB初期化（初回のみ）
+python -m src.cli.main init
+
+# 1日分
+python -m src.cli.main collect --date 2026-06-05
+
+# 月次
+python -m src.cli.main collect-month --year 2026 --month 6
+
+# 範囲（最新から逆順 / 推奨）
+python -m src.cli.main collect-reverse --from 2025-01
+
+# rolling 統計再計算（collect後に実行）
+python -m src.cli.main compute-stats --force
+
+# 収集状況確認
+python -m src.cli.main status
 ```
 
-### DB初期化（初回のみ）
+### 収集状況（2026-06-08 時点）
 
-```bash
-python src/cli/main.py init
+| 項目 | 値 |
+|------|---|
+| 収録開始 | 2022-12-30 |
+| 収録終了 | 2026-06-08（最新） |
+| 総レース数 | **94,830 レース** |
+| race_entries | 670,168件 |
+| race_results | 659,024件（カバー率 98.3%） |
+
+---
+
+## 2. winticket ルート
+
+### 概要
+
+| 項目 | 内容 |
+|------|------|
+| URL | `https://www.winticket.jp/keirin/` |
+| 認証 | 不要（SSRページにデータ埋め込み） |
+| 方式 | requests / `window.__PRELOADED_STATE__` JSON 抽出 |
+| レート制限 | リクエスト間 2.0秒（`WinticketScraper`） |
+| 対応会場数 | 43会場（winticket 掲載分のみ） |
+
+### URL 構造
+
+```
+出走表: GET /keirin/{slug}/racecard/{cupId}/{day_index}/{race_no}
+オッズ: GET /keirin/{slug}/odds/{cupId}/{day_index}/{race_no}
+
+cupId = YYYYMMDD（イベント開始日）+ venue_id（2桁 JKA コード）
+例: 2026060421 = 2026-06-04開始・弥彦（21）
 ```
 
-### 収集コマンド一覧
+### PRELOADED_STATE の取得方法
 
-| コマンド | 用途 | 例 |
-|---------|------|----|
-| `collect` | 1日分を収集 | `python src/cli/main.py collect --date 2025-11-01` |
-| `collect-month` | 1ヶ月分を収集 | `python src/cli/main.py collect-month --year 2025 --month 11` |
-| `collect-range` | 年月範囲を一括収集 | `python src/cli/main.py collect-range --from 2025-07` |
-| `status` | 収集状況を確認 | `python src/cli/main.py status` |
+winticket は React SSR で全データを `window.__PRELOADED_STATE__` に埋め込む。
+TanStack Query (React Query) のキャッシュ形式で格納。
 
-#### `collect-range` オプション
-
-```bash
-# 2025年7月〜今月まで（--to省略で今月まで自動）
-python src/cli/main.py collect-range --from 2025-07
-
-# 期間指定
-python src/cli/main.py collect-range --from 2025-01 --to 2025-06
-
-# 動作確認のみ（DBに保存しない）
-python src/cli/main.py collect-range --from 2025-07 --dry-run
+```python
+marker = "window.__PRELOADED_STATE__ = "
+# → JSON をブレース深度で抽出 → tanStackQuery.queries[] から queryKey で検索
+# FETCH_KEIRIN_RACE      → 出走表・ライン・結果
+# FETCH_KEIRIN_RACE_ODDS → 全オッズデータ
+# FETCH_KEIRIN_CUP_RACES → 開催日程（cupId/day_index 特定用）
 ```
 
-### バックグラウンド実行
+### 収集データ（keirin-station にはないもの）
+
+| テーブル | 主要カラム（winticket 固有） |
+|--------|----------------------------|
+| `wt_entries` | race_point, style, prediction_mark（AI印）|
+| `wt_entries` | s_count, h_count, b_count（セクター回数）|
+| `wt_entries` | ex_spurt_pct, ex_thrust_pct 等（上がり戦術率）|
+| `wt_entries` | line_group, line_size, line_pos, is_line_leader, n_lines（並び情報）|
+| `wt_odds` | trifecta / trio / exacta / quinella / quinellaPlace の事前オッズ |
+
+> `race_point` = keirin-station の `racing_score` 相当。`first_rate` = 勝率（%表記）。
+
+### cupId 自動探索ロジック
+
+イベントは複数日にわたるため、target_date に対して当日〜3日前の開始日を順に試す。
+`FETCH_KEIRIN_CUP_RACES` 内の schedules[].date と照合して一致すれば確定。
+
+### CLI コマンド
 
 ```bash
-# バックグラウンドで実行してログをファイルに保存
-nohup python src/cli/main.py collect-range --from 2025-07 > logs/collect.log 2>&1 &
-echo "PID: $!"
+source .venv/bin/activate
+
+# 動作確認
+python -m src.cli.main collect-wt --date 2026-06-05 --dry-run
+
+# 1日分（レース + オッズ同時取得）
+python -m src.cli.main collect-wt --date 2026-06-05
+
+# 範囲（最新から逆順）
+python -m src.cli.main collect-wt-range --from 2025-06
+
+# 収集状況確認
+python -m src.cli.main status-wt
 ```
 
 ---
 
-## 並列処理の仕組み
-
-```
-collect-range
-  └── collect_month (月ごとに実行)
-       └── _collect_venues_parallel  ← 最大3会場を同時並列
-            └── _collect_one_venue（スレッドごとに独立）
-                 ├── _get_collected_race_keys  ← DB照合でスキップ判定
-                 └── _fetch_race_parallel      ← 出走表+結果を同時取得
-                      ├── scrape_race_detail（スレッドA）
-                      └── scrape_race_result（スレッドB）
-```
-
-| 改善点 | 効果 |
-|--------|------|
-| 収集済みレースをスキップ | 再実行・追加収集で無駄なリクエストを排除 |
-| 出走表+結果の並列取得 | 1レースあたりの待ち時間を約半分に短縮 |
-| 最大3会場同時並列 | スループット約3倍 |
-| 開催場単位バッチDB書き込み | DB書き込みのオーバーヘッドを削減 |
-| SQLite WALモード | マルチスレッド書き込み時のロック競合を最小化 |
-
----
-
-## 注意事項・制限
-
-### アンチスクレイピング対策
-- リクエスト間に **2〜5秒のランダムウェイト** を設ける（変更: `src/scraper/base.py` の `delay_min/max`）
-- 接続切断（`RemoteDisconnected`）が発生した場合、**最大3回まで自動リトライ**（1回目3秒、2回目6秒待機）
-- `MAX_VENUE_WORKERS = 3`（`src/scraper/pipeline.py`）を増やしすぎるとIPバンのリスクあり
-
-### データ品質
-- **出走表のパーサー精度**: 府県・選手名の解析は正規表現ベースのため一部誤パースあり（選手IDは正確に取得済み）
-- **枠番と選手IDのマッピング**: 出走表（枠番基準）と結果（選手ID基準）を着順テーブルで紐付け。欠損がある場合は `frame_{N}` で仮IDを付与
-- **会場名未定義**: `会場61` 等の表示は venue_code の名称マッピング漏れ。データ収集には影響なし
+## 注意事項
 
 ### 再実行の安全性
-- `INSERT OR IGNORE` / `INSERT OR REPLACE` を使用しており、**重複実行しても安全**
-- 収集済みの race_key はスキップするため、中断後の再開も可能
 
----
+- `INSERT OR REPLACE` / `INSERT OR IGNORE` を使用しており **重複実行しても安全**
+- 収集済み race_key は両ルートともスキップ（中断後の再開が可能）
 
-## 収集状況（2026-05-23 時点）
+### アンチスクレイピング
 
-| 月 | レース数 | 会場数 |
-|----|---------|-------|
-| 2025-01 | 783 | 22 |
-| 2025-02 | 759 | 21 |
-| 2025-03 | 780 | 19 |
-| 2025-04 | 768 | 23 |
-| 2025-05 | 747 | 19 |
-| 2025-06 | 723 | 22 |
-| 2025-07〜 | 収集中 | - |
-| **合計** | **4,800+** | - |
+- keirin-station: `MAX_VENUE_WORKERS=4` を増やすと IP バンのリスクあり
+- winticket: 単一ドメインのため `MAX_VENUE_WORKERS=2` に抑制（2.0秒間隔）
 
----
+### winticket 未対応会場
 
-## ファイル構成
-
-```
-src/scraper/
-├── base.py            # 基底クラス（リクエスト・リトライ・ウェイト）
-├── keirin_station.py  # 競輪ステーション スクレイパー
-└── pipeline.py        # 並列収集パイプライン
-
-src/
-└── database.py        # DBスキーマ定義・接続管理
-
-src/cli/
-└── main.py            # CLIエントリーポイント
-
-data/
-└── keirin.db          # SQLite データベース
-```
+会津(14)・八戸(15)・一宮(41)・大津(52)・観音寺(72)・門司(82)等は winticket 非掲載のため対象外。
+keirin-station には全会場のデータが存在する。
