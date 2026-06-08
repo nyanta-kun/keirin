@@ -48,6 +48,16 @@
 
 ---
 
+## ★コードレビュー指摘の修正（2026-06-08・レポート docs/analysis/code-review-2026-06-08.md）
+
+PM主導4ロールレビュー（総合 sound-with-issues・致命バグなし・リーク無し確認）の High/安価項目に対応:
+- **H-1 配信/評価モデルの分離**: `train-wt` に `--full-refit`(全データで配信用再学習)・`--promote/--no-promote`(評価runが本番を汚さない)・メタ sidecar(`*.meta.json`)を追加。`weekly_retrain_wt.sh` を「①holdout評価(lgbm_wt_eval・非昇格) → ②全データ再学習→lgbm_wt → ③カット再計測 → ④世代退避」に再編。**配信モデルを全データ再学習に切替済**（従来は直近90日除外のholdoutモデルが配信されていた）。holdout監視AUC=0.7741(eval)。
+- **M-5 世代退避**: `data/models/archive/lgbm_wt_YYYYMMDD.{pkl,meta.json}` + cuts を週次退避（gitignore）。
+- **L-5 pipefail**: daily/weekly に `set -o pipefail`（`| tee` の終了コードマスク解消）。非クリティカル段は `|| echo` で継続。
+- **L-13**: `recompute_upset_cuts_wt.py` を単調性NG時 exit 2（沈黙故障回避）。
+- **H-2 テスト基盤**: `tests/`（conftest + strategy_wt境界/フォールバック + notify_results パース/Bランク除外）= **26件 pass**。pytest を venv に導入。
+- 残（次セッション）: H-3/M-3(picks_history を朝オッズ/確定払戻ベースへ・上限値と実現値の両建て・朝オッズdrift蓄積後にガミ閾値再評価) / M-1・M-2(prepare_X共通化・学習をfinish_order>=1に統一) / H-4・M-4(小標本CI・的中率レース単位) / L各種。
+
 ## ★★現在の本番構成（2026-06-08・最重要サマリ）
 
 **本番ルートは winticket(wt) に完全移行。keirin-station(ks)スクレイピングは停止。**

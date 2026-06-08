@@ -60,8 +60,8 @@ def main():
     print(f"  差分: {drift}  既定値: {UPSET_TOP3SUM_CUTS_DEFAULT}")
 
     if not (cuts[0] < cuts[1] < cuts[2]):
-        print("  !! 単調性NG → 保存スキップ（既定値を維持）")
-        return
+        print("  !! 単調性NG → 保存スキップ（既定値を維持）", file=sys.stderr)
+        sys.exit(2)   # L-13: 沈黙故障を避け、呼び出し側(weekly)で検知できるよう非ゼロ終了
     if args.dry_run:
         print("  (dry-run: 保存せず)")
         return

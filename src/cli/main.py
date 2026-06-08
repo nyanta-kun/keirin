@@ -961,7 +961,13 @@ def status_wt():
               help="テスト開始日（省略時は後ろ20%）")
 @click.option("--save-as", "save_as", default=None,
               help="保存名（例: lgbm_wt_v1）。省略時は lgbm_wt")
-def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as: str | None):
+@click.option("--full-refit/--no-full-refit", "full_refit", default=False,
+              help="ホールドアウト評価後、全データ(df_train)で配信用モデルを再学習して保存"
+                   "（H-1: holdout打切りモデルを本番配信しない）")
+@click.option("--promote/--no-promote", "promote", default=True,
+              help="save-as≠lgbm_wt のとき lgbm_wt にも反映するか。--no-promote で評価runが本番を汚さない")
+def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as: str | None,
+             full_refit: bool, promote: bool):
     """winticket データでモデルを学習して data/models/ に保存
 
     例: python -m src.cli.main train-wt --from 2025-01-01
@@ -1009,20 +1015,57 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
     click.echo("Training LightGBM (winticket) ...")
     model = train_lgbm(df_tr, feature_cols=FEATURE_COLS_WT, target_col=TARGET_COL_WT)
 
-    model_name = save_as or "lgbm_wt"
-    save_model(model, model_name)
-    if model_name != "lgbm_wt":
-        save_model(model, "lgbm_wt")
-
-    # テストセットでの評価
+    # --- ホールドアウト評価（保存前に算出。配信モデルとは独立の監視指標）---
+    test_auc = None
     if not df_te.empty:
-        import numpy as np
         from sklearn.metrics import roc_auc_score
         X_te = df_te[FEATURE_COLS_WT].fillna(0)
         y_te = df_te[TARGET_COL_WT].values
-        probs = model.predict_proba(X_te)[:, 1]
-        auc = roc_auc_score(y_te, probs)
-        click.echo(f"\nTest AUC: {auc:.4f}  (n={len(df_te):,} entries)")
+        test_auc = float(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1]))
+        click.echo(f"\nHoldout Test AUC: {test_auc:.4f}  (n={len(df_te):,} entries)")
+
+    # --- H-1: 配信モデルは全データで再学習（holdout打切りモデルを本番にしない）---
+    if full_refit:
+        click.echo(f"[full-refit] 全データ {df_train['race_key'].nunique():,} races "
+                   f"で配信用モデルを再学習 ...")
+        model = train_lgbm(df_train, feature_cols=FEATURE_COLS_WT, target_col=TARGET_COL_WT)
+
+    model_name = save_as or "lgbm_wt"
+    save_model(model, model_name)
+    # 昇格（lgbm_wt への反映）。--no-promote で抑止（評価専用runが本番を汚さない）
+    if promote and model_name != "lgbm_wt":
+        save_model(model, "lgbm_wt")
+
+    # --- メタデータ sidecar（再現性・H-1/M-5）---
+    import json
+    import subprocess
+    from datetime import datetime as _dt
+    models_dir = Path(__file__).resolve().parent.parent.parent / "data" / "models"
+    meta = {
+        "model_name": model_name,
+        "full_refit": bool(full_refit),
+        "from": from_date,
+        "test_from": test_from,
+        "n_train_races": int(df_train["race_key"].nunique()),
+        "fit_rows": int(len(df_train) if full_refit else len(df_tr)),
+        "test_auc_holdout": test_auc,
+        "feature_count": len(FEATURE_COLS_WT),
+        "trained_at": _dt.now().isoformat(timespec="seconds"),
+    }
+    try:
+        meta["git_commit"] = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True, cwd=str(models_dir)
+        ).strip()
+    except Exception:
+        meta["git_commit"] = None
+    (models_dir / f"{model_name}.meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    if promote and model_name != "lgbm_wt":
+        (models_dir / "lgbm_wt.meta.json").write_text(
+            json.dumps({**meta, "model_name": "lgbm_wt"}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+    click.echo(f"[meta] {model_name}.meta.json 保存（fit_rows={meta['fit_rows']:,}, "
+               f"full_refit={full_refit}, holdout_auc={test_auc}）")
 
 
 @cli.command("wave-picks-wt")

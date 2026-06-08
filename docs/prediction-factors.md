@@ -1,7 +1,7 @@
 # 予想ファクター仕様書
 
 > **最終更新**: 2026-06-08  
-> **本番モデル（winticket）**: `lgbm_wt`（=lgbm_wt_v1）/ **39特徴量** / CV AUC **0.7720** / Test AUC 0.7742（2022-12〜2026-06 全期間 96,455R・DNS処理修正済）  
+> **本番モデル（winticket）**: `lgbm_wt` / **39特徴量** / 2022-12〜2026-06 全期間 96,455R・DNS処理修正済。配信は**全データ再学習(full-refit)**、品質監視は**ホールドアウト評価モデル `lgbm_wt_eval`（直近90日OOS）の Test AUC ≈ 0.7741**。週次で配信/評価を分離（H-1対応・`train-wt --full-refit`/`--no-promote`、メタは `*.meta.json`）。  
 > **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
 > **現行戦略**: 6車立て以下 SS/S/A 3段階＋ガミ回避3段階（<3倍見送り/3〜5倍Bランク/≥5倍推奨）＋波乱ゲート（opt-in）
 
@@ -250,6 +250,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-06-08(夜6) | **コードレビュー指摘の修正**（`docs/analysis/code-review-2026-06-08.md`）: H-1 配信/評価モデル分離（`train-wt --full-refit`で全データ配信・`--no-promote`・メタsidecar、weeklyを評価→配信→カット→世代退避に再編）/ M-5 世代退避(`data/models/archive/`) / L-5 pipefail / L-13 recompute非ゼロ終了 / H-2 pytest基盤(tests/・26件)。配信モデルを全データ再学習に切替（holdout監視AUC 0.7741 維持）。|
 | 2026-06-08(夜5) | **波乱ゲート カット定数の自動再計測**: `weekly_retrain_wt.sh` に `recompute_upset_cuts_wt.py` を追加。再学習後の train分布で top3_sum 四分位を再計測→`data/models/upset_cuts_wt.json`(gitignore)→`strategy_wt._load_cuts()` が優先採用（無ければ既定値）。現行再計測値 (1.693/1.901/2.075)＝既定とほぼ不変。|
 | 2026-06-08(夜4) | **L級(ガールズ)クラスのマッピング追加**: `feature_wt._CLASS_MAP` に `cls4`(L級→7)・`cls1`(S級下位→4)。約7.7%が `player_class_enc=-1` だった問題を解消し再学習（CV AUC 0.7719/Test 0.7741＝中立）。モデルは新マッピングで再学習済（lgbm_wt 上書き）。|
 | 2026-06-08(夜3) | **ガミ回避を3段階化**: `--gami-skip-odds 3.0 --b-rank-odds 5.0`。最安目<3倍=見送り / 3〜5倍未満=**Bランク（購入者判断にゆだねる別枠）** / ≥5倍=通常推奨。Bランクは推奨合計に含めず（detail.json `rank="B"`/`base_rank`）。日次cron反映。|
