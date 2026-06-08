@@ -189,6 +189,13 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # ks流ローリング特徴（point-in-time。履歴 wt_entries から計算）
     df = add_rolling_features_wt(df)
 
+    # M-1: 学習(train_lgbm dropna)・推論(prepare_X fillna)・バックテストで
+    # 同一の特徴表現になるよう、ソースで FEATURE_COLS_WT の NaN を 0 に統一保証する
+    # （現状 build 過程で各特徴は補完済＝実質no-op だが、将来の fill 漏れによる
+    #  train/serve skew を構造的に防ぐ安全網）。
+    present = [c for c in FEATURE_COLS_WT if c in df.columns]
+    df[present] = df[present].fillna(0)
+
     return df
 
 
@@ -322,3 +329,13 @@ FEATURE_COLS_WT = [
 ]
 
 TARGET_COL_WT = "top3_flag"
+
+
+def prepare_X(df: pd.DataFrame) -> pd.DataFrame:
+    """推論用の特徴行列を統一生成する（M-1: train/serve/eval/backtest で同一表現）。
+
+    FEATURE_COLS_WT の列順を固定し、NaN は 0 で補完する。
+    build_features_wt 末尾で既に保証 fill 済みのため通常は no-op だが、
+    全推論経路がこの関数を通ることで「dropna vs fillna」の不整合を構造的に排除する。
+    """
+    return df.reindex(columns=FEATURE_COLS_WT).fillna(0)

@@ -21,7 +21,7 @@ import re
 import pandas as pd
 
 from ..database import get_connection
-from ..preprocessing.feature_wt import FEATURE_COLS_WT, TARGET_COL_WT
+from ..preprocessing.feature_wt import FEATURE_COLS_WT, TARGET_COL_WT, prepare_X
 from .backtest import (
     BetStrategy,
     STRATEGIES, ANA_STRATEGIES, HITRATE_STRATEGIES,
@@ -44,11 +44,13 @@ _ORDERED_BETS = {"trifecta", "exacta"}  # 順序を保持する市場
 # ---------------------------------------------------------------------------
 
 def _apply_pred_prob_wt(model, df: pd.DataFrame) -> pd.DataFrame:
-    """pred_prob を計算して付与（finish_order 欠損/0=DNS/欠車/失格行を除去）"""
-    df = df[df["finish_order"].notna() & (df["finish_order"] >= 1)].copy()
-    df = df.dropna(subset=FEATURE_COLS_WT).copy()
-    X = pd.DataFrame(df[FEATURE_COLS_WT].values, columns=FEATURE_COLS_WT)
-    df["pred_prob"] = model.predict_proba(X)[:, 1]
+    """pred_prob を計算して付与（finish_order 欠損/0=DNS/欠車/失格行を除去）。
+
+    M-1: 特徴行列の生成は prepare_X に統一（dropna ではなく fillna(0)）。
+    本番予測(wave-picks-wt)・学習評価と同一表現にして train/serve skew を排除する。
+    """
+    df = df[df["finish_order"] >= 1].copy()
+    df["pred_prob"] = model.predict_proba(prepare_X(df))[:, 1]
     return df
 
 

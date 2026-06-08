@@ -974,7 +974,7 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
         python -m src.cli.main train-wt --from 2025-01-01 --test-from 2026-01-01
     """
     from src.preprocessing.feature_wt import (
-        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, TARGET_COL_WT,
+        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, TARGET_COL_WT, prepare_X,
     )
     from src.models.trainer import train_lgbm, save_model
 
@@ -988,9 +988,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
         raise SystemExit(1)
 
     df = build_features_wt(df_raw)
-    df_train = df[df["finish_order"].notna()].copy()
+    # M-2: 学習母集団を finish_order>=1 に統一（DNS=0/欠車・欠損を除外）。
+    # backtest(_apply_pred_prob_wt)・採点と同一母集団にし、DNS負例混入を排除。
+    df_train = df[df["finish_order"] >= 1].copy()
     click.echo(f"Training samples: {len(df_train):,} entries / "
-               f"{df_train['race_key'].nunique():,} races")
+               f"{df_train['race_key'].nunique():,} races  (finish_order>=1)")
 
     if len(df_train) < 100:
         click.echo("学習データが不足しています（100行未満）。", err=True)
@@ -1019,7 +1021,7 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
     test_auc = None
     if not df_te.empty:
         from sklearn.metrics import roc_auc_score
-        X_te = df_te[FEATURE_COLS_WT].fillna(0)
+        X_te = prepare_X(df_te)
         y_te = df_te[TARGET_COL_WT].values
         test_auc = float(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1]))
         click.echo(f"\nHoldout Test AUC: {test_auc:.4f}  (n={len(df_te):,} entries)")
@@ -1107,7 +1109,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     import pandas as pd
     from datetime import datetime, timezone, timedelta
     from src.preprocessing.feature_wt import (
-        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT,
+        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, prepare_X,
     )
     from src.models.trainer import load_model
     from src.database import get_connection
@@ -1194,7 +1196,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         raise SystemExit(1)
 
     df = build_features_wt(df_raw)
-    X = df[FEATURE_COLS_WT].fillna(0)
+    X = prepare_X(df)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
 
     df["race_no"] = df["race_key"].apply(
