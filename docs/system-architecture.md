@@ -43,7 +43,7 @@ keirin/
 │   └── cli/
 │       └── main.py                    # CLIエントリーポイント（全コマンド定義）
 ├── scripts/
-│   ├── daily_picks_wt.sh              # ★本番日次（cron 7:00）
+│   ├── daily_picks_wt.sh              # ★本番日次（cron 8:00）
 │   ├── weekly_retrain_wt.sh           # ★本番週次（cron 日23:30）
 │   ├── notify_picks.py                # wave-picks 通知 + PDF生成 → Discord
 │   ├── notify_results_wt.py           # wt前日結果採点 + picks_history(route='wt') → Discord
@@ -162,9 +162,9 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 
 ## 毎朝の自動実行フロー（本番稼働中）
 
-**2026-06-08 以降: winticketルートへ完全移行（ks収集停止）。** 本番日次は `scripts/daily_picks_wt.sh`（cron 7:00）:
+**2026-06-08 以降: winticketルートへ完全移行（ks収集停止）。** 本番日次は `scripts/daily_picks_wt.sh`（cron 8:00）:
 ```
-AM 7:00 （daily_picks_wt.sh）
+AM 8:00 （daily_picks_wt.sh）
   ① collect-wt --date $(yesterday)               # 前日結果 再収集（finish_order>=1のみスキップ）
   ② notify_results_wt.py $(yesterday)            # 前日成績採点 → Discord / picks_history(route='wt')
   ③ collect-wt --date $(today)                   # 当日出走表+オッズ収集

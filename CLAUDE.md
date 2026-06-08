@@ -28,7 +28,7 @@ src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（39特徴・rolling統
 src/evaluation/backtest_wt.py           # wt用バックテスト（通常/--tiered/--value）
 src/models/trainer.py                   # train_lgbm（feature_cols/weight_col引数で両ルート共用）
 src/cli/main.py                         # CLIコマンド（collect-wt/train-wt/backtest-wt/wave-picks-wt等）
-scripts/daily_picks_wt.sh               # 日次運用（cron 7:00）
+scripts/daily_picks_wt.sh               # 日次運用（cron 8:00）
 scripts/notify_results_wt.py            # wt成績採点・通知・picks_history(route='wt')
 ```
 重要: `finish_order=0`は欠車/失格=着外。top3判定は `between(1,3)`（0を3着内に誤算入するバグを2026-06-08修正、性能激変）。
