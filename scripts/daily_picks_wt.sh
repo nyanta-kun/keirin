@@ -31,6 +31,14 @@ echo "[$(date '+%H:%M:%S')] 当日($TODAY) winticketデータ収集..."
 .venv/bin/python3 -m src.cli.main collect-wt --date "$TODAY" \
   2>&1 | tee -a "$LOG_DIR/collect_wt_${TODAY}.log"
 
+# --- 朝オッズ前向き計測: 収集直後の wt_odds(=朝オッズ) を退避 ---
+# 翌日の前日再収集で wt_odds が最終オッズに上書きされる前に保全する。
+# 失敗しても日次処理は止めない（計測は補助目的）。
+echo "[$(date '+%H:%M:%S')] 朝オッズをスナップショット退避..."
+.venv/bin/python3 scripts/snapshot_morning_odds_wt.py "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/odds_snapshot_${TODAY}.log" || \
+  echo "[$(date '+%H:%M:%S')] 朝オッズ退避に失敗（処理は継続）"
+
 echo "[$(date '+%H:%M:%S')] 予想生成（winticket）..."
 .venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log"

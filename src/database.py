@@ -283,9 +283,26 @@ def migrate_db():
                 UNIQUE(race_key, bet_type, combination)
             )
         """)
+        # 朝オッズ前向き計測用スナップショット。
+        # wt_odds は INSERT OR REPLACE で最終オッズに上書きされるため、
+        # 朝7:00時点のオッズを別テーブルへ退避し、後日 wt_odds(最終) と突合して
+        # 朝→直前のドリフトを計測する。snapshot_type 単位で初回値を保持（OR IGNORE）。
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS wt_odds_snapshot (
+                id            INTEGER PRIMARY KEY,
+                race_key      TEXT NOT NULL,
+                bet_type      TEXT NOT NULL,
+                combination   TEXT NOT NULL,
+                odds_value    REAL,
+                snapshot_type TEXT NOT NULL DEFAULT 'morning',
+                snapshot_at   TEXT DEFAULT (datetime('now')),
+                UNIQUE(race_key, bet_type, combination, snapshot_type)
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_races_date   ON wt_races(race_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_entries_race ON wt_entries(race_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_race    ON wt_odds(race_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_snap_race ON wt_odds_snapshot(race_key)")
 
         for code, (name, bank_length, is_indoor, prefecture) in VENUE_STATIC.items():
             conn.execute(
