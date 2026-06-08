@@ -1,0 +1,176 @@
+[
+  {
+    "rank": "S",
+    "race_key": "20260608_13_07",
+    "venue_name": "いわき平",
+    "race_no": 7,
+    "start_time": "18:07",
+    "n_riders": 6,
+    "gap12": 0.2065920710659258,
+    "ratio": 1.5271774226139017,
+    "pivot1": 2,
+    "pivot2": 1,
+    "thirds": [
+      5,
+      4,
+      3
+    ],
+    "riders": [
+      {
+        "frame_no": 2,
+        "ai_rank": 1,
+        "player_class": "S1",
+        "period": 100,
+        "racing_score": 107.2,
+        "win_rate_3m": 15.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 76.4,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 1,
+        "ai_rank": 2,
+        "player_class": "S2",
+        "period": 74,
+        "racing_score": 102.7,
+        "win_rate_3m": 4.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 55.7,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 5,
+        "ai_rank": 3,
+        "player_class": "S2",
+        "period": 117,
+        "racing_score": 99.8,
+        "win_rate_3m": 19.0,
+        "line_position": "先行",
+        "pred_prob_pct": 47.6,
+        "role": "流し"
+      },
+      {
+        "frame_no": 4,
+        "ai_rank": 4,
+        "player_class": "S2",
+        "period": 91,
+        "racing_score": 96.9,
+        "win_rate_3m": 8.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 43.3,
+        "role": "流し"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 5,
+        "player_class": "S2",
+        "period": 119,
+        "racing_score": 99.5,
+        "win_rate_3m": 13.0,
+        "line_position": "先行",
+        "pred_prob_pct": 35.8,
+        "role": "流し"
+      },
+      {
+        "frame_no": 6,
+        "ai_rank": 6,
+        "player_class": "S2",
+        "period": 81,
+        "racing_score": 95.9,
+        "win_rate_3m": 0.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 12.9,
+        "role": "-"
+      }
+    ],
+    "combo_str": "2-1-5,4,3",
+    "bet_type": "3連複"
+  },
+  {
+    "rank": "A",
+    "race_key": "20260608_13_06",
+    "venue_name": "いわき平",
+    "race_no": 6,
+    "start_time": "17:43",
+    "n_riders": 6,
+    "gap12": 0.08398469058090374,
+    "ratio": 1.447809374501,
+    "pivot1": 4,
+    "pivot2": 2,
+    "thirds": [
+      1,
+      5,
+      3
+    ],
+    "riders": [
+      {
+        "frame_no": 4,
+        "ai_rank": 1,
+        "player_class": "S2",
+        "period": 119,
+        "racing_score": 101.3,
+        "win_rate_3m": 11.0,
+        "line_position": "先行",
+        "pred_prob_pct": 72.4,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 2,
+        "ai_rank": 2,
+        "player_class": "S2",
+        "period": 117,
+        "racing_score": 100.0,
+        "win_rate_3m": 17.0,
+        "line_position": "",
+        "pred_prob_pct": 64.0,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 1,
+        "ai_rank": 3,
+        "player_class": "S2",
+        "period": 99,
+        "racing_score": 98.9,
+        "win_rate_3m": 13.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 60.1,
+        "role": "流し"
+      },
+      {
+        "frame_no": 5,
+        "ai_rank": 4,
+        "player_class": "S2",
+        "period": 84,
+        "racing_score": 96.3,
+        "win_rate_3m": 0.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 30.9,
+        "role": "流し"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 5,
+        "player_class": "S2",
+        "period": 82,
+        "racing_score": 94.7,
+        "win_rate_3m": 2.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 21.2,
+        "role": "流し"
+      },
+      {
+        "frame_no": 6,
+        "ai_rank": 6,
+        "player_class": "S2",
+        "period": 99,
+        "racing_score": 93.7,
+        "win_rate_3m": 0.0,
+        "line_position": "",
+        "pred_prob_pct": 10.6,
+        "role": "-"
+      }
+    ],
+    "combo_str": "4-2-1,5,3",
+    "bet_type": "3連複"
+  }
+]

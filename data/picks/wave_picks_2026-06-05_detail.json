@@ -1,0 +1,241 @@
+[
+  {
+    "rank": "S",
+    "race_key": "20260605_35_01",
+    "venue_name": "平塚",
+    "race_no": 1,
+    "start_time": "20:49",
+    "n_riders": 5,
+    "gap12": 0.2803135441331521,
+    "ratio": 1.5305306996240635,
+    "pivot1": 1,
+    "pivot2": 2,
+    "thirds": [
+      4,
+      3,
+      5
+    ],
+    "riders": [
+      {
+        "frame_no": 1,
+        "ai_rank": 1,
+        "player_class": "",
+        "period": 118,
+        "racing_score": 81.0,
+        "win_rate_3m": 12.0,
+        "line_position": "",
+        "pred_prob_pct": 91.8,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 2,
+        "ai_rank": 2,
+        "player_class": "",
+        "period": 118,
+        "racing_score": 51.8,
+        "win_rate_3m": 4.0,
+        "line_position": "",
+        "pred_prob_pct": 63.8,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 4,
+        "ai_rank": 3,
+        "player_class": "",
+        "period": 114,
+        "racing_score": 85.9,
+        "win_rate_3m": 5.0,
+        "line_position": "",
+        "pred_prob_pct": 36.6,
+        "role": "流し"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 4,
+        "player_class": "",
+        "period": 118,
+        "racing_score": 85.9,
+        "win_rate_3m": 5.0,
+        "line_position": "",
+        "pred_prob_pct": 22.2,
+        "role": "流し"
+      },
+      {
+        "frame_no": 5,
+        "ai_rank": 5,
+        "player_class": "",
+        "period": 126,
+        "racing_score": 85.9,
+        "win_rate_3m": 5.0,
+        "line_position": "",
+        "pred_prob_pct": 20.1,
+        "role": "流し"
+      }
+    ],
+    "combo_str": "1-2-4,3,5",
+    "bet_type": "3連複"
+  },
+  {
+    "rank": "A",
+    "race_key": "20260605_11_01",
+    "venue_name": "函館",
+    "race_no": 1,
+    "start_time": "16:10",
+    "n_riders": 6,
+    "gap12": 0.06555550858660308,
+    "ratio": 1.582217198069178,
+    "pivot1": 5,
+    "pivot2": 2,
+    "thirds": [
+      4,
+      1,
+      6
+    ],
+    "riders": [
+      {
+        "frame_no": 5,
+        "ai_rank": 1,
+        "player_class": "A3",
+        "period": 100,
+        "racing_score": 74.4,
+        "win_rate_3m": 20.0,
+        "line_position": "",
+        "pred_prob_pct": 79.1,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 2,
+        "ai_rank": 2,
+        "player_class": "A3",
+        "period": 99,
+        "racing_score": 72.7,
+        "win_rate_3m": 31.0,
+        "line_position": "先行",
+        "pred_prob_pct": 72.6,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 4,
+        "ai_rank": 3,
+        "player_class": "A3",
+        "period": 92,
+        "racing_score": 71.1,
+        "win_rate_3m": 11.0,
+        "line_position": "",
+        "pred_prob_pct": 48.5,
+        "role": "流し"
+      },
+      {
+        "frame_no": 1,
+        "ai_rank": 4,
+        "player_class": "A3",
+        "period": 82,
+        "racing_score": 68.6,
+        "win_rate_3m": 0.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 33.0,
+        "role": "流し"
+      },
+      {
+        "frame_no": 6,
+        "ai_rank": 5,
+        "player_class": "A3",
+        "period": 87,
+        "racing_score": 67.2,
+        "win_rate_3m": 0.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 23.8,
+        "role": "流し"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 6,
+        "player_class": "A3",
+        "period": 65,
+        "racing_score": 67.5,
+        "win_rate_3m": 4.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 19.0,
+        "role": "-"
+      }
+    ],
+    "combo_str": "5-2-4,1,6",
+    "bet_type": "3連複"
+  },
+  {
+    "rank": "A",
+    "race_key": "20260605_35_02",
+    "venue_name": "平塚",
+    "race_no": 2,
+    "start_time": "21:13",
+    "n_riders": 5,
+    "gap12": 0.09408422792731008,
+    "ratio": 1.0562795873801916,
+    "pivot1": 1,
+    "pivot2": 4,
+    "thirds": [
+      2,
+      3,
+      5
+    ],
+    "riders": [
+      {
+        "frame_no": 1,
+        "ai_rank": 1,
+        "player_class": "A3",
+        "period": 55,
+        "racing_score": 69.3,
+        "win_rate_3m": 10.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 63.4,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 4,
+        "ai_rank": 2,
+        "player_class": "A3",
+        "period": 97,
+        "racing_score": 69.0,
+        "win_rate_3m": 26.0,
+        "line_position": "",
+        "pred_prob_pct": 54.0,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 2,
+        "ai_rank": 3,
+        "player_class": "A3",
+        "period": 76,
+        "racing_score": 69.2,
+        "win_rate_3m": 11.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 53.2,
+        "role": "流し"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 4,
+        "player_class": "A3",
+        "period": 115,
+        "racing_score": 69.1,
+        "win_rate_3m": 5.0,
+        "line_position": "追い込み",
+        "pred_prob_pct": 44.0,
+        "role": "流し"
+      },
+      {
+        "frame_no": 5,
+        "ai_rank": 5,
+        "player_class": "A3",
+        "period": 105,
+        "racing_score": 68.3,
+        "win_rate_3m": 11.0,
+        "line_position": "先行",
+        "pred_prob_pct": 26.9,
+        "role": "流し"
+      }
+    ],
+    "combo_str": "1-4-2,3,5",
+    "bet_type": "3連複"
+  }
+]
