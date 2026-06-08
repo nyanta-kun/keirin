@@ -211,9 +211,12 @@ python -m src.cli.main wave-picks-wt --date 2026-06-06 --min-trio-odds 3.0
 - `wave-picks-wt` は各pickに `top3_sum`/`upset_tier` を**タグ付け（既定・detail.json記録）**。`--upset-gate Q1_loose|Q2|Q3` で本命堅レースを見送るopt-inフィルター。**既定は全件出力＝本番挙動不変**（前向き検証用）。
 - ⚠️ ROIは**最終データbacktest=実運用上限値**。live検証は picks_history(route='wt') × detail.jsonの `upset_tier` で別途。
 
-### 2-5. ガミ回避レーススキップ（`--gami-skip-odds`・2026-06-08 採用）
+### 2-5. ガミ回避オッズ3段階（`--gami-skip-odds`/`--b-rank-odds`・2026-06-08 採用）
 
-3点のうち1点でも**朝オッズ < 5.0倍**ならレースごと見送り（日次cron既定 `--gami-skip-odds 5.0`）。鉄板=低価値レースの除外。検証は `scripts/analyze_gami_threshold_wt.py`、詳細は `docs/bet-structure-guide.md`。「安い目カット」より「レーススキップ」が ROI・総損益とも上（TEST 286%→636%@5倍、総利益ほぼ維持）。`top3_sum` 波乱ゲートと同義シグナルだが、こちらは朝オッズ基準（ドリフト計測中）。
+3点の**最安目の朝オッズ**で振り分け（日次cron既定 `--gami-skip-odds 3.0 --b-rank-odds 5.0`）:
+- **<3倍**: 見送り（明確なガミ）/ **3〜5倍未満**: Bランク（別枠・購入は各自判断）/ **≥5倍**: 通常推奨(SS/S/A)。
+
+検証は `scripts/analyze_gami_threshold_wt.py`、詳細は `docs/bet-structure-guide.md`。「安い目カット」より「レース単位振り分け」が ROI・総損益とも上（TEST 全件286%→<5倍除外636%、総利益ほぼ維持）。Bランクは推奨合計に含めない（detail.json `rank="B"`/`base_rank`保持）。`top3_sum` 波乱ゲートと同義シグナルだが、こちらは朝オッズ基準（ドリフト計測中）。
 
 ## 3. 場マスタデータ（venue_info）
 
@@ -244,7 +247,8 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
-| 2026-06-08(夜2) | **ガミ回避レーススキップ採用**: `wave-picks-wt --gami-skip-odds 5.0`（3点中1点でも朝オッズ<5倍ならレース見送り）を日次cron既定化。検証 `scripts/analyze_gami_threshold_wt.py`（<3倍点含むレースは集団で収支ゼロ＝スキップが「安い目カット」より ROI・総損益とも上、TEST 286%→636%@5倍）。`docs/bet-structure-guide.md` 更新。|
+| 2026-06-08(夜3) | **ガミ回避を3段階化**: `--gami-skip-odds 3.0 --b-rank-odds 5.0`。最安目<3倍=見送り / 3〜5倍未満=**Bランク（購入者判断にゆだねる別枠）** / ≥5倍=通常推奨。Bランクは推奨合計に含めず（detail.json `rank="B"`/`base_rank`）。日次cron反映。|
+| 2026-06-08(夜2) | ガミ回避レーススキップ採用（当初 `--gami-skip-odds 5.0` 単一閾値・後に夜3で3段階化）。検証 `scripts/analyze_gami_threshold_wt.py`（<3倍点含むレースは集団で収支ゼロ＝スキップが「安い目カット」より ROI・総損益とも上、TEST 286%→636%@5倍）。|
 | 2026-06-08(夜) | 3タスク分析（`docs/analysis/01〜03`）→ 全タスクが「波乱/非本命レースが高ROI」に収束。**波乱ゲート `src/strategy_wt.py` 試験実装**（`top3_sum` loose四分位・Q1_loose TEST ROI 1136%）。`wave-picks-wt` に `upset_tier` タグ付け＋`--upset-gate` opt-inフィルター。③レポート`top2_sum<0.80`はスケール誤りで撤回。朝オッズ前向き計測（`wt_odds_snapshot`＋`snapshot_morning_odds_wt.py`）を仕込み。AUC↑≠ROI↑・AI印はROI低下を再確認、閾値は現状維持。|
 | 2026-06-08 | winticket 全期間収集完了（96,355R）。**DNS(finish_order=0)バグ修正**（着外を3着内に誤算入していた）でwt性能大幅改善（A層ROI 70%→187%・S 364%・SS 1205%・合計336%、ks同等以上）。**ks流ローリング特徴9項目追加→FEATURE_COLS_WT 30→39特徴**。lgbm_wt_v1 学習（CV AUC 0.7720/Test 0.7742）。wave-picks-wt 実運用化（発走時刻バグ修正）。notify_results 成績バグ修正（公開予想採点・月次ROI 102%→49%再採点）。|
 | 2026-06-06 | winticket ルート（30特徴量 FEATURE_COLS_WT）設計・実装完了を追記。model-overview.md を本ファイルに統合。|

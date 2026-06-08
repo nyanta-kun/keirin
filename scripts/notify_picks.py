@@ -33,6 +33,9 @@ def _parse_picks(text: str) -> dict[str, list[dict]]:
         if "【Aランク】" in line:
             current_rank = "A"
             continue
+        if "【Bランク】" in line:
+            current_rank = None  # B=各自判断＝ツイート(推奨)には含めない
+            continue
         if current_rank is None:
             continue
 
@@ -128,7 +131,7 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
     plt.rcParams["font.family"] = "Hiragino Sans"
     plt.rcParams["axes.unicode_minus"] = False
 
-    rank_colors = {"SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6"}
+    rank_colors = {"SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1"}
     role_bg = {"軸1": "#AED6F1", "軸2": "#D6EAF8", "流し": "#EBF5FB", "-": "#FFFFFF"}
     col_labels = ["AI順", "車番", "クラス", "期", "得点", "勝率3m%", "脚質", "AI確率%", "役割"]
 

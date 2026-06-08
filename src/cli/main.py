@@ -1041,9 +1041,15 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
                    "省略時は全件出力（各pickにupset_tierをタグ付けのみ＝本番挙動不変・前向き検証用）")
 @click.option("--gami-skip-odds", "gami_skip_odds", default=0.0, show_default=True,
               type=float,
-              help="ガミ回避: 3点(SS=3連単/S・A=3連複)のうち1点でも朝オッズ<この倍率なら"
-                   "レースごと見送り（鉄板=低価値レースの除外）。0=無効。推奨5.0")
-def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate, gami_skip_odds):
+              help="ガミ回避(見送り): 3点(SS=3連単/S・A=3連複)のうち1点でも朝オッズ<この倍率なら"
+                   "レースごと見送り（鉄板=低価値レースの除外）。0=無効。推奨3.0")
+@click.option("--b-rank-odds", "b_rank_odds", default=0.0, show_default=True,
+              type=float,
+              help="Bランク閾値: 見送りはしないが、3点中1点でも朝オッズ<この倍率なら"
+                   "Bランク（購入者判断にゆだねる）として別枠表示。0=無効。推奨5.0"
+                   "（gami-skip-odds≤オッズ<b-rank-odds がBランク帯）")
+def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate,
+                  gami_skip_odds, b_rank_odds):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1163,7 +1169,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             return s[11:16] if len(s) > 10 else s
     df["start_time"] = df["start_at"].apply(_fmt_start)
 
-    ss_races, s_races, a_races = [], [], []
+    ss_races, s_races, a_races, b_races = [], [], [], []
     skipped_odds = 0
     skipped_gami = 0
 
@@ -1202,18 +1208,27 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         # オッズ取得
         odds = _load_odds(race_key)
 
-        # ガミ回避: 3点中1点でも朝オッズ<閾値ならレースごと見送り（鉄板=低価値の除外）
-        if gami_skip_odds > 0:
-            is_ss = (gap12 >= 0.15 and ratio < 1.3)
+        # ガミ判定: 3点それぞれの朝オッズの最小値で3段階に振り分ける。
+        #   min < gami_skip_odds      → 見送り（鉄板=低価値）
+        #   gami_skip_odds ≤ min < b_rank_odds → Bランク（購入者判断にゆだねる）
+        #   min ≥ b_rank_odds         → 通常（SS/S/A）
+        is_ss = (gap12 >= 0.15 and ratio < 1.3)
+        gami_zone = None  # None=通常 / "B"=Bランク
+        if gami_skip_odds > 0 or b_rank_odds > 0:
             leg_odds = []
             for tdr in thirds:
                 if is_ss:
                     leg_odds.append(_find_trifecta_odds(odds, pivot1, pivot2, [tdr]))
                 else:
                     leg_odds.append(_find_trio_odds(odds, [pivot1, pivot2, tdr]))
-            if any(o is not None and o < gami_skip_odds for o in leg_odds):
-                skipped_gami += 1
-                continue
+            known = [o for o in leg_odds if o is not None]
+            min_leg = min(known) if known else None
+            if min_leg is not None:
+                if gami_skip_odds > 0 and min_leg < gami_skip_odds:
+                    skipped_gami += 1
+                    continue
+                if b_rank_odds > 0 and min_leg < b_rank_odds:
+                    gami_zone = "B"
 
         # riders_detail（PDF生成との互換性を保つ）
         riders_detail = []
@@ -1271,22 +1286,29 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             "upset_tier": upset_t,
         }
 
-        if gap12 >= 0.15 and ratio < 1.3:
+        if is_ss:
+            base_rank = "SS"
             entry["combo_str"] = f"{pivot1}→{pivot2}→{thirds_str}"
             entry["bet_type"]  = "3連単"
-            ss_races.append(entry)
         elif gap12 >= 0.15 and ratio < 1.6:
+            base_rank = "S"
             entry["combo_str"] = f"{pivot1}-{pivot2}-{thirds_str}"
             entry["bet_type"]  = "3連複"
-            s_races.append(entry)
         elif gap12 >= 0.15:
-            pass  # ratio≥1.6 は低配当リスクでスキップ
+            continue  # ratio≥1.6 は低配当リスクでスキップ
         else:
+            base_rank = "A"
             entry["combo_str"] = f"{pivot1}-{pivot2}-{thirds_str}"
             entry["bet_type"]  = "3連複"
-            a_races.append(entry)
 
-    if not ss_races and not s_races and not a_races:
+        if gami_zone == "B":
+            # 3〜5倍未満の安い目を含む＝鉄板寄り。購入者判断にゆだねるBランクへ。
+            entry["base_rank"] = base_rank
+            b_races.append(entry)
+        else:
+            {"SS": ss_races, "S": s_races, "A": a_races}[base_rank].append(entry)
+
+    if not ss_races and not s_races and not a_races and not b_races:
         msg = "本日は6車立て以下の対象レース（gap12≥0.06）がありません。"
         if skipped_odds > 0:
             msg += f"（オッズフィルターで {skipped_odds} 件スキップ）"
@@ -1296,15 +1318,16 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         raise SystemExit(1)
 
     sort_key = lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"])
-    for lst in (ss_races, s_races, a_races):
+    for lst in (ss_races, s_races, a_races, b_races):
         lst.sort(key=sort_key)
 
     def _fmt(entry):
         n_str = f"{entry['n_riders']}車"
         odds_str = f"  [{entry['odds_label']}]" if entry.get("odds_label") else ""
+        base = f"(元{entry['base_rank']}) " if entry.get("base_rank") else ""
         return (
             f"  {entry['start_time']}  {entry['venue_name']:<6} {entry['race_no']:>2}R  "
-            f"[{n_str}]  {entry['bet_type']}: {entry['combo_str']}  (3点/300円){odds_str}"
+            f"[{n_str}]  {base}{entry['bet_type']}: {entry['combo_str']}  (3点/300円){odds_str}"
         )
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1315,7 +1338,9 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     if min_trio_odds > 0:
         lines.append(f" オッズフィルター: ≥{min_trio_odds:.1f}倍  (スキップ: {skipped_odds}件)")
     if gami_skip_odds > 0:
-        lines.append(f" ガミ回避: 3点中<{gami_skip_odds:.0f}倍を含むレースを除外  (スキップ: {skipped_gami}件)")
+        lines.append(f" ガミ回避(見送り): 3点中<{gami_skip_odds:.0f}倍を含むレースを除外  (スキップ: {skipped_gami}件)")
+    if b_rank_odds > 0:
+        lines.append(f" Bランク: 最安目が{gami_skip_odds:.0f}〜{b_rank_odds:.0f}倍未満（購入は各自判断）")
     lines.append("=" * 70)
     lines.append(" 対象: 6車立て以下  gap12≥0.06 のみ")
     lines.append(" SS: gap12≥0.15&ratio<1.3(3連単)  S: gap12≥0.15&ratio[1.3,1.6)(3連複)  A: gap12[0.06,0.15)(3連複)")
@@ -1335,6 +1360,14 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             lines.append(_fmt(e))
         lines.append("")
 
+    if b_rank_odds > 0:
+        lines.append(f"【Bランク】 {len(b_races)}件  ※最安目が{gami_skip_odds:.0f}〜{b_rank_odds:.0f}倍未満＝鉄板寄り・購入は各自判断")
+        lines.append("─" * 60)
+        lines.append("  (該当なし)" if not b_races else "")
+        for e in b_races:
+            lines.append(_fmt(e))
+        lines.append("")
+
     lines.append("=" * 70)
     ss_cost = len(ss_races) * 300
     s_cost  = len(s_races)  * 300
@@ -1343,7 +1376,9 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     lines.append(f"  SS: {len(ss_races)}件 × 300円 = {ss_cost:,}円  (3連単)")
     lines.append(f"  S : {len(s_races)}件 × 300円 = {s_cost:,}円  (3連複)")
     lines.append(f"  A : {len(a_races)}件 × 300円 = {a_cost:,}円  (3連複)")
-    lines.append(f"  合計投資額: {total_cost:,}円")
+    lines.append(f"  推奨合計投資額: {total_cost:,}円  (SS/S/A)")
+    if b_rank_odds > 0:
+        lines.append(f"  B : {len(b_races)}件 × 300円 = {len(b_races)*300:,}円  (購入は各自判断・上記合計に含めず)")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)
@@ -1363,7 +1398,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     all_race_details = (
         [{"rank": "SS", **e} for e in ss_races] +
         [{"rank": "S",  **e} for e in s_races] +
-        [{"rank": "A",  **e} for e in a_races]
+        [{"rank": "A",  **e} for e in a_races] +
+        [{"rank": "B",  **e} for e in b_races]
     )
     detail_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_detail.json"
     with open(detail_path, "w", encoding="utf-8") as f:

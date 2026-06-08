@@ -39,10 +39,12 @@ echo "[$(date '+%H:%M:%S')] 朝オッズをスナップショット退避..."
   2>&1 | tee -a "$LOG_DIR/odds_snapshot_${TODAY}.log" || \
   echo "[$(date '+%H:%M:%S')] 朝オッズ退避に失敗（処理は継続）"
 
-echo "[$(date '+%H:%M:%S')] 予想生成（winticket・ガミ回避<5倍）..."
-# --gami-skip-odds 5.0: 3点中1点でも朝オッズ<5倍ならレース見送り（鉄板=低価値の除外）。
-# 検証: 5倍で総利益ほぼ維持・ROIほぼ倍・落車クッション増（scripts/analyze_gami_threshold_wt.py）。
-.venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" --gami-skip-odds 5.0 \
+echo "[$(date '+%H:%M:%S')] 予想生成（winticket・<3倍見送り/3〜5倍未満はBランク）..."
+# --gami-skip-odds 3.0: 3点中1点でも朝オッズ<3倍ならレース見送り（明確なガミ）。
+# --b-rank-odds 5.0:   最安目が3〜5倍未満ならBランク（鉄板寄り・購入は各自判断）として別枠表示。
+# 検証: scripts/analyze_gami_threshold_wt.py（<3倍点含むレースは集団で収支ゼロ）。
+.venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" \
+  --gami-skip-odds 3.0 --b-rank-odds 5.0 \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log"
 
 echo "[$(date '+%H:%M:%S')] 予想をDiscordへ通知..."

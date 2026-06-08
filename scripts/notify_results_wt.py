@@ -25,6 +25,7 @@ def _parse_picks_full(target_date: str) -> dict:
         if "【SSランク】" in line: rank = "SS"
         elif "【Sランク】" in line: rank = "S"
         elif "【Aランク】" in line: rank = "A"
+        elif "【Bランク】" in line: rank = None  # B=各自判断＝公式成績(picks_history)には含めない
         elif rank:
             m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
             if m:
