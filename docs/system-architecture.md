@@ -44,6 +44,7 @@ keirin/
 │       └── main.py                    # CLIエントリーポイント（全コマンド定義）
 ├── scripts/
 │   ├── daily_picks_wt.sh              # ★本番日次（cron 8:00）
+│   ├── intraday_results_wt.sh         # ★本番日中（cron 0,10-23時）当日結果逐次収集・通知なし
 │   ├── weekly_retrain_wt.sh           # ★本番週次（cron 日23:30）
 │   ├── notify_picks.py                # wave-picks 通知 + PDF生成 → Discord
 │   ├── notify_results_wt.py           # wt前日結果採点 + picks_history(route='wt') → Discord
@@ -170,8 +171,9 @@ AM 8:00 （daily_picks_wt.sh）
   ③ collect-wt --date $(today)                   # 当日出走表+オッズ収集
   ④ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
   ⑤ wave-picks-wt --date $(today) \
-       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 39特徴・SS/S/A＋ガミ3段階）
+       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 40特徴・SS/S/A＋ガミ3段階）
   ⑥ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord（Bは各自判断・成績/ツイート対象外）
+日中（0,10-23時, intraday_results_wt.sh）: collect-wt --date $(today) で当日結果を逐次収集（未終了のみ・通知なし・最終R23:30発走を0:00でカバー）。
 週次（日 23:30, weekly_retrain_wt.sh）: train-wt 再学習。
 ```
 （旧ksフロー daily_picks.sh / notify_results.py / wave-picks は廃止。lgbm_v6等は保持＝ロールバック用）
