@@ -1,0 +1,50 @@
+LPATH=/Users/ysuzuki/GitHub/HorseRacingIE
+10 0 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Kaisai >> /tmp/cron_stdout.log 2>&1
+20 0 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Race >> /tmp/cron_stdout.log 2>&1
+25 0 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Netkeiba >> /tmp/cron_stdout.log 2>&1
+30 0 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Kichiuma >> /tmp/cron_stdout.log 2>&1
+0 9 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Netkeiba >> /tmp/cron_stdout.log 2>&1
+5 9 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Kichiuma >> /tmp/cron_stdout.log 2>&1
+10 9 * * * $LPATH/cmd_exec.sh $LPATH/scrapingOdds.py >> /tmp/cron_stdout.log 2>&1
+10 14 * * * $LPATH/cmd_exec.sh $LPATH/scrapingOdds.py >> /tmp/cron_stdout.log 2>&1
+*/10 9-20 * * * $LPATH/cmd_exec.sh -m web.ai.scraping.Netkeiba -r >> /tmp/cron_stdout.log 2>&1
+*/5 9-21 * * * $LPATH/cmd_exec.sh $LPATH/scrapingOdds.py -r >> /tmp/cron_stdout.log 2>&1
+5,25,45 9-21 * * * $LPATH/cmd_exec.sh $LPATH/scrapingResult.py>> /tmp/cron_stdout.log 2>&1
+0 7 * * 0,6 $LPATH/cmd_exec.sh $LPATH/scrapingAnagusa.py >> /tmp/cron_stdout.log 2>&1
+5 0 * * 0,6 $LPATH/cmd_exec.sh scrapingBook.py >> /tmp/cron_stdout.log 2>&1
+
+# ============================================================
+# kiseki - JV-Link データ取得 & 指数算出
+# JVデータ提供タイミング（jvdata-spec.md）に合わせたスケジュール
+# ============================================================
+
+# 毎朝8:00: 前日データ取込 + 直近14日指数 + 翌日出馬表指数
+0 8 * * * /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# 月曜14:30: 確定成績・DIFF・血統データ更新（仕様: 月曜14:00提供）
+30 14 * * 1 /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# 木曜17:00: 週末出馬表取得（仕様: 木曜16:30提供）
+0 17 * * 4 /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# 木曜20:30: DIFF・血統・スナップ追加取得（仕様: 木曜20:00提供）
+30 20 * * 4 /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# 金曜12:30: 土曜出馬表更新（仕様: 金曜12:00提供）
+30 12 * * 5 /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# 土曜12:30: 日曜出馬表更新（仕様: 土曜12:00提供）
+30 12 * * 6 /Users/ysuzuki/GitHub/kiseki/scripts/daily_fetch.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# kiseki - Realtime監視 開始（毎日9:00、開催日のみ自動判定）
+0 9 * * * /Users/ysuzuki/GitHub/kiseki/scripts/realtime_start.sh >> /Users/ysuzuki/GitHub/kiseki/logs/cron.log 2>&1
+
+# ============================================================
+# keirin - 競輪AI予想・成績通知
+# ============================================================
+0 8 * * * /Users/ysuzuki/GitHub/keirin/scripts/daily_picks_wt.sh >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+30 23 * * 0 /Users/ysuzuki/GitHub/keirin/scripts/weekly_retrain_wt.sh >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+# keirin - 日中(10-23時+0時)毎時 当日結果取得（最終R23:30発走→0:00を最後に・通知なし）
+0 0,10-23 * * * /Users/ysuzuki/GitHub/keirin/scripts/intraday_results_wt.sh >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+# keirin - 夕方再生成（夜レースのライン公開後に夜の部推奨を生成・通知）
+0 16 * * * /Users/ysuzuki/GitHub/keirin/scripts/evening_picks_wt.sh >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
