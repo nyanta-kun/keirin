@@ -1,0 +1,95 @@
+[
+  {
+    "rank": "B",
+    "race_key": "20260609_13_06",
+    "venue_name": "いわき平",
+    "race_no": 6,
+    "start_time": "17:48",
+    "n_riders": 6,
+    "gap12": 0.09987200493062298,
+    "ratio": 1.4143803647621187,
+    "pivot1": 2,
+    "pivot2": 3,
+    "thirds": [
+      1,
+      5,
+      4
+    ],
+    "riders": [
+      {
+        "frame_no": 2,
+        "ai_rank": 1,
+        "player_class": "S2",
+        "period": 90,
+        "racing_score": 97.1,
+        "win_rate_3m": 11.5,
+        "line_position": "両",
+        "pred_prob_pct": 70.7,
+        "role": "軸1"
+      },
+      {
+        "frame_no": 3,
+        "ai_rank": 2,
+        "player_class": "S2",
+        "period": 91,
+        "racing_score": 96.9,
+        "win_rate_3m": 8.6,
+        "line_position": "追",
+        "pred_prob_pct": 60.7,
+        "role": "軸2"
+      },
+      {
+        "frame_no": 1,
+        "ai_rank": 3,
+        "player_class": "S2",
+        "period": 82,
+        "racing_score": 94.7,
+        "win_rate_3m": 2.9,
+        "line_position": "追",
+        "pred_prob_pct": 45.6,
+        "role": "流し"
+      },
+      {
+        "frame_no": 5,
+        "ai_rank": 4,
+        "player_class": "S2",
+        "period": 105,
+        "racing_score": 94.8,
+        "win_rate_3m": 4.0,
+        "line_position": "両",
+        "pred_prob_pct": 43.9,
+        "role": "流し"
+      },
+      {
+        "frame_no": 4,
+        "ai_rank": 5,
+        "player_class": "S2",
+        "period": 113,
+        "racing_score": 93.8,
+        "win_rate_3m": 3.6,
+        "line_position": "逃",
+        "pred_prob_pct": 27.2,
+        "role": "流し"
+      },
+      {
+        "frame_no": 6,
+        "ai_rank": 6,
+        "player_class": "S2",
+        "period": 113,
+        "racing_score": 93.1,
+        "win_rate_3m": 3.5,
+        "line_position": "逃",
+        "pred_prob_pct": 21.4,
+        "role": "-"
+      }
+    ],
+    "odds_label": "3.7倍",
+    "top3_sum": 1.7701,
+    "upset_tier": "Q2",
+    "stake": 300,
+    "n_points": 3,
+    "combo_str": "2-3-1,5,4",
+    "bet_type": "3連複",
+    "base_rank": "A"
+  }
+]
