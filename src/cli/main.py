@@ -1720,9 +1720,19 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 @cli.command("backtest-wt")
 @click.option("--from", "from_date", default="2025-01-01", help="評価開始日")
 @click.option("--to", "to_date", default=None, help="評価終了日")
-@click.option("--model", "model_name", default="lgbm_wt", help="モデルファイル名（.pklなし）")
+@click.option("--model", "model_name", default="lgbm_wt",
+              help="モデルファイル名（.pklなし）。"
+                   "注意: デフォルトの lgbm_wt は週次再学習済みで評価期間をin-sampleで学習している。"
+                   "リーク無し検証には --eval-model オプションで期間限定学習モデルを指定すること"
+                   "（docs/analysis/18-backtest-bias-rescore.md バイアス③参照）。")
+@click.option("--eval-model", "eval_model_name", default=None,
+              help="評価専用モデルのファイル名（.pklなし）。"
+                   "指定すると --model の代わりにこのモデルで予測確率を計算する。"
+                   "週次再学習 lgbm_wt のリークを避けるため、"
+                   "TRAIN期間のみで学習したモデル（例: lgbm_wt_train_only）を指定すると"
+                   "doc18セマンティクスのリーク無し評価ができる。")
 @click.option("--max-riders", "max_riders", default=None, type=int,
-              help="出走頭数フィルター（実運用は6）")
+              help="出走頭数フィルター（実運用は6）。出走表基準で適用する。")
 @click.option("--min-gap12", "min_gap12", default=None, type=float,
               help="top1-top2 pred_prob 差フィルター（wave-picks-wtは0.06）")
 @click.option("--tiered", is_flag=True,
@@ -1736,14 +1746,24 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 @click.option("--max-ratio", "max_ratio", default=None, type=float,
               help="バリューモード: top1_prob/(3/n)<この値の拮抗レースのみ（例1.3）")
 def backtest_wt(from_date: str, to_date: str | None, model_name: str,
+                eval_model_name: str | None,
                 max_riders: int | None, min_gap12: float | None, tiered: bool,
                 value_mode: bool, ev_min: float, max_per_race: int,
                 max_ratio: float | None):
     """winticket モデルで買い目バックテストを実行（wt_odds の実オッズ使用）
 
+    [doc18 本番忠実セマンティクス適用済み]
+    - 出走表基準の ≤6車フィルタ（完走者基準ではない）
+    - 全エントリーでランキング（欠車を事前に知らない）
+    - 欠車処理: 軸欠車=レース無効 / 相手欠車=その目のみ除外
+
+    週次再学習済み lgbm_wt をデフォルトモデルとして使う場合は評価期間内にリークがある。
+    リーク無し評価には --eval-model でTRAIN期間限定学習モデルを指定すること。
+
     例: python -m src.cli.main backtest-wt --from 2026-01-01
         python -m src.cli.main backtest-wt --from 2026-01-01 --max-riders 6 --min-gap12 0.06
         python -m src.cli.main backtest-wt --from 2026-01-01 --tiered
+        python -m src.cli.main backtest-wt --from 2025-07-01 --tiered --eval-model lgbm_wt_train_only
     """
     from src.preprocessing.feature_wt import load_raw_data_wt, build_features_wt
     from src.models.trainer import load_model
@@ -1753,12 +1773,20 @@ def backtest_wt(from_date: str, to_date: str | None, model_name: str,
         run_value_backtest_wt, print_value_backtest_wt,
     )
 
+    # --eval-model が指定されている場合はそちらを使う（リーク無し評価用）
+    active_model_name = eval_model_name if eval_model_name else model_name
     try:
-        model = load_model(model_name)
+        model = load_model(active_model_name)
     except FileNotFoundError:
-        click.echo(f"モデル '{model_name}' が見つかりません。先に train-wt を実行してください。",
+        click.echo(f"モデル '{active_model_name}' が見つかりません。先に train-wt を実行してください。",
                    err=True)
         raise SystemExit(1)
+
+    if eval_model_name:
+        click.echo(f"[wt] 評価モデル: {eval_model_name} (リーク無し専用モデル)")
+    elif active_model_name == "lgbm_wt":
+        click.echo(f"[wt] 警告: lgbm_wt は週次再学習済みで評価期間をin-sampleで学習しています。"
+                   f" リーク上振れに注意（doc18 バイアス③）。リーク無し評価には --eval-model を使用してください。")
 
     click.echo(f"[wt] Loading {from_date} ~ {to_date or 'latest'} ...")
     df_raw = load_raw_data_wt(min_date=from_date, max_date=to_date)

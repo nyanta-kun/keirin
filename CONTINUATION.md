@@ -1,6 +1,32 @@
-# セッション引継ぎメモ（最終更新 2026-06-12）
+# セッション引継ぎメモ（最終更新 2026-06-13）
 
 コンテキストリセット後にここから再開すること。
+
+---
+
+## ★★★2026-06-13 ROI100%再挑戦フェーズ（G01〜G08）完了
+
+### フェーズ概要
+2026-06-13 に「ROI100%再挑戦フェーズ計画（`docs/goals/README.md`）」の G01〜G08 を全て完了。
+
+### G01〜G07 結果要約
+
+| Goal | 結論 |
+|---|---|
+| G01 backtest リーク無し化 | `backtest_wt.py` 本体に3バイアス修正移植。`void_rules.py` 新設。スポットチェック ROI 80.4%（doc18 ~84% と同オーダー）。新規28テスト（計179 pass）。|
+| G02 live実測レポート | `scripts/live_report_wt.py` 新規作成。初期観察 `docs/analysis/22-live-report-initial.md`（SS+S+A 9R・ROI 56%・CI[0%,125%]）。判断最低100R必要。|
+| G03 日中オッズスナップショット | `scripts/snapshot_intraday_odds_wt.py` 新規作成。72レース/25,263行保存確認（2026-06-13）。cron提案ファイル生成済（書込はユーザー操作）。|
+| G04 money-flow検証ハーネス | `scripts/exp_moneyflow_wt.py` 新規作成。初期観察 `docs/analysis/23-moneyflow-initial.md`（trio的中目 vs 非的中目 短縮率差+22.9%はスマートマネー方向だが標本30R≈最小1,624Rの2%・評価不能）。|
+| G05 気象データ収集 | `src/scraper/weather.py` 新規作成。全43場・2022-12〜2026-06 バックフィル完了。wt_weather 1,331,280行・カバレッジ99.9%。|
+| G06 風特徴検証 | `scripts/exp_wind_wt.py` 新規作成。AUC 差 VAL +0.0002/HOLD +0.0003（閾値 ±0.001 未満）→ **Phase1 不通過・無情報**。FEATURE_COLS_WT・モデル・cron 変更ゼロ。`docs/analysis/24-wind-feature.md` 生成。|
+| G07 高配当融合 | `scripts/exp_highpay_fusion_wt.py` 新規作成。ゲート条件（G06 Phase1 不通過 かつ G04 標本 30R≈最小 1,624R の 2%）成立 → 事前登録4セル全て SKIP。`docs/analysis/25-highpay-fusion.md` 生成。|
+| G08 ドキュメント同期 | 本節。CONTINUATION.md・`08-le6-roadmap.md`・`system-architecture.md`・`prediction-factors.md`・`goals/README.md` を同期。|
+
+### 次のアクション
+1. **money-flow 蓄積待ち（最優先・約9ヶ月）**: `snapshot_intraday_odds_wt.py` の cron 登録をユーザーが Terminal から実行（提案ファイル: `data/cron_proposal_moneyflow_20260613.txt`）。≥1,624R 蓄積後に `exp_moneyflow_wt.py --report` で再実行。
+2. **live実測の継続観察**: `scripts/live_report_wt.py` で picks_history(route='wt') を定期確認。判断最低100R（現在9R・約2週間で達成見込み）。
+3. **fav_mismatch タグ蓄積**: 2026-06-11 朝 cron から記録開始。本番化ゲート（ドリフト確認・ガミ重複確認）後に判断。
+4. **採否判断はlive実測のみ**: backtestの数字（最終オッズ上限値）を根拠にしない。
 
 ---
 

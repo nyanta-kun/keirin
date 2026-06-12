@@ -1,6 +1,6 @@
 # 予想ファクター仕様書
 
-> **最終更新**: 2026-06-08  
+> **最終更新**: 2026-06-13  
 > **本番モデル（winticket）**: `lgbm_wt` / **40特徴量** / 2022-12〜2026-06 全期間 96,455R・DNS処理修正済。配信は**全データ再学習(full-refit)**、品質監視は**ホールドアウト評価モデル `lgbm_wt_eval`（直近90日OOS）の Test AUC ≈ 0.778**（M-2: 学習を finish_order≥1 に統一しDNS負例を除去→0.774から改善）。週次で配信/評価を分離（H-1・`train-wt --full-refit`/`--no-promote`、メタ `*.meta.json`）。特徴行列は全経路で `prepare_X`（fillna0統一・M-1）。  
 > **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
 > **現行戦略**: 6車立て以下 SS/S/A 3段階＋ガミ回避3段階（<3倍見送り/3〜5倍Bランク/≥5倍推奨）＋波乱ゲート（opt-in）
@@ -228,6 +228,10 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 | `bank_length` | バンク周長（m）: 250 / 333 / 400 / 500 |
 | `is_indoor` | 屋内バンク: 1（千葉のみ）|
 | `prefecture` | 開催府県（地元フラグ算出に使用）|
+| `straight_len` | 直線長（m）: 2026-06-12 追加（`docs/analysis/20-web-logic-audit.md`・宇都宮500等48行の誤記訂正済） |
+| `cant_deg` | カント角（度）: 2026-06-12 追加（同上） |
+
+> **注**: `straight_len`/`cant_deg` は FEATURE_COLS_WT には含まれない（風特徴 G06 Phase1 不通過と同様、レース内相対に無効）。venue_info 副産物として記録。
 
 ---
 
@@ -250,6 +254,8 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-06-13 | **ドキュメント同期（G08）**: G01〜G07完了に伴い各ドキュメントを更新。venue_info に `straight_len`/`cant_deg` 追加記録（`docs/analysis/20-web-logic-audit.md` 副産物・宇都宮500等48行誤記訂正済）。FEATURE_COLS_WT への変更なし（G06風特徴 Phase1 不通過・無情報）。新規スクリプト（G02〜G07）を `docs/system-architecture.md` に追記。|
+| 2026-06-12 | **バックテスト3バイアス修正（G01 移植）**: `backtest_wt.py` 本体に①欠車生存バイアス（全エントリーでランキング）②≤6車フィルタ位置（pred_prob付与前=出走表基準）③欠車void（DNS含む組の不計上）を移植。`src/evaluation/void_rules.py` 新設。`--eval-model` オプション追加。スポットチェック ROI 80.4%（doc18 の~84% と同オーダー）。|
 | 2026-06-09 | **特徴追加: n_senko（レース内の逃げ人数＝展開シグナル）**。4サイト監査(oddspark等)→n_linesと独立の波乱シグナルと検証→特徴量化。FEATURE_COLS_WT 39→40。再学習で holdout AUC 0.7778→**0.7784**・層別合計393→**404%**(A層220→251%)＝小幅改善・非劣化で採用。外部の穴俗説(333初日/ミッドナイト/A級波乱)はデータ非再現で棄却。|
 | 2026-06-08(夜9) | **波乱の解剖＋脚質バグ修正**: `docs/analysis/04-upset-anatomy.md`（波乱は n_lines が最大の事前条件・波乱時の伏兵は「非本命ライン先頭・指数3-4位」）。探索中に **`style_enc` 全件-1（脚質特徴が死亡）** を発見＝winticket値は `逃/両/追` だが `_STYLE_MAP` が旧表記前提でキー不一致。`逃=0/両=1/追=2` に修正し再学習（AUC中立 0.7777→0.7778＝s_count等で実質取込済だが特徴正常化・脚質次元分析が可能に）。|
 | 2026-06-08(夜8) | **波乱ステーク傾斜(方針A)実装**: `--stake-tilt`（top3_sum帯で賭け金傾斜 Q1_loose×2/Q2×1/Q3,Q4見送り。`strategy_wt.stake_units`）。検証 `scripts/exp_stake_tilt_wt.py`（eval OOS・上限値）: **TEST ROI フラット351%→傾斜745%**（最大除640%・train/test順序一致）。既定off（分散増・上限値のためlive実測後に有効化判断）。テスト36件pass。|
