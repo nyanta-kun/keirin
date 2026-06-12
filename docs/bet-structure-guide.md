@@ -123,6 +123,19 @@ python -m src.cli.main wave-picks-wt --gami-skip-odds 3.0 --b-rank-odds 5.0 --st
 - カット定数は `strategy_wt.STAKE_TILT_DEFAULT` / `stake_units()`（週次再計測の `upset_cuts_wt.json` に追従）。
 - ⚠️ **既定はoff（フラット）**。ROIは上限値・小標本でCI広・**分散増（高配当ゾーン集中＝的中率低）**のため、bankroll余力とlive実測(picks_history)を見て有効化を判断。`top3_sum` はオッズ不要・朝確定で安定。
 
+### ワイド1点（指数1-2位）— 2026-06-09 実装（opt-in・独立プロダクト）
+
+```bash
+python -m src.cli.main wave-picks-wt --wide --wide-min-odds 2.5
+```
+
+≤6車全件に「指数1-2位ワイド(W12)」を1点100円で出力する独立プロダクト（SS/S/Aの三連複/三連単とは別枠・合計に含めない）。
+
+- **W12が最良の1点**: 的中率はW12(指数1-2位)が最良（≤6車全体59%・W13=47%/W23=37%）。pred_prob 上位2車＝同時top3確率最大ペア。**新モデル不要**。
+- **的中率↔オッズは1:1逆連動**（市場効率の壁・`docs/analysis/12`）: 高的中(70-83%)帯は払戻100円＝ガミ常態(ROI70%台)。**「ワイド1点はガミ無し」は誤り**。的中率だけ追うと負ける。
+- **`--wide-min-odds` で足切り（value型）**: W12朝オッズ≥2.5〜3.0倍のみ購入 → 的中50-53%・ROI220-271%（最終オッズ上限値・OOS）。高的中・低分散だが黒字化には足切り必須。
+- ⚠️ 既定off・本番cron未反映。最終オッズ上限値・N小・朝ドリフト未反映＝**live前向き検証(picks_history rank='WIDE')後に cron 反映を判断**。`notify_results_wt` がSS/S/Aと別集計で自動採点。
+
 ---
 
 ## 廃止戦略（参考記録）

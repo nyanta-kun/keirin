@@ -99,9 +99,11 @@ def _build_tweet_texts(target_date: str, picks_by_rank: dict) -> list[str]:
     return tweets
 
 
-def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
+def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150) -> bool:
     """全車指数PDFを生成してoutput_pathに保存する。
     matplotlib でページごとにPNG→Pillowで1本のPDFに結合。
+    detail JSON は推奨のみ(detail.json)でも全レース(allindex.json)でも同一スキーマで描画可。
+    全レース版はページ数が多いため dpi を下げてファイルサイズを抑える。
     """
     import tempfile
 
@@ -144,7 +146,8 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
                 f"    gap12={race['gap12']:.3f}  ratio={race['ratio']:.2f}"
             )
             subtitle = f"{race['bet_type']}: {race['combo_str']}"
-            riders = sorted(race.get("riders", []), key=lambda r: r["frame_no"])
+            # 各レース内は指数(pred_prob)降順＝AI順。ai_rank昇順で並べる。
+            riders = sorted(race.get("riders", []), key=lambda r: r["ai_rank"])
 
             table_data = []
             row_colors = []
@@ -197,7 +200,7 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
                     cell.get_text().set_fontweight("bold")
 
             png_path = f"{tmpdir}/race_{i:03d}.png"
-            fig.savefig(png_path, dpi=150, bbox_inches="tight")
+            fig.savefig(png_path, dpi=dpi, bbox_inches="tight")
             plt.close(fig)
             png_paths.append(png_path)
 
@@ -219,10 +222,16 @@ def main():
     target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().strftime("%Y-%m-%d")
     # 第2引数でファイルプレフィックス指定（ks="wave_picks" / winticket="wave_picks_wt"）
     prefix = sys.argv[2] if len(sys.argv) > 2 else "wave_picks"
-    picks_path = Path(__file__).parent.parent / "data" / "picks" / f"{prefix}_{target_date}.txt"
+    # 第3引数 "night" = 夜の部（2段階生成の第2段）。夜ファイルを読み、日中の再通知を避ける
+    # （Xポスト省略・「夜の部」見出し）。全レース指数PDFは夜ライン反映済の更新版を送る。
+    night = len(sys.argv) > 3 and sys.argv[3] == "night"
+    fname = f"{prefix}_{target_date}_night.txt" if night else f"{prefix}_{target_date}.txt"
+    title = "競輪AI予想（夜の部）" if night else "競輪AI予想"
+    picks_path = Path(__file__).parent.parent / "data" / "picks" / fname
 
     if not picks_path.exists():
-        send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません")
+        if not night:
+            send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません")
         return
 
     text = picks_path.read_text(encoding="utf-8")
@@ -235,11 +244,31 @@ def main():
     m_cost = re.search(r"合計投資額:\s*([\d,]+)円", text)
     total_cost = m_cost.group(1) if m_cost else f"{total * 300:,}"
 
+    md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
+
+    def _send_index_pdf():
+        """全レース指数PDF（allindex.json優先・無ければ推奨のみdetail.json）を送信。"""
+        allidx = picks_path.parent / f"{prefix}_{target_date}_allindex.json"
+        detail = picks_path.parent / f"{prefix}_{target_date}_detail.json"
+        if allidx.exists():
+            src, pdf, dpi, label = allidx, picks_path.parent / f"{prefix}_{target_date}_allindex.pdf", 100, "全レース指数"
+        elif detail.exists():
+            src, pdf, dpi, label = detail, picks_path.parent / f"{prefix}_{target_date}_detail.pdf", 150, "全車指数(推奨のみ)"
+        else:
+            print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
+        if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
+            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
+            print(f"[notify_picks] PDF 送信完了: {pdf}")
+        else:
+            print("[notify_picks] PDF 生成失敗")
+
     if total == 0:
-        md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
-        send(f"🏁 **競輪AI予想 {target_date}**\n本日の対象レースはありません（6車立て以下 gap12≥0.06 なし）")
-        tweet_none = f"🎯 穴車AI予想 {md}\n\n本日の対象レースはありません\n\n#競輪 #穴車AI #AI予想"
-        send(f"**--- Xポスト用（コピペ）---**\n```\n{tweet_none}\n```")
+        scope = "夜レースの推奨" if night else "本日の推奨(SS/S/A)"
+        send(f"🏁 **{title} {target_date}**\n{scope}はありません（6車立て以下 gap12≥0.06 なし）\n全レースの指数は添付PDFをご覧ください。")
+        _send_index_pdf()   # 推奨0件でも全レース指数PDFは送る（夜は更新版）
+        if not night:
+            tweet_none = f"🎯 穴車AI予想 {md}\n\n本日の対象レースはありません\n\n#競輪 #穴車AI #AI予想"
+            send(f"**--- Xポスト用（コピペ）---**\n```\n{tweet_none}\n```")
         return
 
     def fmt_section(rank_label, picks):
@@ -259,7 +288,7 @@ def main():
 
     detail = "\n\n".join(sections)
     msg = (
-        f"🏁 **競輪AI予想 {target_date}**\n"
+        f"🏁 **{title} {target_date}**\n"
         f"SS:{ss_n}件 / S:{s_n}件 / A:{a_n}件　計{total}件\n"
         f"投資: {total_cost}円  (6車立て以下)\n"
         f"```\n{detail}\n```"
@@ -268,29 +297,20 @@ def main():
         msg = msg[:1900] + "\n…(省略)```"
     send(msg)
 
-    tweets = _build_tweet_texts(target_date, picks_by_rank)
-    for i, tw in enumerate(tweets, 1):
-        label = (
-            f"**--- Xポスト用 {i}/{len(tweets)}（コピペ）---**"
-            if len(tweets) > 1
-            else "**--- Xポスト用（コピペ）---**"
-        )
-        send(f"{label}\n```\n{tw}\n```")
+    if not night:   # 夜の部はXポスト省略（朝に投稿済・日中の重複通知を避ける）
+        tweets = _build_tweet_texts(target_date, picks_by_rank)
+        for i, tw in enumerate(tweets, 1):
+            label = (
+                f"**--- Xポスト用 {i}/{len(tweets)}（コピペ）---**"
+                if len(tweets) > 1
+                else "**--- Xポスト用（コピペ）---**"
+            )
+            send(f"{label}\n```\n{tw}\n```")
 
-    print(f"[notify_picks] Discord 送信完了 ({target_date}, SS:{ss_n}/S:{s_n}/A:{a_n})")
+    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}/A:{a_n})")
 
-    # 全車指数PDF
-    detail_json = picks_path.parent / f"{prefix}_{target_date}_detail.json"
-    if detail_json.exists():
-        pdf_path = str(picks_path.parent / f"{prefix}_{target_date}_detail.pdf")
-        if _generate_picks_pdf(str(detail_json), pdf_path):
-            md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
-            send_file(pdf_path, caption=f"📊 全車指数 {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
-            print(f"[notify_picks] PDF 送信完了: {pdf_path}")
-        else:
-            print("[notify_picks] PDF 生成失敗")
-    else:
-        print(f"[notify_picks] detail JSON なし（wave-picks を先に実行してください）")
+    # 全レース指数PDF（allindex.json＝全レース・推奨は色付き／無ければ推奨のみ）
+    _send_index_pdf()
 
 
 if __name__ == "__main__":

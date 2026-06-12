@@ -241,8 +241,12 @@ class WinticketScraper:
         entries_raw = data.get("entries", [])
         players_raw = {p["id"]: p for p in data.get("players", [])}
         records_raw = {r["playerId"]: r for r in data.get("records", [])}
-        lineup_raw = _parse_lineup(data.get("linePrediction", {}))
-        n_lines = len(data.get("linePrediction", {}).get("lines", []))
+        # linePrediction はライン未確定(ナイター当日朝など)だと値が null になり得る。
+        # data.get("linePrediction", {}) はキーが存在し null の場合 default {} が効かず
+        # None を返すため、明示的に `or {}` でガードする（None.get クラッシュ→レース脱落を防ぐ）。
+        line_pred = data.get("linePrediction") or {}
+        lineup_raw = _parse_lineup(line_pred)
+        n_lines = len(line_pred.get("lines", []))
         results_raw = {r["playerId"]: r for r in data.get("results", [])}
 
         race_date_yyyymmdd = target_date.replace("-", "")

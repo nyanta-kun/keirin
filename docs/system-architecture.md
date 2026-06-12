@@ -81,6 +81,8 @@ keirin/
 - `--gami-skip-odds 3.0`：3点中1点でも朝オッズ<3倍ならレース見送り
 - `--b-rank-odds 5.0`：最安目が3〜5倍未満ならBランク（購入は各自判断・別枠）
 - `--upset-gate Q1_loose|Q2|Q3`：top3_sum波乱ゲート（opt-in。省略時は全pickに upset_tier タグ付けのみ）
+- `--stake-tilt`：波乱スコア(top3_sum)で賭け金傾斜（opt-in・既定off）
+- `--ss-trifecta-box`：SS層の3連単を pred1,pred2 1-2着BOX(6点)に拡張（opt-in・既定off=3点で本番不変。検証=`docs/analysis/10-le6-fav-position.md`）
 
 補助スクリプト: `scripts/snapshot_morning_odds_wt.py [date]`（朝オッズ退避）/ `--report`（朝→最終ドリフト計測）。
 
