@@ -51,3 +51,39 @@
 | G06 | done | `scripts/exp_wind_wt.py` 新規作成。風×バンク特徴をリーク無し LGBM に追加して AUC 差を測定 → VAL +0.0002・HOLD +0.0003 で Phase1 不通過（閾値 ±0.001 未満）。本番変更ゼロ。|
 | G07 | done | ゲート条件（G06 Phase1 不通過 かつ G04 標本 30R ≈ 最小 1,624R の 2%）が成立したため事前登録4セル全てを SKIP。`scripts/exp_highpay_fusion_wt.py` と `docs/analysis/25-highpay-fusion.md` を生成。|
 | G08 | done | CONTINUATION.md・`docs/analysis/08-le6-roadmap.md`・`docs/system-architecture.md`・`docs/prediction-factors.md`・`docs/goals/README.md` を G01〜G07 の完了報告を正として同期。|
+
+---
+
+## 波乱予想フェーズ（W01〜W04・2026-06-14〜）
+
+### 背景・動機
+
+doc02（波乱予測 AUC 0.74）の ROI 数値は doc18 バイアスを含む。
+≤6車でも公開オッズ内エッジ無しの可能性が高い中で、「波乱（ライン崩れ・高配当）を構造的に予測し、
+市場非効率と組み合わせる」アプローチが残る。
+
+### 全タスク共通規律（doc18セマンティクス）
+
+- ランキングは**全エントリー（出走表）**で行う
+- ≤6車判定は**出走表基準**（完走者基準は7車立て33%混入する）
+- モデルは**評価期間外で学習**（週次再学習 lgbm_wt はリーク・`lgbm_wt_eval` を使用）
+- 検証合格基準: VAL・HOLD 両方で bootstrap CI 下限 > 100%
+- **crontab 書込み禁止**（提案ファイル生成のみ）・**git commit 禁止**・**本番変更禁止**
+
+### フェーズとタスク
+
+| Phase | Goal | 内容 | 依存 |
+|---|---|---|---|
+| 1 波乱基盤 | [W01](W01-upset-leakfree-reeval.md) | 波乱モデル×リーク無し再評価（doc18対応） | なし |
+| 2 買い目探索 | [W02](W02-upset-bet-design.md) | 波乱Q4×代替買い目設計（ライン崩れ前提） | なし（W01と並列） |
+| 2 市場交差 | [W03](W03-upset-fav-mismatch.md) | 波乱スコア×fav_mismatch 交差分析 | なし（W01と並列） |
+| 3 統合 | [W04](W04-upset-synthesis.md) | W01〜W03の知見合成・最終判定 | W01, W02, W03 |
+
+### ステータス
+
+| Goal | 状態 | 1行要約 |
+|---|---|---|
+| W01 | done | 波乱モデルAUC VAL/HOLD≈0.57（ほぼランダム）・全4四分位セル不通過・doc02の数字は3バイアス+波乱ラベル誤りで完全無効。 |
+| W02 | done | 4フォーメーション（current/F1クロスライン/F2 BOX6/F3逆張り）×ALL・upset Q4 全セル不通過。upset Q4+gap12≥0.06は本番発火機会ほぼゼロ。 |
+| W03 | done | upset Q4×fav_mismatch交差は構造的非重複（tier条件と波乱型は鏡面関係・戦略通過304Rにupset Q4は1R=0.3%）・戦略内再定義でもCell A' HOLD=0%で不通過。 |
+| W04 | done | W01〜W03全不通過。波乱予想フェーズクローズ。現行戦略（tier SS/S/A）は隠れた波乱回避フィルターとして機能しており波乱モデル追加の意義なし。詳細 `docs/analysis/30-upset-synthesis.md`。 |
