@@ -84,3 +84,6 @@
 - **fav_mismatch 単独戦略** = リーク無し初回検証（`docs/analysis/34`）で HOLD 23.1%。1168%/576%（doc13）は3バイアスの産物（6〜25倍過大評価）。live実測が採否の唯一根拠（現在蓄積中）。
 - **他式別オッズ（二連単・ワイド・二連複）を特徴量として追加** = Phase1 AUC+0.022 で通過するが Phase2 不通過（VAL 悪化・n 半減）。市場の5式別は統合されており裁定不可（`docs/analysis/35`）。変種は多重比較ノイズ。
 - **グレード別モデル（全体）** = Phase1 AUC低下・Phase2 VAL 97.3%（閾値 100% 未達）（`docs/analysis/35`）。S级のみは VAL 107%★ だが HOLD 88%・15R。100R live 蓄積後に再評価。
+- **venue × grade 限定 rolling WR** = Phase1 不通過（AUC +0.0001）。venue_wr + player_class_enc で既に代替情報を保有（`docs/analysis/37`）。
+- **ライン連携コヒージョン（partner_top3_rate・leader_win_rate）** = Phase1 不通過（AUC +0.0001）。ペア固有の共走が少なく疎すぎる。line_frac/is_line_leader が既に内包（`docs/analysis/38`）。
+- **朝→夕方 intraday drift（doc36）** = 方法論確立・C0対象 4R/5日で統計的評価不可（≈12ヶ月待ち）。セル c 方向一致率 100%（15脚）は参考値。overnight drift（前日夕→当日朝）は現在収集未実装。
