@@ -13,9 +13,31 @@
 
 ### 次のアクション（優先順）
 1. **live実測の継続観察**: `scripts/live_report_wt.py` で随時確認。100R到達後（約2週間）に初回判断
-2. **money-flow cron 適用**: Terminal から `crontab -e` で登録。≥1,624R 蓄積後（約9ヶ月）に `exp_moneyflow_wt.py --report`
-3. **中間オッズ帯フィルタのlive検証**: 朝オッズデータが数十R蓄積後に `snapshot_morning_odds_wt.py --report` で確認
-4. **新たなバックテスト実験は原則不要**: 公開オッズ内の範囲でエッジが存在しないことをdoc31-34で複数経路から確認。再開はmoney-flow蓄積後のみ
+2. **live成績をグレード別にトラッキング**: `picks_history` で S級/A級 を分けて観察（S级専用モデルの採否判断に使用）
+3. **money-flow cron 適用**: Terminal から `crontab -e` で登録。≥1,624R 蓄積後（約9ヶ月）に `exp_moneyflow_wt.py --report`
+4. **中間オッズ帯フィルタのlive検証**: 朝オッズデータが数十R蓄積後に `snapshot_morning_odds_wt.py --report` で確認
+5. **新たなバックテスト実験は原則不要**: 公開オッズ内の範囲でエッジが存在しないことをdoc31-35で複数経路から確認。再開はmoney-flow蓄積後のみ
+
+---
+
+## ★ 他式別オッズ特徴量 & グレード別モデル実験（2026-06-15）→ **保留**（doc35）
+
+### 他式別オッズ（二連単・ワイド・二連複）を特徴量化
+- AUC: +0.022（全特徴量中1〜3位）
+- ROI: VAL 悪化・選択レース数が半減 → Phase2 不通過
+- 結論: 5式別市場は統合されており裁定不可。市場特徴量を加えるとモデルが市場追随になりガミ≥5倍レースが消える。
+
+### グレード別モデル（S级 × S-model）
+- S级専用モデル: TRAIN 150%★ / VAL 107%★ / HOLD 88%（15R）
+- 全体（S→S-model, A→A-model）: TRAIN 113%★ / VAL 97.3% / HOLD 107%★
+- Phase2 不通過（VAL 97.3%・閾値 100% 未達）。これまでの実験で最高に近い結果。
+- 今後: live成績をグレード別にトラッキングし、100R蓄積後に S级専用モデルの採否を判断
+
+### 副産物: grade_enc バグ修正
+- `feature_wt.py` の grade_map が ks 形式（GP/G1...）のまま wt では全件 fillna=1 だった
+- 修正済み（S級→3 / A級→2 / L級→1）。AUC への影響は +0.0001 で実質軽微。
+
+詳細: `docs/analysis/35-crossmarket-grade-model.md`
 
 ---
 

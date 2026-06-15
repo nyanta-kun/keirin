@@ -125,9 +125,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     med_term = df["term"].median()
     df["period_norm"] = df["term"].fillna(med_term if not pd.isna(med_term) else 100) / 100.0
 
-    # グレードエンコード
-    grade_map = {"GP": 7, "G1": 6, "G2": 5, "G3": 4, "F1": 3, "F2": 2}
-    df["grade_enc"] = df["grade"].map(grade_map).fillna(1).astype(int)
+    # グレードエンコード（wt 実際の値: S級/A級/L級/SA混合）
+    grade_map = {"S級": 3, "SA混合": 3, "A級": 2, "L級": 1}
+    df["grade_enc"] = df["grade"].map(grade_map).fillna(2).astype(int)
 
     # 枠番特徴
     df["is_inner"] = (df["frame_no"] <= 3).astype(int)
