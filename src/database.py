@@ -145,6 +145,42 @@ class _PgCursor:
         return iter(self.fetchall())
 
 
+class _PgRawCursor:
+    """pandas.read_sql_query 向け DBAPI2 互換カーソル（クエリ変換付き）。"""
+
+    def __init__(self, raw_cur) -> None:
+        self._cur = raw_cur
+
+    def execute(self, sql: str, params=None):
+        translated, translated_params = _pg_translate(sql, params or ())
+        if translated is not None:
+            self._cur.execute(translated, translated_params or None)
+        return self
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def close(self):
+        self._cur.close()
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
 class _PgConn:
     """psycopg2 接続を sqlite3.Connection 互換にラップする。"""
 
@@ -187,6 +223,10 @@ class _PgConn:
 
     def close(self) -> None:
         self._conn.close()
+
+    def cursor(self) -> _PgRawCursor:
+        """pandas.read_sql_query など DBAPI2 直アクセス向け。"""
+        return _PgRawCursor(self._conn.cursor())
 
     # sqlite3 互換: row_factory 属性は無視
     @property
