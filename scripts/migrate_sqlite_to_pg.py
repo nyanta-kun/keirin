@@ -20,11 +20,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sqlite3
 import sys
 from pathlib import Path
+
+import psycopg2
+import psycopg2.extras
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -66,6 +68,10 @@ def get_pg_columns(pg_conn, table: str) -> set[str]:
     return {r[0] for r in cur.fetchall()}
 
 
+def count_rows(sqlite_conn: sqlite3.Connection, table: str) -> int:
+    return sqlite_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+
 def migrate_table(
     sqlite_conn: sqlite3.Connection,
     pg_conn,
@@ -73,23 +79,25 @@ def migrate_table(
     conflict_cols: tuple[str, ...],
     dry_run: bool,
 ) -> int:
-    rows = sqlite_conn.execute(f"SELECT * FROM {table}").fetchall()
-    if not rows:
-        print(f"  {table}: 0 行（スキップ）")
+    total = count_rows(sqlite_conn, table)
+    if total == 0:
+        print(f"  {table}: 0 行（スキップ）", flush=True)
         return 0
 
-    sqlite_cols = list(rows[0].keys())
-
     if dry_run:
-        print(f"  {table}: {len(rows)} 行（dry-run・スキップ）")
-        return len(rows)
+        print(f"  {table}: {total:,} 行（dry-run・スキップ）", flush=True)
+        return total
 
-    # PostgreSQL に存在するカラムのみ使用（SQLite 独自カラムを除外）
+    # カラム情報をサンプル1行で取得（全行 fetchall を避ける）
+    sample = sqlite_conn.execute(f"SELECT * FROM {table} LIMIT 1").fetchone()
+    sqlite_cols = list(sample.keys())
+
+    # PostgreSQL に存在するカラムのみ使用
     pg_cols = get_pg_columns(pg_conn, table)
     cols = [c for c in sqlite_cols if c in pg_cols]
     if len(cols) < len(sqlite_cols):
         skipped = set(sqlite_cols) - set(cols)
-        print(f"  {table}: PG に存在しないカラムをスキップ: {skipped}")
+        print(f"  {table}: PG に存在しないカラムをスキップ: {skipped}", flush=True)
 
     conflict_set = set(conflict_cols)
     non_conf = [c for c in cols if c not in conflict_set]
@@ -109,19 +117,32 @@ def migrate_table(
             f"ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
         )
 
-    total = len(rows)
-    cur = pg_conn.cursor()
+    # ストリーミング読み込み + execute_values で1バッチ=1往復
+    cursor = sqlite_conn.execute(f"SELECT {', '.join(sqlite_cols)} FROM {table}")
+    pg_cur = pg_conn.cursor()
     inserted = 0
-    for i in range(0, total, BATCH_SIZE):
-        batch = rows[i : i + BATCH_SIZE]
-        data = [tuple(r[c] for c in cols) for r in batch]
-        cur.executemany(upsert, data)
-        inserted += len(batch)
-        if inserted % 50000 == 0:
-            print(f"    {table}: {inserted}/{total} 行...")
+    # execute_values 用のテンプレート（ON CONFLICT 句のみ）
+    base_insert = (
+        f"INSERT INTO keirin.{table} ({', '.join(cols)}) VALUES %s "
+        + (
+            f"ON CONFLICT ({', '.join(conflict_cols)}) DO UPDATE SET "
+            + ", ".join(f"{c} = EXCLUDED.{c}" for c in non_conf)
+            if non_conf else
+            f"ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
+        )
+    )
+    while True:
+        raw = cursor.fetchmany(BATCH_SIZE)
+        if not raw:
+            break
+        data = [tuple(r[c] for c in cols) for r in raw]
+        psycopg2.extras.execute_values(pg_cur, base_insert, data, page_size=BATCH_SIZE)
+        inserted += len(raw)
+        if inserted % 50000 == 0 or inserted == total:
+            print(f"    {table}: {inserted:,}/{total:,} 行...", flush=True)
 
     pg_conn.commit()
-    print(f"  {table}: {inserted}/{total} 行 → keirin.{table}")
+    print(f"  {table}: {inserted:,}/{total:,} 行 → keirin.{table}", flush=True)
     return inserted
 
 
@@ -129,6 +150,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="SQLite → PostgreSQL 移行")
     parser.add_argument("--dry-run", action="store_true", help="実行せずに行数のみ表示")
     parser.add_argument("--full", action="store_true", help="wt_odds(34M) と wt_weather(1.3M) も移行")
+    parser.add_argument("--skip", nargs="*", default=[], metavar="TABLE", help="スキップするテーブル名")
     args = parser.parse_args()
 
     db_url = os.environ.get("KEIRIN_DB_URL", "")
@@ -140,10 +162,8 @@ def main() -> None:
         print(f"ERROR: SQLite DB が見つかりません: {SQLITE_PATH}")
         sys.exit(1)
 
-    import psycopg2
-    import psycopg2.extras
-
-    tables = TABLES_ESSENTIAL + (TABLES_LARGE if args.full else [])
+    tables = [t for t in TABLES_ESSENTIAL + (TABLES_LARGE if args.full else [])
+              if t[0] not in args.skip]
 
     print(f"SQLite: {SQLITE_PATH}")
     print(f"PostgreSQL: {db_url.split('@')[1] if '@' in db_url else db_url}")
