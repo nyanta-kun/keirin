@@ -5,6 +5,7 @@
 set -e
 set -o pipefail   # L-5: | tee が python の終了コードをマスクしないように
 export PATH="/usr/sbin:/sbin:$PATH"
+# KEIRIN_DB_URL は crontab または実行前に export して設定すること
 cd "$(dirname "$0")/.."
 DATE=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"

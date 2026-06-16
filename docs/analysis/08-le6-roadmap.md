@@ -87,3 +87,8 @@
 - **venue × grade 限定 rolling WR** = Phase1 不通過（AUC +0.0001）。venue_wr + player_class_enc で既に代替情報を保有（`docs/analysis/37`）。
 - **ライン連携コヒージョン（partner_top3_rate・leader_win_rate）** = Phase1 不通過（AUC +0.0001）。ペア固有の共走が少なく疎すぎる。line_frac/is_line_leader が既に内包（`docs/analysis/38`）。
 - **朝→夕方 intraday drift（doc36）** = 方法論確立・C0対象 4R/5日で統計的評価不可（≈12ヶ月待ち）。セル c 方向一致率 100%（15脚）は参考値。overnight drift（前日夕→当日朝）は現在収集未実装。
+- **JKA 師匠情報（doc40）** = スクレイパー+ハーネス実装済み・未実行。事前評価は弱（同期≠同ライン実績・Coverage ~40-60%・doc38 ライン連携と類似の疎シグナル）。実行手順: `scrape_mentors_wt.py` → `exp_mentor_feature_wt.py`。Phase1 不通過なら確定クローズ。
+- **コンピューター指数** = market redundancy リスク高（prediction_mark と同質）・スキップ推奨。Web予想ロジック監査（doc17/doc20）と同型の壁。
+- **EXデータ未使用3列（ex_left_behind_pct/ex_split_line_pct/ex_snatch_pct）** = Phase1 不通過（AUC +0.0001〜+0.0002）。ex_spurt/ex_thrust で既に代替情報を保有（`docs/analysis/41`・G41）。
+- **WINTICKET 条件別成績（天候/バンク/時間帯/位置別）** = Phase1 通過★（AUC +0.003台）だが Phase2 不通過（全期間 ROI<100%）。市場がバンク周長・時間帯の選手適性を既に織込済み（`docs/analysis/44`・G44）。
+- **keirin.jp 身体測定（体重・背筋力・肺活量・太もも・胸囲）** = Phase1 不通過（AUC +0.0000〜-0.0003）。全2,719選手スクレイプ済み・Coverage 77〜89%。固定身体値は rolling 成績統計に吸収されており独立情報量ゼロ（`docs/analysis/43`・G43）。

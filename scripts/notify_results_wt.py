@@ -36,10 +36,11 @@ def _parse_picks_full(target_date: str) -> dict:
             elif "【Aランク】" in line: rank = "A"
             elif "【Bランク】" in line: rank = None  # B=各自判断＝公式成績には含めない
             elif "【ワイド1点】" in line: rank = "WIDE"  # 独立プロダクト・rank=WIDEで別集計
+            elif "【7+車】" in line: rank = "7PLUS"  # 7車以上 gami≥5倍+gap12≥0.07・doc48
             elif rank:
                 m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
                 if m:
-                    slot = "wide" if rank == "WIDE" else "main"
+                    slot = "wide" if rank == "WIDE" else "7plus" if rank == "7PLUS" else "main"
                     picks[(m.group(2), int(m.group(3)), slot)] = (rank, m.group(1), m.group(4))
     return picks
 
@@ -48,7 +49,7 @@ def _parse_combo(combo_str: str):
     body = combo_str.split(":", 1)[1].strip() if ":" in combo_str else combo_str
     body = body.replace("→", "-").replace("⇄", "-")   # ⇄=SS 1-2着BOX(両順)
     parts = body.split("-")
-    thirds = [int(x) for x in parts[2].split(",")][:3] if len(parts) >= 3 else []  # ワイド=2車で空
+    thirds = [int(x) for x in parts[2].split(",")] if len(parts) >= 3 else []  # ワイド=2車で空
     return int(parts[0]), int(parts[1]), thirds
 
 
@@ -117,9 +118,10 @@ def main():
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code})
     pm = _load_payouts_wt(keys)
 
-    results, results_wide, history = [], [], []
+    results, results_wide, results_7plus, history = [], [], [], []
     tb = tr = th = 0          # SS/S/A 合計
     wb = wr = wh = 0          # ワイド1点 合計（独立プロダクト・別集計）
+    p7b = p7r = p7h = 0       # 7+車 合計（独立プロダクト・別集計）
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -188,14 +190,24 @@ def main():
                 if hit:
                     wr += pay; wh += 1
                 results_wide.append(row_str)
+            elif rank == "7PLUS":
+                p7b += bet
+                if hit:
+                    p7r += pay; p7h += 1
+                results_7plus.append(row_str)
             else:
                 tb += bet
                 if hit:
                     tr += pay; th += 1
                 results.append(row_str)
-            # race_key は UNIQUE。同一レースで SS/S/A(main) と WIDE が並立しうるため
-            # WIDE は "#W" 接尾でキーを分離（main 行の上書き＝既存成績破壊を防ぐ）。
-            store_key = f"{rk}#W" if rank == "WIDE" else rk
+            # race_key は UNIQUE。同一レースで SS/S/A(main)/WIDE/7PLUS が並立しうるため
+            # WIDE は "#W"・7PLUS は "#7" 接尾でキーを分離（main 行の上書き防止）。
+            if rank == "WIDE":
+                store_key = f"{rk}#W"
+            elif rank == "7PLUS":
+                store_key = f"{rk}#7"
+            else:
+                store_key = rk
             history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, bet))
 
         if history:
@@ -205,7 +217,7 @@ def main():
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route) "
                 "VALUES (?,?,?,?,?,?,?,?,'wt')", history)
 
-    if not results and not results_wide:
+    if not results and not results_wide and not results_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         return
 
@@ -230,12 +242,21 @@ def main():
                        f"投資 {wb:,}円 → 回収 {wr:,}円　ROI {wroi:.1f}%　損益 {wr-wb:+,}円")
         msg += f"{wide_header}\n```\n" + "\n".join(results_wide) + "\n```"
 
+    # 7+車（独立プロダクト・別集計）
+    if results_7plus:
+        p7roi = p7r / p7b * 100 if p7b else 0
+        p7_header = (f"\n🏎️ **7+車(gami≥5倍+gap12≥0.07)**　確定 {len(results_7plus)}R　"
+                     f"的中 {p7h}回 ({p7h/len(results_7plus)*100:.1f}%)\n"
+                     f"投資 {p7b:,}円 → 回収 {p7r:,}円　ROI {p7roi:.1f}%　損益 {p7r-p7b:+,}円")
+        msg += f"{p7_header}\n```\n" + "\n".join(results_7plus) + "\n```"
+
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"
     msg += stats
     emit(msg[:1900])
     print(f"[notify_results_wt] {target_date} SS/S/A {len(results)}R 的中{th} / "
-          f"ワイド {len(results_wide)}R 的中{wh} / 欠車無効{skipped_dns}件")
+          f"ワイド {len(results_wide)}R 的中{wh} / 7+車 {len(results_7plus)}R 的中{p7h} / "
+          f"欠車無効{skipped_dns}件")
 
 
 if __name__ == "__main__":

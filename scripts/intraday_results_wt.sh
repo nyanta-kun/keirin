@@ -6,6 +6,7 @@
 set -e
 set -o pipefail
 export PATH="/usr/sbin:/sbin:$PATH"
+# KEIRIN_DB_URL は crontab または実行前に export して設定すること
 cd "$(dirname "$0")/.."
 TODAY=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"

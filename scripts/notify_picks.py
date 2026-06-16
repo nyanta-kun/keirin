@@ -33,8 +33,8 @@ def _parse_picks(text: str) -> dict[str, list[dict]]:
         if "【Aランク】" in line:
             current_rank = "A"
             continue
-        if "【Bランク】" in line:
-            current_rank = None  # B=各自判断＝ツイート(推奨)には含めない
+        if "【Bランク】" in line or "【ワイド1点】" in line or "【7+車】" in line:
+            current_rank = None
             continue
         if current_rank is None:
             continue
@@ -54,6 +54,35 @@ def _parse_picks(text: str) -> dict[str, list[dict]]:
                 "combo":      m.group(5),
             })
 
+    return result
+
+
+def _parse_7plus(text: str) -> list[dict]:
+    """wave-picks テキストから 7+車 エントリを抽出する。"""
+    result = []
+    in_7plus = False
+    for line in text.splitlines():
+        if "【7+車】" in line:
+            in_7plus = True
+            continue
+        if in_7plus and line.startswith("【"):
+            break
+        if not in_7plus:
+            continue
+        m = re.match(
+            r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[(\d+)車\]\s+3連複:\s+(\S+)\s+\((\d+)点/(\d+)円\)",
+            line
+        )
+        if m:
+            result.append({
+                "start_time": m.group(1),
+                "venue":      m.group(2),
+                "race_no":    m.group(3),
+                "n_riders":   m.group(4),
+                "combo":      m.group(5),
+                "n_points":   m.group(6),
+                "stake":      m.group(7),
+            })
     return result
 
 
@@ -241,6 +270,11 @@ def main():
     a_n  = len(picks_by_rank["A"])
     total = ss_n + s_n + a_n
 
+    plus7_picks = _parse_7plus(text)
+    plus7_n = len(plus7_picks)
+    m_p7cost = re.search(r"7\+車:\s*\d+件\s*=\s*([\d,]+)円", text)
+    plus7_cost = m_p7cost.group(1) if m_p7cost else f"{sum(int(p['stake']) for p in plus7_picks):,}"
+
     m_cost = re.search(r"合計投資額:\s*([\d,]+)円", text)
     total_cost = m_cost.group(1) if m_cost else f"{total * 300:,}"
 
@@ -257,15 +291,15 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
+            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}/A:{a_n}/7+:{plus7_n}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
 
-    if total == 0:
+    if total == 0 and plus7_n == 0:
         scope = "夜レースの推奨" if night else "本日の推奨(SS/S/A)"
         send(f"🏁 **{title} {target_date}**\n{scope}はありません（6車立て以下 gap12≥0.06 なし）\n全レースの指数は添付PDFをご覧ください。")
-        _send_index_pdf()   # 推奨0件でも全レース指数PDFは送る（夜は更新版）
+        _send_index_pdf()
         if not night:
             tweet_none = f"🎯 穴車AI予想 {md}\n\n本日の対象レースはありません\n\n#競輪 #穴車AI #AI予想"
             send(f"**--- Xポスト用（コピペ）---**\n```\n{tweet_none}\n```")
@@ -286,16 +320,34 @@ def main():
         if s:
             sections.append(s)
 
-    detail = "\n\n".join(sections)
-    msg = (
-        f"🏁 **{title} {target_date}**\n"
-        f"SS:{ss_n}件 / S:{s_n}件 / A:{a_n}件　計{total}件\n"
-        f"投資: {total_cost}円  (6車立て以下)\n"
-        f"```\n{detail}\n```"
-    )
-    if len(msg) > 1900:
-        msg = msg[:1900] + "\n…(省略)```"
-    send(msg)
+    if total > 0:
+        detail_str = "\n\n".join(sections)
+        msg = (
+            f"🏁 **{title} {target_date}**\n"
+            f"SS:{ss_n}件 / S:{s_n}件 / A:{a_n}件　計{total}件\n"
+            f"投資: {total_cost}円  (6車立て以下)\n"
+            f"```\n{detail_str}\n```"
+        )
+        if len(msg) > 1900:
+            msg = msg[:1900] + "\n…(省略)```"
+        send(msg)
+    else:
+        send(f"🏁 **{title} {target_date}**\n本日の6車立て以下推奨(SS/S/A)はありません")
+
+    # 7+車（doc48・前向き検証）の通知
+    if plus7_picks:
+        p7_lines = [f"🏎️ **7+車予想 {md}**  {plus7_n}件　投資: {plus7_cost}円  [doc48・VAL130%/HOLD138%]"]
+        p7_lines.append("```")
+        for i, p in enumerate(plus7_picks[:20]):   # 長すぎる場合は20件まで
+            p7_lines.append(f"  {p['start_time']}  {p['venue']:<6} {int(p['race_no']):>2}R [{p['n_riders']}車]"
+                            f"  {p['combo']}  ({p['n_points']}点/{p['stake']}円)")
+        if plus7_n > 20:
+            p7_lines.append(f"  ... 他{plus7_n - 20}件")
+        p7_lines.append("```")
+        p7_msg = "\n".join(p7_lines)
+        if len(p7_msg) > 1900:
+            p7_msg = p7_msg[:1900] + "\n…(省略)```"
+        send(p7_msg)
 
     if not night:   # 夜の部はXポスト省略（朝に投稿済・日中の重複通知を避ける）
         tweets = _build_tweet_texts(target_date, picks_by_rank)

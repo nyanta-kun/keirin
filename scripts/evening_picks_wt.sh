@@ -8,6 +8,7 @@
 set -e
 set -o pipefail
 export PATH="/usr/sbin:/sbin:$PATH"
+# KEIRIN_DB_URL は crontab または実行前に export して設定すること
 cd "$(dirname "$0")/.."
 TODAY=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"
@@ -32,6 +33,7 @@ echo "[$(date '+%H:%M:%S')] 夜レース(19時〜)の推奨を生成..."
 .venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" \
   --gami-skip-odds 3.0 --b-rank-odds 5.0 --ss-trifecta-box \
   --wide --wide-min-odds 2.5 --start-from-hour 19 \
+  --min-gap12 0.07 --include-7plus \
   --output "data/picks/wave_picks_wt_${TODAY}_night.txt" \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜の部: 対象レース無し or 失敗（継続）"

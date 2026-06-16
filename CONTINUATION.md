@@ -1,21 +1,106 @@
-# セッション引継ぎメモ（最終更新 2026-06-15 夜）
+# セッション引継ぎメモ（最終更新 2026-06-16 深夜3）
 
 コンテキストリセット後にここから再開すること。
 
 ---
 
-## ★現在の状態サマリ（2026-06-15 夜 時点）
+## ★現在の状態サマリ（2026-06-16 夜 時点）
 
 ### 実運用
-- **live picks**: SS+S+A 10R / ROI 64.8% / CI[14%,126%]（判断最低100R必要・約2週間で達成見込み）
+- **live picks (≤6車)**: SS+S+A 15R / ROI 62.5% / CI[24%,108%]（判断最低100R必要・約1週間で達成見込み）
+- **live picks (7+車)**: 2026-06-16〜 開始（`--include-7plus` 実装済み・23件/日・初回判断目安 2026-06-23頃）
 - **fav_mismatch タグ**: 1R のみ記録（2026-06-11〜）。バックテスト根拠否定済み（下記参照）
 - **money-flow snapshot cron**: ユーザーの Terminal 適用待ち（`data/cron_proposal_moneyflow_20260613.txt`）
 
+### G41-G44 + 手法実験フェーズ（2026-06-16 完了）
+
+| Goal | 内容 | 結果 |
+|---|---|---|
+| **G41** EXデータ未使用3列 | `ex_left_behind_pct` / `ex_split_line_pct` / `ex_snatch_pct` | **Phase1 不通過** AUC +0.0001〜+0.0002（閾値+0.001未達）|
+| **G42** WINTICKET EXデータ拡張調査 | JSON全キー調査・25フィールド新発見 | 評価保留→G44で実装 |
+| **G43** keirin.jp 身体測定 | 体重・背筋力・肺活量・太もも・胸囲 | **Phase1 不通過**（AUC ±0.0000・全2,719選手スクレイプ済み）|
+| **G44** WINTICKET 条件別成績 | 天候/バンク/時間帯/位置別成績 | **Phase1 通過★・Phase2 不通過**（AUC +0.003台・ROI<100%・市場効率の壁）|
+| **LambdaRank** | LGBMRanker（binary/ordinal）vs 二値分類 | **Phase1 不通過** AUC -0.014〜-0.023（大幅悪化）→ クローズ |
+| **条件別ROIスキャン** | n_entries×grade×gap12×bank_length 体系スキャン | **★15セル通過**（doc45）→ gap12>0.10・S級が最有力 |
+
+#### 条件別ROIスキャン 主要結果（2026-06-16・doc45）
+- **全体ベースライン**: TRAIN 211.1% / VAL 132.9% / HOLD 174.4%（363/83/32R）
+  - doc18（70-90%）との差: 週次再学習リーク③を除去したTRAIN-onlyモデルの汎化性能
+- **最有力条件 gap12>0.10**: VAL 139.9%(52R) / HOLD 220.7%(20R) ← サンプル最大・最安定
+- **S級**: VAL 201.7%(35R) / HOLD 151.0%(14R)
+- **400m×S級**: VAL 117.4%(24R) / HOLD 193.6%(11R)
+- **n6×gap12>0.07**: VAL 122.7%(56R) / HOLD 186.0%(21R) ← 最大サンプル
+- 注意: DNS生存バイアス残存（欠車除外→結果やや楽観的・ただし競輪の欠車は払い戻しのため影響限定的）
+- ハーネス: `scripts/exp_conditional_split_wt.py`
+
+#### G42 発見フィールド（要評価）
+- `exCompete`（競りの勝率）: Coverage 7.8%（疎い）
+- `weatherSunny/Cloudy/Rainy`（天候別成績）: ~100% Coverage
+- `trackDistance333/400/500`（バンク周長別成績）: ~98% Coverage
+- `hourTypeNormal/Morning/Night`（時間帯別成績）: 96-100% Coverage
+- `linePositionFirst/Second/Third`（位置別成績）: 32-81% Coverage
+→ 全評価には wt_entries の TRAIN 期間 (~2023-07〜) フルリフェッチが必要（3h+）
+
+### doc51: 三連複 ライン軸2 + 指数下位除外（2026-06-16） → **全不採用**
+
+| 戦略 | VAL | HOLD | 判定 |
+|---|---|---|---|
+| S0 現行3点 | 73.3% | 82.9% | 基準 |
+| L1: 同一ライン指数2位を軸2 + 下位1除外 | 70.7% | 91.2% | **不採用** |
+| L2: 同一ライン指数2位を軸2 + 下位2除外 | 86.3% | 80.7% | **不採用** |
+| R1: AI軸2固定 + 下位1除外 | 62.3% | 77.1% | **不採用** |
+| R2: AI軸2固定 + 下位2除外 | 51.8% | 92.8% | **不採用** |
+
+**核心**: 軸2変更は64%のレースで発動するが、その際 S0 ROI 92.4% → L1 83.5% と悪化。
+AI確率2位はモデルが全特徴量を統合した最良の2番手予測であり、ライン内指数2位より優秀。
+指数下位除外も doc50 の P2 系と同型で VAL 51-62%（現行 73% を大幅に下回る）。
+→ **現行 S0（AI確率順3点固定）を維持。変更に意義なし。**
+- ハーネス: `scripts/exp_line_axis2_wt.py` / 詳細: `docs/analysis/51-line-axis2-trim.md`
+- データ資産: `wt_entries.line_group`（NULL率0%・全期間カバー）が存在確認済み
+
+### doc49: 三連単フォーメーション条件別ROI（2026-06-16）
+
+| 戦略 | TRAIN | VAL | HOLD | 判定 |
+|---|---|---|---|---|
+| S0 三連複 現行 | 83.6% | 67.7% | 87.5% | 不通過 |
+| **T7: 三連単P1→P2→{P3,P4} gap12≥0.10&gap23≥0.05 2点** | 51.8% | **112.6%★** | **209.2%★** | **Phase2 ボーダー** |
+| T4: 三連単P1→P2→{P3,P4} gap12≥0.10 2点 | 59.6% | 70.9% | 147.6%★ | 不通過(VAL) |
+| その他 T1-T6・T8 | — | <100% | — | 不通過 |
+
+**T7 の注意**: VAL n=19（閾値 30R 未達）/ HOLD n=12 / 約0.3R/日（稀レース）
+- **着順精度**: gap12≥0.15帯は pred2 の2着率が 16.1%（固定不可）/ gap12 0.10-0.12帯が p2_2nd=33.3%でバランス最良
+- **gap23 鍵**: gap23 高位(≥0.082)で P1=1着&P2=2着 = 20.0%（最高）
+- **特別推奨案**: 条件=≤6車・ガミ≥5倍・gap12≥0.10・gap23≥0.05 → pred1→pred2→{pred3,pred4} 2点
+- 詳細: `docs/analysis/49-trifecta-formation.md` / ハーネス: `scripts/exp_trifecta_formation_wt.py`
+
+### doc50: 三連複 買い目削減 O10戦略（2026-06-16）
+
+**逆説的発見**: pred5（最低確率の3着目）が ROI 111.4%★ で最高・pred3 は 64.7%（市場の過小評価）
+
+| 戦略 | VAL | HOLD | 判定 |
+|---|---|---|---|
+| S0 現行3点 | 73.3%(76R) | 82.9%(30R) | 不通過 |
+| P2 pred3+pred4削減 | **36.7%** | 113.0%★ | **不通過(VAL悪化)** |
+| **O10 各目≥10倍のみ** | **112.2%★(58R)** | **100.0%★(19R)** | **Phase2 通過** |
+| O15 各目≥15倍 | 200.2%★(34R) | **0.0%(11R)** | 不通過(HOLD崩壊) |
+
+**O10実装**: `wave-picks-wt --min-combo-odds 10.0`（個別コンボ単位オッズ足切り・live検証用）
+- 76R→58R（-24%）・3.0点→1.4点（-53%）・コスト約50%削減
+- **HOLD n=19 は小サンプル → live 50R 蓄積後に初回判断**
+- ハーネス: `scripts/exp_trio_trim_wt.py` / 詳細: `docs/analysis/50-trio-trim.md`
+
 ### 次のアクション（優先順）
-1. **live実測の継続観察**: `scripts/live_report_wt.py` で随時確認。100R到達後（約2週間）に初回判断
-2. **live成績をグレード別にトラッキング**: `picks_history` で S級/A級 を分けて観察（S级専用モデルの採否判断に使用）
-3. **money-flow cron 適用**: Terminal から `crontab -e` で登録。≥1,624R 蓄積後（約9ヶ月）に `exp_moneyflow_wt.py --report`
-4. **中間オッズ帯フィルタのlive検証**: 朝オッズデータが数十R蓄積後に `snapshot_morning_odds_wt.py --report` で確認
+1. **live実測の継続観察**: `scripts/live_report_wt.py` で随時確認。
+   - **≤6車**: 100R到達後（約1週間）に初回判断
+   - **7+車**: 初回判断目安 2026-06-23頃（12.9R/日 × 7日 ≈ 90R）。`picks_history` で `rank='7PLUS'` を確認
+2. **★★ 7+車 live検証（2026-06-16 実装済み）**: `--include-7plus` フラグ（wave-picks-wt/daily_picks_wt.sh/evening_picks_wt.sh）、notify_picks.py/notify_results_wt.py 対応済み。詳細: `docs/analysis/48-7plus-conditional.md`
+3. **gap12≥0.07 フィルタ実装済み（2026-06-16）**: `wave-picks-wt` に `--min-gap12 0.07`（デフォルト）。doc46根拠: VAL 9/12ヶ月黒字・HOLD 196%
+4. **live成績をグレード別にトラッキング**: `picks_history` で S級/A級 を分けて観察
+5. **★T7 三連単 特別推奨 live 追跡**: gap12≥0.10 & gap23≥0.05 の 2点フォーメーション（約0.3R/日）。50-60R蓄積後（約5〜6ヶ月）に初回判断。実装済みスクリプト: `exp_trifecta_formation_wt.py` 参照
+6. **★O10 個別コンボ足切り live 検証**: `--min-combo-odds 10.0` を追加して手動テスト可能。50R蓄積後に初回判断（約3〜4週間）。`picks_history` で `combo_odds_trim` タグで別集計予定
+7. **money-flow cron 適用**: Terminal から `crontab -e` で登録。≥1,624R 蓄積後（約9ヶ月）に `exp_moneyflow_wt.py --report`
+8. **中間オッズ帯フィルタのlive検証**: 朝オッズデータが数十R蓄積後に `snapshot_morning_odds_wt.py --report` で確認
+9. **JKA師匠情報実験（低優先・任意）**: `scrape_mentors_wt.py`（約22分）→ `exp_mentor_feature_wt.py`。Phase1 不通過予測。doc40 に結果記入
 
 ---
 
@@ -35,19 +120,31 @@
 
 ---
 
-## ★ 残る候補（要調査・着手未済）
+## ★ 残る候補（WEBスクレイピング）
 
-### WEBスクレイピング（優先度順）
-
-| 候補 | 内容 | 期待度 | 調査状況 |
+| 候補 | 内容 | 期待度 | 状況 |
 |---|---|---|---|
-| **試走タイム** | 選手の当日練習ラップタイム | 最高 | 調査済: データ公開限定的・難易度中〜高 |
-| **JKA 師匠/訓練所同期情報** | jka.or.jp の選手詳細・師匠情報 | 中 | 未調査 |
-| **コンピューター指数** | netkeirin・競輪ラボ等の独自AI指数 | 中 | 未調査（market redundancy リスクあり） |
+| **試走タイム** | 選手の当日練習ラップタイム | 最高 | 調査済: 公開限定・難易度中〜高・推奨度低 |
+| **JKA 師匠情報** | keirin.jp 選手詳細の師匠リンク | 弱 | **実装済み**（スクレイパー+ハーネス待機中） |
+| **コンピューター指数** | netkeirin 等の独自AI指数 | 低 | 調査済: market redundancy リスク高→スキップ推奨 |
 
-### 試走タイム調査結果
+### JKA 師匠情報（doc40・2026-06-15実装）
+- **URL**: `https://keirin.jp/pc/racerprofile?snum={player_id:06d}`（静的HTML・robots.txt ALLOW）
+- **特徴量**: `mentor_in_race`（師匠が同一レースに出走）/ `is_mentor_of_someone`
+- **事前評価**: 弱（同期≠同ライン実績・Coverage ~40-60%・doc38 ライン連携と類似の疎シグナル）
+- **手順**:
+  1. `python3 scripts/scrape_mentors_wt.py` → `data/player_mentors.csv`（約22分）
+  2. `python3 scripts/exp_mentor_feature_wt.py` → Phase1 AUC 確認
+- 詳細: `docs/analysis/40-mentor-feature.md`
+
+### コンピューター指数（スキップ推奨）
+- netkeirin 等の独自AI指数は静的HTML取得可能だが **market redundancy** が高い
+- prediction_mark（既存特徴量）と同質の情報→モデルに追加しても AUC 改善なし（doc17 Web予想ロジック監査と同型）
+- スクレイプコスト対比で期待値が低いため保留
+
+### 試走タイム（低優先度）
 - **WINTICKET**: 出走表に試走タイムなし（確認済）
-- **netkeirin**: データ保有の可能性あるが公開形式不明・動的ロード
+- **netkeirin**: データ保有の可能性あるが動的ロード
 - **各競輪場公式サイト**: 掲載なし
 - **難易度**: 中〜高 / **推奨度**: 低（公開が限定的）
 
