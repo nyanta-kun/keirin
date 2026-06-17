@@ -73,23 +73,13 @@ echo "[$(date '+%H:%M:%S')] 朝オッズをスナップショット退避..."
   2>&1 | tee -a "$LOG_DIR/odds_snapshot_${TODAY}.log" || \
   echo "[$(date '+%H:%M:%S')] 朝オッズ退避に失敗（処理は継続）"
 
-echo "[$(date '+%H:%M:%S')] 予想生成（winticket・<3倍見送り/3〜5倍未満はBランク）..."
-# --gami-skip-odds 3.0: 3点中1点でも朝オッズ<3倍ならレース見送り（明確なガミ）。
-# --b-rank-odds 5.0:   最安目が3〜5倍未満ならBランク（鉄板寄り・購入は各自判断）として別枠表示。
-# --ss-trifecta-box:   SS層の3連単を pred1,pred2 1-2着BOX(6点)に拡張（前向き検証・docs/analysis/10）。
-#                      SS層のみ変更（S/A/Bは不変）。最終オッズ上限値＋高配当帯ドリフト要注意。
-# --wide --wide-min-odds 2.5: ワイド1点(指数1-2位W12)を独立プロダクトとして追加（前向き検証・docs/analysis/12）。
-#                      オッズ≥2.5倍のみ（value型・的中50-53%/ROI220-271%上限値）。SS/S/Aとは別集計。
-# --start-to-hour 19:  朝は〜19時発走のレースのみ推奨（昼〜夕は朝にライン/オッズ確定）。
-#                      夜レース(19時〜)はwtラインが朝未公開→精度低下するため、午後に
-#                      evening_picks_wt.sh が全件再生成して上書き（2段階生成・docs B検証）。
-#                      ※全レース指数(allindex/PDF)は時刻フィルタ対象外＝朝から全89レース掲載。
-# 検証: scripts/analyze_gami_threshold_wt.py（<3倍点含むレースは集団で収支ゼロ）。
-# wave-picks-wt は対象レース0件で exit 1（＝静かな日。異常ではない）になり得るため継続。
+echo "[$(date '+%H:%M:%S')] 予想生成（winticket・7+車専用 gami≥5倍+gap12≥0.07）..."
+# 7+車専用モード: gami≥5.0倍(三連複最安目) + gap12≥0.07 のレースのみ推奨
+# Sランク: gap12≥0.10(HOLD~143%) / Aランク: gap12[0.07,0.10)(HOLD~138%)
+# --start-to-hour 19:  朝は〜19時発走のレースのみ推奨（夜レースはeveningで再生成）。
+# wave-picks-wt は対象レース0件でも継続（静かな日は正常終了）。
 .venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" \
-  --gami-skip-odds 3.0 --b-rank-odds 5.0 --ss-trifecta-box \
-  --wide --wide-min-odds 2.5 --start-to-hour 19 \
-  --min-gap12 0.07 --include-7plus \
+  --min-gap12 0.07 --include-7plus --start-to-hour 19 \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 予想生成: 対象レース無し or 失敗（継続）"
 

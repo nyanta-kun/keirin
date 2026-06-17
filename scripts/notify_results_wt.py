@@ -1,8 +1,9 @@
-"""winticket 成績通知＋picks_history保存
+"""winticket 成績通知＋picks_history保存（7+車 S/A ランク専用）
 
 wave_picks_wt_{date}.txt の公開買い目を、winticket の確定結果(wt_entries.finish_order)
-と wt_odds(三連複/三連単) で採点し、Discord通知＋picks_history に保存する。
+と wt_odds(三連複) で採点し、Discord通知＋picks_history に保存する。
 欠車(finish_order=0/NULL)は着外として除外。公開した買い目のみ採点（再導出しない）。
+7+車 Sランク(#7S) / Aランク(#7A) 別に集計。
 """
 import sys
 import re
@@ -31,16 +32,18 @@ def _parse_picks_full(target_date: str) -> dict:
             continue
         rank = None
         for line in p.read_text(encoding="utf-8").splitlines():
-            if "【SSランク】" in line: rank = "SS"
-            elif "【Sランク】" in line: rank = "S"
-            elif "【Aランク】" in line: rank = "A"
-            elif "【Bランク】" in line: rank = None  # B=各自判断＝公式成績には含めない
-            elif "【ワイド1点】" in line: rank = "WIDE"  # 独立プロダクト・rank=WIDEで別集計
-            elif "【7+車】" in line: rank = "7PLUS"  # 7車以上 gami≥5倍+gap12≥0.07・doc48
+            if "【7+車 Sランク】" in line: rank = "7PLUS_S"
+            elif "【7+車 Aランク】" in line: rank = "7PLUS_A"
+            elif "【7+車】" in line: rank = "7PLUS_S"  # 旧フォーマット後方互換
+            elif "【SSランク】" in line: rank = None   # 旧SS/S/A/B/WIDEは採点対象外
+            elif "【Sランク】" in line: rank = None
+            elif "【Aランク】" in line: rank = None
+            elif "【Bランク】" in line: rank = None
+            elif "【ワイド1点】" in line: rank = None
             elif rank:
                 m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
                 if m:
-                    slot = "wide" if rank == "WIDE" else "7plus" if rank == "7PLUS" else "main"
+                    slot = "7plus_s" if rank == "7PLUS_S" else "7plus_a"
                     picks[(m.group(2), int(m.group(3)), slot)] = (rank, m.group(1), m.group(4))
     return picks
 
@@ -82,7 +85,16 @@ def _query_stats(like):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
-            "FROM picks_history WHERE route='wt' AND rank!='WIDE' AND race_date LIKE ?", (like,)).fetchone()
+            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_S','7PLUS_A') AND race_date LIKE ?", (like,)).fetchone()
+    return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
+
+
+def _query_stats_rank(like, rank):
+    """ランク別の統計を取得。"""
+    with get_connection() as conn:
+        r = conn.execute(
+            "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
+            "FROM picks_history WHERE route='wt' AND rank=? AND race_date LIKE ?", (rank, like)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
@@ -97,13 +109,13 @@ def main():
 
     picks = _parse_picks_full(target_date)
     if not picks:
-        # ファイル不在(真のエラー) と 推奨(SS/S/A)0件(=Bランクのみ/静かな日・正常) を区別する
+        # ファイル不在(真のエラー) と 7+車推奨0件(静かな日・正常) を区別する
         picks_file = Path(__file__).parent.parent / "data" / "picks" / f"wave_picks_wt_{target_date}.txt"
         if not picks_file.exists():
             emit(f"⚠️ 競輪AI[wt] [{target_date}] 予想ファイルが見つかりません")
         else:
-            emit(f"📊 競輪AI[wt] [{target_date}] 推奨買い目(SS/S/A)なし＝採点対象なし"
-                 f"（Bランク=各自判断のみ、または対象レースなしの日）")
+            emit(f"📊 競輪AI[wt] [{target_date}] 7+車推奨なし＝採点対象なし"
+                 f"（gami≥5.0倍+gap12≥0.07 の該当レースなし）")
         return
 
     with get_connection() as conn:
@@ -118,10 +130,9 @@ def main():
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code})
     pm = _load_payouts_wt(keys)
 
-    results, results_wide, results_7plus, history = [], [], [], []
-    tb = tr = th = 0          # SS/S/A 合計
-    wb = wr = wh = 0          # ワイド1点 合計（独立プロダクト・別集計）
-    p7b = p7r = p7h = 0       # 7+車 合計（独立プロダクト・別集計）
+    results_7plus_s, results_7plus_a, history = [], [], []
+    p7sb = p7sr = p7sh = 0    # 7+車 Sランク 合計
+    p7ab = p7ar = p7ah = 0    # 7+車 Aランク 合計
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -145,34 +156,13 @@ def main():
             if skip_race:
                 skipped_dns += 1
                 continue
-            is_box = "BOX" in combo_str          # SS 1-2着BOX(pred1,pred2 両順・6点)
             hit, pay = False, 0
-            if rank == "SS" and is_box:
-                n_combos = 2 * len(thirds)
-                pred = f"{p1}⇄{p2}→" + ",".join(map(str, thirds))
-                for t in thirds:
-                    for a, b in ((p1, p2), (p2, p1)):
-                        if order[:3] == [a, b, t]:
-                            pay = pm.get(rk, {}).get(("trifecta", (a, b, t)), 0); hit = True; break
-                    if hit:
-                        break
-            elif rank == "SS":
-                n_combos = len(thirds)
-                pred = f"{p1}→{p2}→" + ",".join(map(str, thirds))
-                for t in thirds:
-                    if order[:3] == [p1, p2, t]:
-                        pay = pm.get(rk, {}).get(("trifecta", (p1, p2, t)), 0); hit = True; break
-            elif rank == "WIDE":
-                n_combos = 1
-                pred = f"{p1}-{p2}"
-                if frozenset((p1, p2)).issubset(top3):
-                    pay = pm.get(rk, {}).get(("quinellaPlace", frozenset((p1, p2))), 0); hit = True
-            else:
-                n_combos = len(thirds)
-                pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
-                for t in thirds:
-                    if frozenset((p1, p2, t)) == top3:
-                        pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0); hit = True; break
+            # 7+車は常に三連複（全相手流し）
+            n_combos = len(thirds)
+            pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
+            for t in thirds:
+                if frozenset((p1, p2, t)) == top3:
+                    pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0); hit = True; break
             bet = n_combos * 100
             actual = "-".join(map(str, order[:3]))
             stt = start_map.get(rk)
@@ -184,30 +174,23 @@ def main():
                 except (ValueError, TypeError):
                     pass
             mark = f"◎ ¥{pay:,}" if hit else "×"
-            row_str = f"[{rank}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
-            if rank == "WIDE":
-                wb += bet
+            rank_label = "7S" if rank == "7PLUS_S" else "7A"
+            row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
+            if rank == "7PLUS_S":
+                p7sb += bet
                 if hit:
-                    wr += pay; wh += 1
-                results_wide.append(row_str)
-            elif rank == "7PLUS":
-                p7b += bet
+                    p7sr += pay; p7sh += 1
+                results_7plus_s.append(row_str)
+            else:  # 7PLUS_A および旧 7PLUS
+                p7ab += bet
                 if hit:
-                    p7r += pay; p7h += 1
-                results_7plus.append(row_str)
+                    p7ar += pay; p7ah += 1
+                results_7plus_a.append(row_str)
+            # race_key suffix: 7PLUS_S → #7S / 7PLUS_A → #7A
+            if rank == "7PLUS_S":
+                store_key = f"{rk}#7S"
             else:
-                tb += bet
-                if hit:
-                    tr += pay; th += 1
-                results.append(row_str)
-            # race_key は UNIQUE。同一レースで SS/S/A(main)/WIDE/7PLUS が並立しうるため
-            # WIDE は "#W"・7PLUS は "#7" 接尾でキーを分離（main 行の上書き防止）。
-            if rank == "WIDE":
-                store_key = f"{rk}#W"
-            elif rank == "7PLUS":
-                store_key = f"{rk}#7"
-            else:
-                store_key = rk
+                store_key = f"{rk}#7A"
             history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, bet))
 
         if history:
@@ -217,46 +200,51 @@ def main():
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route) "
                 "VALUES (?,?,?,?,?,?,?,?,'wt')", history)
 
-    if not results and not results_wide and not results_7plus:
+    total_7plus = results_7plus_s + results_7plus_a
+    if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         return
 
-    month = _query_stats(target_date[:7] + "%")
-    year = _query_stats(target_date[:4] + "%")
-    stats = f"\n{'─'*28}\n📅 {target_date[:7]}: {_stats_line('月', month)}\n🗓 {target_date[:4]}年: {_stats_line('年', year)}"
+    p7b = p7sb + p7ab
+    p7r = p7sr + p7ar
+    p7h = p7sh + p7ah
+    p7roi = p7r / p7b * 100 if p7b else 0
+    n7 = len(total_7plus)
+    header = (
+        f"📊 **競輪AI[wt]成績 {target_date}**  [7+車]\n"
+        f"確定 {n7}R　的中 {p7h}回 ({p7h/n7*100:.1f}%)\n"
+        f"投資 {p7b:,}円 → 回収 {p7r:,}円　ROI {p7roi:.1f}%　損益 {p7r-p7b:+,}円"
+    )
 
-    if results:
-        roi = tr / tb * 100 if tb else 0
-        header = (f"📊 **競輪AI[wt]成績 {target_date}**  [6車以下/SS:3連単・S+A:3連複]\n"
-                  f"確定 {len(results)}R　的中 {th}回 ({th/len(results)*100:.1f}%)\n"
-                  f"投資 {tb:,}円 → 回収 {tr:,}円　ROI {roi:.1f}%　損益 {tr-tb:+,}円")
-        msg = f"{header}\n```\n" + "\n".join(results) + "\n```"
-    else:
-        msg = f"📊 **競輪AI[wt]成績 {target_date}**  推奨(SS/S/A)の確定なし"
+    # ランク別サマリー
+    def _rank_line(label, results_list, bet_total, ret_total, hit_count):
+        if not results_list:
+            return ""
+        roi = ret_total / bet_total * 100 if bet_total else 0
+        return (f"[7+車 {label}] {len(results_list)}R 的中{hit_count} "
+                f"投資{bet_total:,}→回収{ret_total:,} ROI{roi:.1f}%")
 
-    # ワイド1点（独立プロダクト・別集計）
-    if results_wide:
-        wroi = wr / wb * 100 if wb else 0
-        wide_header = (f"\n🎯 **ワイド1点(指数1-2位)**　確定 {len(results_wide)}R　"
-                       f"的中 {wh}回 ({wh/len(results_wide)*100:.1f}%)\n"
-                       f"投資 {wb:,}円 → 回収 {wr:,}円　ROI {wroi:.1f}%　損益 {wr-wb:+,}円")
-        msg += f"{wide_header}\n```\n" + "\n".join(results_wide) + "\n```"
+    rank_lines = []
+    s_line = _rank_line("S", results_7plus_s, p7sb, p7sr, p7sh)
+    a_line = _rank_line("A", results_7plus_a, p7ab, p7ar, p7ah)
+    if s_line: rank_lines.append(s_line)
+    if a_line: rank_lines.append(a_line)
 
-    # 7+車（独立プロダクト・別集計）
-    if results_7plus:
-        p7roi = p7r / p7b * 100 if p7b else 0
-        p7_header = (f"\n🏎️ **7+車(gami≥5倍+gap12≥0.07)**　確定 {len(results_7plus)}R　"
-                     f"的中 {p7h}回 ({p7h/len(results_7plus)*100:.1f}%)\n"
-                     f"投資 {p7b:,}円 → 回収 {p7r:,}円　ROI {p7roi:.1f}%　損益 {p7r-p7b:+,}円")
-        msg += f"{p7_header}\n```\n" + "\n".join(results_7plus) + "\n```"
+    msg = header
+    if rank_lines:
+        msg += "\n" + "\n".join(rank_lines)
+    msg += "\n```\n" + "\n".join(total_7plus) + "\n```"
 
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"
-    msg += stats
+
+    month = _query_stats(target_date[:7] + "%")
+    year = _query_stats(target_date[:4] + "%")
+    msg += f"\n{'─'*28}\n📅 {target_date[:7]}: {_stats_line('月', month)}\n🗓 {target_date[:4]}年: {_stats_line('年', year)}"
+
     emit(msg[:1900])
-    print(f"[notify_results_wt] {target_date} SS/S/A {len(results)}R 的中{th} / "
-          f"ワイド {len(results_wide)}R 的中{wh} / 7+車 {len(results_7plus)}R 的中{p7h} / "
-          f"欠車無効{skipped_dns}件")
+    print(f"[notify_results_wt] {target_date} 7+車S {len(results_7plus_s)}R 的中{p7sh} / "
+          f"7+車A {len(results_7plus_a)}R 的中{p7ah} / 欠車無効{skipped_dns}件")
 
 
 if __name__ == "__main__":
