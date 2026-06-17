@@ -32,7 +32,8 @@ def _parse_picks_full(target_date: str) -> dict:
             continue
         rank = None
         for line in p.read_text(encoding="utf-8").splitlines():
-            if "【7+車 Sランク】" in line: rank = "7PLUS_S"
+            if "【7+車 SSランク】" in line: rank = "7PLUS_SS"
+            elif "【7+車 Sランク】" in line: rank = "7PLUS_S"
             elif "【7+車 Aランク】" in line: rank = "7PLUS_A"
             elif "【7+車】" in line: rank = "7PLUS_S"  # 旧フォーマット後方互換
             elif "【SSランク】" in line: rank = None   # 旧SS/S/A/B/WIDEは採点対象外
@@ -43,7 +44,7 @@ def _parse_picks_full(target_date: str) -> dict:
             elif rank:
                 m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
                 if m:
-                    slot = "7plus_s" if rank == "7PLUS_S" else "7plus_a"
+                    slot = "7plus_ss" if rank == "7PLUS_SS" else "7plus_s" if rank == "7PLUS_S" else "7plus_a"
                     picks[(m.group(2), int(m.group(3)), slot)] = (rank, m.group(1), m.group(4))
     return picks
 
@@ -85,7 +86,7 @@ def _query_stats(like):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
-            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_S','7PLUS_A') AND race_date LIKE ?", (like,)).fetchone()
+            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_A') AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
@@ -130,7 +131,8 @@ def main():
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code})
     pm = _load_payouts_wt(keys)
 
-    results_7plus_s, results_7plus_a, history = [], [], []
+    results_7plus_ss, results_7plus_s, results_7plus_a, history = [], [], [], []
+    p7ssb = p7ssr = p7ssh = 0  # 7+車 SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 Sランク 合計
     p7ab = p7ar = p7ah = 0    # 7+車 Aランク 合計
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
@@ -174,9 +176,14 @@ def main():
                 except (ValueError, TypeError):
                     pass
             mark = f"◎ ¥{pay:,}" if hit else "×"
-            rank_label = "7S" if rank == "7PLUS_S" else "7A"
+            rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
-            if rank == "7PLUS_S":
+            if rank == "7PLUS_SS":
+                p7ssb += bet
+                if hit:
+                    p7ssr += pay; p7ssh += 1
+                results_7plus_ss.append(row_str)
+            elif rank == "7PLUS_S":
                 p7sb += bet
                 if hit:
                     p7sr += pay; p7sh += 1
@@ -186,8 +193,10 @@ def main():
                 if hit:
                     p7ar += pay; p7ah += 1
                 results_7plus_a.append(row_str)
-            # race_key suffix: 7PLUS_S → #7S / 7PLUS_A → #7A
-            if rank == "7PLUS_S":
+            # race_key suffix: 7PLUS_SS → #7SS / 7PLUS_S → #7S / 7PLUS_A → #7A
+            if rank == "7PLUS_SS":
+                store_key = f"{rk}#7SS"
+            elif rank == "7PLUS_S":
                 store_key = f"{rk}#7S"
             else:
                 store_key = f"{rk}#7A"
@@ -200,14 +209,14 @@ def main():
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route) "
                 "VALUES (?,?,?,?,?,?,?,?,'wt')", history)
 
-    total_7plus = results_7plus_s + results_7plus_a
+    total_7plus = results_7plus_ss + results_7plus_s + results_7plus_a
     if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         return
 
-    p7b = p7sb + p7ab
-    p7r = p7sr + p7ar
-    p7h = p7sh + p7ah
+    p7b = p7ssb + p7sb + p7ab
+    p7r = p7ssr + p7sr + p7ar
+    p7h = p7ssh + p7sh + p7ah
     p7roi = p7r / p7b * 100 if p7b else 0
     n7 = len(total_7plus)
     header = (
@@ -225,10 +234,12 @@ def main():
                 f"投資{bet_total:,}→回収{ret_total:,} ROI{roi:.1f}%")
 
     rank_lines = []
-    s_line = _rank_line("S", results_7plus_s, p7sb, p7sr, p7sh)
-    a_line = _rank_line("A", results_7plus_a, p7ab, p7ar, p7ah)
-    if s_line: rank_lines.append(s_line)
-    if a_line: rank_lines.append(a_line)
+    ss_line = _rank_line("SS", results_7plus_ss, p7ssb, p7ssr, p7ssh)
+    s_line  = _rank_line("S",  results_7plus_s,  p7sb,  p7sr,  p7sh)
+    a_line  = _rank_line("A",  results_7plus_a,  p7ab,  p7ar,  p7ah)
+    if ss_line: rank_lines.append(ss_line)
+    if s_line:  rank_lines.append(s_line)
+    if a_line:  rank_lines.append(a_line)
 
     msg = header
     if rank_lines:
@@ -243,8 +254,9 @@ def main():
     msg += f"\n{'─'*28}\n📅 {target_date[:7]}: {_stats_line('月', month)}\n🗓 {target_date[:4]}年: {_stats_line('年', year)}"
 
     emit(msg[:1900])
-    print(f"[notify_results_wt] {target_date} 7+車S {len(results_7plus_s)}R 的中{p7sh} / "
-          f"7+車A {len(results_7plus_a)}R 的中{p7ah} / 欠車無効{skipped_dns}件")
+    print(f"[notify_results_wt] {target_date} 7+車SS {len(results_7plus_ss)}R 的中{p7ssh} / "
+          f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 7+車A {len(results_7plus_a)}R 的中{p7ah} / "
+          f"欠車無効{skipped_dns}件")
 
 
 if __name__ == "__main__":

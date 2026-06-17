@@ -19,11 +19,14 @@ from src.notify.discord import send, send_file
 
 
 def _parse_7plus_ranked(text: str) -> dict[str, list[dict]]:
-    """wave-picks テキストから 7+車 Sランク・Aランク を抽出する。"""
-    result: dict[str, list[dict]] = {"S": [], "A": []}
+    """wave-picks テキストから 7+車 SSランク・Sランク・Aランク を抽出する。"""
+    result: dict[str, list[dict]] = {"SS": [], "S": [], "A": []}
     current_rank = None
 
     for line in text.splitlines():
+        if "【7+車 SSランク】" in line:
+            current_rank = "SS"
+            continue
         if "【7+車 Sランク】" in line:
             current_rank = "S"
             continue
@@ -193,9 +196,10 @@ def main():
 
     text = picks_path.read_text(encoding="utf-8")
     picks_by_rank = _parse_7plus_ranked(text)
+    ss_n = len(picks_by_rank["SS"])
     s_n = len(picks_by_rank["S"])
     a_n = len(picks_by_rank["A"])
-    total = s_n + a_n
+    total = ss_n + s_n + a_n
 
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
 
@@ -214,7 +218,7 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}  S:{s_n}/A:{a_n}")
+            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
@@ -222,12 +226,12 @@ def main():
     if total == 0:
         scope = "夜レースの7+車推奨" if night else "本日の7+車推奨"
         send(f"🏎️ **{title} {target_date}**  [7+車]\n"
-             f"{scope}はありません（gami≥5.0倍+gap12≥0.07 なし）\n"
+             f"{scope}はありません（gap12≥0.07 なし）\n"
              f"全レースの指数は添付PDFをご覧ください。")
         _send_index_pdf()
         return
 
-    # Sランク・Aランクそれぞれの Discord メッセージ
+    # SSランク・Sランク・Aランクそれぞれの Discord メッセージ
     def _fmt_rank_block(rank_label: str, picks: list[dict], desc: str) -> str:
         lines = [f"**【{rank_label}ランク】{len(picks)}件** （{desc}）"]
         for p in picks:
@@ -240,16 +244,18 @@ def main():
 
     header = (
         f"🏎️ **{title} {target_date}**  [7+車]\n"
-        f"Sランク:{s_n}件 / Aランク:{a_n}件　計{total}件\n"
+        f"SSランク:{ss_n}件 / Sランク:{s_n}件 / Aランク:{a_n}件　計{total}件\n"
         f"投資: {total_cost}円\n"
     )
     send(header)
 
     sections = []
+    if picks_by_rank["SS"]:
+        sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "ガミ目カット後≤3目  HOLD ~137%"))
     if picks_by_rank["S"]:
-        sections.append(_fmt_rank_block("S", picks_by_rank["S"], "gap12≥0.10  HOLD ~143%"))
+        sections.append(_fmt_rank_block("S", picks_by_rank["S"], "gami≥5倍+gap12≥0.10  HOLD ~143%"))
     if picks_by_rank["A"]:
-        sections.append(_fmt_rank_block("A", picks_by_rank["A"], "gap12[0.07,0.10)  HOLD ~138%"))
+        sections.append(_fmt_rank_block("A", picks_by_rank["A"], "gami≥5倍+gap12[0.07,0.10)  HOLD ~138%"))
 
     for section in sections:
         msg = f"```\n{section}\n```"
@@ -257,7 +263,7 @@ def main():
             msg = msg[:1900] + "\n…(省略)```"
         send(msg)
 
-    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, S:{s_n}/A:{a_n})")
+    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}/A:{a_n})")
 
     # 全レース指数PDF（allindex.json＝全レース・推奨は色付き）
     _send_index_pdf()
