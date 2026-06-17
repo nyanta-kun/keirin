@@ -267,10 +267,12 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
         valid_odds = [ov for _, ov in odds_per_bet if ov is not None]
         if valid_odds:
             min_odds = min(valid_odds)
+            # 合成オッズ = 1 / Σ(1/odds_i)  ← 全有効目の逆数和の逆数
+            synth_odds = 1.0 / sum(1.0 / ov for ov in valid_odds)
+            investment = n_pts * 100
             if min_odds >= GAMI_THRESHOLD:
-                gami_mark = f"✅ ガミOK（全{n_pts}目 最安 {min_odds:.1f}倍 ≥ {GAMI_THRESHOLD}倍）"
+                gami_mark = f"✅ ガミOK（全{n_pts}目 最安 {min_odds:.1f}倍）"
             else:
-                # SSランクは発走前残り目数を再表示
                 if is_7plus:
                     surviving = [t for t, ov in odds_per_bet if ov is not None and ov >= GAMI_THRESHOLD]
                     if surviving:
@@ -278,13 +280,18 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
                                      f" → 5倍以上は{len(surviving)}目: {','.join(str(t) for t in surviving)}")
                     else:
                         gami_mark = f"❌ 全目ガミ（最安 {min_odds:.1f}倍）— 購入非推奨"
+                        synth_odds = 0.0
                 else:
                     gami_mark = f"⚠️ ガミ注意（最安 {min_odds:.1f}倍 < {GAMI_THRESHOLD}倍）"
         else:
+            synth_odds = 0.0
+            investment = n_pts * 100
             gami_mark = "⚠️ オッズ全取得不可（締切済みの可能性）"
     else:
         lines = ["    ⚠️ リアルタイムオッズ取得失敗（手動で確認してください）"]
         gami_mark = ""
+        synth_odds = 0.0
+        investment = n_pts * 100
 
     # 目数が多い場合は折り畳み表示（SSランクは少ないのでそのまま）
     MAX_DISPLAY = 5
@@ -293,10 +300,12 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
     else:
         odds_block = "\n".join(lines)
 
+    synth_str = f"{synth_odds:.2f}倍" if synth_odds > 0 else "—"
+
     msg = (
         f"{rank_icon} **[{rank}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
-        f"  {bet_label}({n_pts}点): `{combo_str}`\n"
-        f"  gap12={gap12:.3f}  ratio={ratio:.2f}\n"
+        f"  {bet_label}({n_pts}点 / {investment}円): `{combo_str}`\n"
+        f"  **合成オッズ: {synth_str}**  gap12={gap12:.3f}\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
         f"{odds_block}\n"
