@@ -225,7 +225,7 @@ def main():
 
     if total == 0:
         scope = "夜レースの7+車推奨" if night else "本日の7+車推奨"
-        send(f"🏎️ **{title} {target_date}**  [7+車]\n"
+        send(f"🚲 **{title} {target_date}**  [7+車]\n"
              f"{scope}はありません（gap12≥0.07 なし）\n"
              f"全レースの指数は添付PDFをご覧ください。")
         _send_index_pdf()
@@ -243,7 +243,7 @@ def main():
         return "\n".join(lines)
 
     header = (
-        f"🏎️ **{title} {target_date}**  [7+車]\n"
+        f"🚲 **{title} {target_date}**  [7+車]\n"
         f"SSランク:{ss_n}件 / Sランク:{s_n}件 / Aランク:{a_n}件　計{total}件\n"
         f"投資: {total_cost}円\n"
     )

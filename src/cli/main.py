@@ -1573,6 +1573,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     # 7+車 gami≥5.0倍 + gap12≥min_gap12 （doc48 Phase2通過・前向き検証用）
     # SSランク: ガミ目カット後≤3目 HOLD ~137% (doc49)
     # gap12≥seven_plus_s_gap12 → Sランク(HOLD ~143%) / 未満 → Aランク(HOLD ~138%)
+    plus7_candidates = []   # gap12≥min_gap12のみ（gamiフィルタなし・prerace用）
     plus7_ss_races = []
     plus7_s_races = []
     plus7_a_races = []
@@ -1652,6 +1653,25 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 })
 
             sig7 = race_signals(p, int(n_ent))
+
+            # 候補（gamiフィルタなし・発走前再検証用）
+            plus7_candidates.append({
+                "rank":       "7PLUS_CAND",
+                "race_key":   race_key,
+                "venue_name": venue_name7,
+                "race_no":    race_no7,
+                "start_time": start_time7,
+                "n_riders":   int(n_ent),
+                "gap12":      float(gap12_7),
+                "ratio":      float(p[0] / (3 / n_ent)) if n_ent else 0.0,
+                "pivot1":     int(pivot1_7),
+                "pivot2":     int(pivot2_7),
+                "thirds":     [int(t) for t in thirds_7],
+                "riders":     riders_detail7,
+                "top3_sum":   round(float(sig7["top3_sum"]), 4),
+                "upset_tier": sig7["upset_tier"],
+                "bet_type":   "3連複",
+            })
 
             # SSランク: ガミ目カット後≤3目 (doc49 Phase2通過 HOLD ~137%)
             valid_thirds_ss = [t for t in thirds_7
@@ -1807,6 +1827,12 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     with open(detail_path, "w", encoding="utf-8") as f:
         json.dump(all_race_details, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {detail_path}")
+
+    # 候補JSON（gamiフィルタなし・gap12≥min_gap12のみ。notify_prerace_wt.py が発走前再検証に使用）
+    cands_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_candidates.json"
+    with open(cands_path, "w", encoding="utf-8") as f:
+        json.dump(plus7_candidates, f, ensure_ascii=False, indent=2)
+    click.echo(f"[保存先] {cands_path}  (発走前再検証用候補 {len(plus7_candidates)}件)")
 
     # 全レース指数 JSON（全レース。推奨レースは rank/買い目を付与）。
     # notify_picks.py がこれを読み「全レース指数PDF」を朝のDiscordに添付する。
