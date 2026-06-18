@@ -390,6 +390,16 @@ def _main_inner(date, _db_url):
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code} | _cand_keys_extra)
     pm = _load_payouts_wt(keys)
 
+    # prerace_gami を事前取得（DELETE前）。prerace_gami < 5.0 のピックは見送り扱いにする。
+    existing_gami: dict[str, float] = {}
+    with get_connection() as _conn:
+        for _rk, _pg in _conn.execute(
+            "SELECT race_key, prerace_gami FROM picks_history "
+            "WHERE route='wt' AND race_date=? AND prerace_gami IS NOT NULL",
+            (target_date,),
+        ).fetchall():
+            existing_gami[_rk] = _pg
+
     results_7plus_ss, results_7plus_s, results_7plus_a, history = [], [], [], []
     p7ssb = p7ssr = p7ssh = 0  # 7+車 SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 Sランク 合計
@@ -436,49 +446,48 @@ def _main_inner(date, _db_url):
                     tstr = datetime.fromtimestamp(int(stt), tz=timezone(timedelta(hours=9))).strftime("%H:%M")
                 except (ValueError, TypeError):
                     pass
-            mark = f"◎ ¥{pay:,}" if hit else "×"
-            rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"
-            row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
-            if rank == "7PLUS_SS":
-                p7ssb += bet
-                if hit:
-                    p7ssr += pay; p7ssh += 1
-                results_7plus_ss.append(row_str)
-            elif rank == "7PLUS_S":
-                p7sb += bet
-                if hit:
-                    p7sr += pay; p7sh += 1
-                results_7plus_s.append(row_str)
-            else:  # 7PLUS_A および旧 7PLUS
-                p7ab += bet
-                if hit:
-                    p7ar += pay; p7ah += 1
-                results_7plus_a.append(row_str)
-            # race_key suffix: 7PLUS_SS → #7SS / 7PLUS_S → #7S / 7PLUS_A → #7A
+            # store_key を先定義（prerace_gami 参照のため stats より前）
             if rank == "7PLUS_SS":
                 store_key = f"{rk}#7SS"
             elif rank == "7PLUS_S":
                 store_key = f"{rk}#7S"
             else:
                 store_key = f"{rk}#7A"
-            history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, bet, False))
+            pg = existing_gami.get(store_key)
+            is_gami_skip = pg is not None and pg < 5.0
+            mark = f"◎ ¥{pay:,}" if hit else "×"
+            rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"
+            row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
+            if rank == "7PLUS_SS":
+                if not is_gami_skip:
+                    p7ssb += bet
+                    if hit:
+                        p7ssr += pay; p7ssh += 1
+                results_7plus_ss.append(row_str)
+            elif rank == "7PLUS_S":
+                if not is_gami_skip:
+                    p7sb += bet
+                    if hit:
+                        p7sr += pay; p7sh += 1
+                results_7plus_s.append(row_str)
+            else:  # 7PLUS_A および旧 7PLUS
+                if not is_gami_skip:
+                    p7ab += bet
+                    if hit:
+                        p7ar += pay; p7ah += 1
+                results_7plus_a.append(row_str)
+            # prerace ガミ条件落ち → 見送り（bet/pay=0, miwokuri=True）として記録
+            if is_gami_skip:
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, 0, True, pg))
+            else:
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, bet, False, pg))
 
         if history:
-            # DELETE の前に既存 prerace_gami を退避（notify_prerace_wt.py が書き込んだ値を保持）
-            existing_gami: dict[str, float] = {}
-            for rk_pg, pg in conn.execute(
-                "SELECT race_key, prerace_gami FROM picks_history "
-                "WHERE route='wt' AND race_date=? AND prerace_gami IS NOT NULL",
-                (target_date,),
-            ).fetchall():
-                existing_gami[rk_pg] = pg
-
             conn.execute("DELETE FROM picks_history WHERE route='wt' AND race_date=?", (target_date,))
-            history_with_gami = [(*row, existing_gami.get(row[1])) for row in history]
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
-                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?,?)", history_with_gami)
+                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?,?)", history)
 
         purchased_base_keys = {h[1].split("#")[0] for h in history}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)
