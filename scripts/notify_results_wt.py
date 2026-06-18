@@ -464,11 +464,21 @@ def _main_inner(date, _db_url):
             history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, bet, False))
 
         if history:
+            # DELETE の前に既存 prerace_gami を退避（notify_prerace_wt.py が書き込んだ値を保持）
+            existing_gami: dict[str, float] = {}
+            for rk_pg, pg in conn.execute(
+                "SELECT race_key, prerace_gami FROM picks_history "
+                "WHERE route='wt' AND race_date=? AND prerace_gami IS NOT NULL",
+                (target_date,),
+            ).fetchall():
+                existing_gami[rk_pg] = pg
+
             conn.execute("DELETE FROM picks_history WHERE route='wt' AND race_date=?", (target_date,))
+            history_with_gami = [(*row, existing_gami.get(row[1])) for row in history]
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?)", history)
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
+                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?,?)", history_with_gami)
 
         purchased_base_keys = {h[1].split("#")[0] for h in history}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)
