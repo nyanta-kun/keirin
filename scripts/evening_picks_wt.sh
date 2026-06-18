@@ -42,4 +42,19 @@ echo "[$(date '+%H:%M:%S')] 夜の部をDiscordへ通知..."
   2>&1 | tee -a "$LOG_DIR/notify_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜の部通知に失敗（継続）"
 
+# 夜の部 candidates を picks_history に書き込み（日中分は daily_picks_wt.sh 実行済み）
+.venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 夜候補書き込みに失敗（継続）"
+
+# 4. VPS PostgreSQL 同期（夜の部 wt_entries/picks_history を反映）
+if [[ -n "$KEIRIN_DB_URL" ]]; then
+  echo "[$(date '+%H:%M:%S')] VPS PostgreSQL 同期..."
+  .venv/bin/python3 scripts/migrate_sqlite_to_pg.py \
+    2>&1 | tee -a "$LOG_DIR/migrate_pg_${TODAY}.log" \
+    || echo "[$(date '+%H:%M:%S')] VPS 同期に失敗（継続）"
+else
+  echo "[$(date '+%H:%M:%S')] KEIRIN_DB_URL 未設定のため VPS 同期をスキップ"
+fi
+
 echo "[$(date '+%H:%M:%S')] === 夕方再生成 完了 ==="

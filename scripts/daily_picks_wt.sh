@@ -88,4 +88,24 @@ echo "[$(date '+%H:%M:%S')] 予想をDiscordへ通知..."
   2>&1 | tee -a "$LOG_DIR/notify_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 予想通知に失敗（継続）"
 
+# 候補レース（gap12条件のみ・gamiフィルタなし）を picks_history に即時書き込み
+# → 同日中から推奨ページに候補レースを表示するため
+echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
+.venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 候補書き込みに失敗（継続）"
+
+# --- 3. VPS PostgreSQL 同期（wt_entries/picks_history 等を反映）---
+# wave-picks-wt で race_point(AI確率) が更新された wt_entries と
+# write_candidates_wt で書き込まれた picks_history を VPS に同期する。
+# KEIRIN_DB_URL 未設定時はスキップ（エラー非致命）。
+if [[ -n "$KEIRIN_DB_URL" ]]; then
+  echo "[$(date '+%H:%M:%S')] VPS PostgreSQL 同期..."
+  .venv/bin/python3 scripts/migrate_sqlite_to_pg.py \
+    2>&1 | tee -a "$LOG_DIR/migrate_pg_${TODAY}.log" \
+    || echo "[$(date '+%H:%M:%S')] VPS 同期に失敗（継続）"
+else
+  echo "[$(date '+%H:%M:%S')] KEIRIN_DB_URL 未設定のため VPS 同期をスキップ"
+fi
+
 echo "[$(date '+%H:%M:%S')] === winticket日次処理完了 ==="

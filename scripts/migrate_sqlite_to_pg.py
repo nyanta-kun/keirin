@@ -102,9 +102,19 @@ def migrate_table(
     conflict_set = set(conflict_cols)
     non_conf = [c for c in cols if c not in conflict_set]
 
+    # NULL で上書きしてはいけないカラム: EXCLUDED が NULL なら既存値を維持
+    _null_protect = {"wt_entries": {"finish_order"}}
+    null_protect_cols = _null_protect.get(table, set())
+
     placeholders = ", ".join(["%s"] * len(cols))
+
+    def _upd_expr(c: str) -> str:
+        if c in null_protect_cols:
+            return f"{c} = COALESCE(EXCLUDED.{c}, keirin.{table}.{c})"
+        return f"{c} = EXCLUDED.{c}"
+
     if non_conf:
-        upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in non_conf)
+        upd = ", ".join(_upd_expr(c) for c in non_conf)
         upsert = (
             f"INSERT INTO keirin.{table} ({', '.join(cols)}) "
             f"VALUES ({placeholders}) "
@@ -126,7 +136,7 @@ def migrate_table(
         f"INSERT INTO keirin.{table} ({', '.join(cols)}) VALUES %s "
         + (
             f"ON CONFLICT ({', '.join(conflict_cols)}) DO UPDATE SET "
-            + ", ".join(f"{c} = EXCLUDED.{c}" for c in non_conf)
+            + ", ".join(_upd_expr(c) for c in non_conf)
             if non_conf else
             f"ON CONFLICT ({', '.join(conflict_cols)}) DO NOTHING"
         )
@@ -135,7 +145,12 @@ def migrate_table(
         raw = cursor.fetchmany(BATCH_SIZE)
         if not raw:
             break
-        data = [tuple(r[c] for c in cols) for r in raw]
+        # picks_history.miwokuri は PG で BOOLEAN、SQLite では INTEGER → bool に変換
+        bool_cols = {"miwokuri"} if table == "picks_history" else set()
+        data = [
+            tuple(bool(r[c]) if c in bool_cols else r[c] for c in cols)
+            for r in raw
+        ]
         psycopg2.extras.execute_values(pg_cur, base_insert, data, page_size=BATCH_SIZE)
         inserted += len(raw)
         if inserted % 50000 == 0 or inserted == total:

@@ -13,6 +13,27 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.database import init_db
 from src.scraper.pipeline import CollectionPipeline, setup_logging
 
+# JKA venue_code → 場名（venue_info DBが取得できない場合のフォールバック）
+_VENUE_NAMES: dict[str, str] = {
+    "11": "函館",   "12": "青森",   "13": "いわき平", "21": "弥彦",
+    "22": "前橋",   "23": "取手",   "24": "宇都宮",  "25": "大宮",
+    "26": "西武園",  "27": "京王閣",  "28": "立川",    "31": "松戸",
+    "32": "千葉",   "34": "川崎",   "35": "平塚",    "36": "小田原",
+    "37": "伊東",   "38": "静岡",   "42": "名古屋",  "43": "岐阜",
+    "44": "大垣",   "45": "豊橋",   "46": "富山",    "47": "松阪",
+    "48": "四日市",  "51": "福井",   "53": "奈良",    "54": "向日町",
+    "55": "和歌山",  "56": "岸和田",  "61": "玉野",    "62": "広島",
+    "63": "防府",   "71": "高松",   "73": "小松島",  "74": "高知",
+    "75": "松山",   "81": "小倉",   "83": "久留米",  "84": "武雄",
+    "85": "佐世保",  "86": "別府",   "87": "熊本",
+}
+
+
+def _venue_name(venue_map: dict, venue_id) -> str:
+    """venue_map から場名を取得。なければ _VENUE_NAMES フォールバック、それもなければ番号。"""
+    vid = str(venue_id)
+    return venue_map.get(vid) or _VENUE_NAMES.get(vid, vid)
+
 
 @click.group()
 @click.option("--debug", is_flag=True, help="デバッグログを表示")
@@ -1348,7 +1369,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             continue
 
         venue_id = grp_sorted["venue_id"].iloc[0]
-        venue_name = venue_map.get(str(venue_id), str(venue_id))
+        venue_name = _venue_name(venue_map, venue_id)
         race_no = int(grp_sorted["race_no"].iloc[0])
         start_time = grp_sorted["start_time"].iloc[0]
 
@@ -1550,8 +1571,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 })
             wide_races.append({
                 "race_key":   race_key,
-                "venue_name": venue_map.get(str(grp_sorted["venue_id"].iloc[0]),
-                                            str(grp_sorted["venue_id"].iloc[0])),
+                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                 "race_no":    int(grp_sorted["race_no"].iloc[0]),
                 "start_time": grp_sorted["start_time"].iloc[0],
                 "n_riders":   int(n_riders),
@@ -1627,7 +1647,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 mkt_fav7 = None
 
             venue_id7 = grp_sorted["venue_id"].iloc[0]
-            venue_name7 = venue_map.get(str(venue_id7), str(venue_id7))
+            venue_name7 = _venue_name(venue_map, venue_id7)
             race_no7 = int(grp_sorted["race_no"].iloc[0])
             start_time7 = grp_sorted["start_time"].iloc[0]
 
@@ -1656,21 +1676,23 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
             # 候補（gamiフィルタなし・発走前再検証用）
             plus7_candidates.append({
-                "rank":       "7PLUS_CAND",
-                "race_key":   race_key,
-                "venue_name": venue_name7,
-                "race_no":    race_no7,
-                "start_time": start_time7,
-                "n_riders":   int(n_ent),
-                "gap12":      float(gap12_7),
-                "ratio":      float(p[0] / (3 / n_ent)) if n_ent else 0.0,
-                "pivot1":     int(pivot1_7),
-                "pivot2":     int(pivot2_7),
-                "thirds":     [int(t) for t in thirds_7],
-                "riders":     riders_detail7,
-                "top3_sum":   round(float(sig7["top3_sum"]), 4),
-                "upset_tier": sig7["upset_tier"],
-                "bet_type":   "3連複",
+                "rank":          "7PLUS_CAND",
+                "race_key":      race_key,
+                "venue_name":    venue_name7,
+                "race_no":       race_no7,
+                "start_time":    start_time7,
+                "n_riders":      int(n_ent),
+                "gap12":         float(gap12_7),
+                "ratio":         float(p[0] / (3 / n_ent)) if n_ent else 0.0,
+                "pivot1":        int(pivot1_7),
+                "pivot2":        int(pivot2_7),
+                "thirds":        [int(t) for t in thirds_7],
+                "riders":        riders_detail7,
+                "top3_sum":      round(float(sig7["top3_sum"]), 4),
+                "upset_tier":    sig7["upset_tier"],
+                "bet_type":      "3連複",
+                "min_trio_odds": round(float(gami_7), 2) if gami_7 > 0 else None,
+                "gami_rank":     None,  # loop後に plus7_ss/s/a_races との照合で上書き
             })
 
             # SSランク: ガミ目カット後≤3目 (doc49 Phase2通過 HOLD ~137%)
@@ -1828,8 +1850,24 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         json.dump(all_race_details, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {detail_path}")
 
+    # candidates に gami_rank を付与（SS/S/A に入ったレースかを朝通知で表示するため）
+    _ss_keys = {r["race_key"] for r in plus7_ss_races}
+    _s_keys  = {r["race_key"] for r in plus7_s_races}
+    _a_keys  = {r["race_key"] for r in plus7_a_races}
+    for _cand in plus7_candidates:
+        _rk = _cand["race_key"]
+        if _rk in _ss_keys:
+            _cand["gami_rank"] = "SS"
+        elif _rk in _s_keys:
+            _cand["gami_rank"] = "S"
+        elif _rk in _a_keys:
+            _cand["gami_rank"] = "A"
+
     # 候補JSON（gamiフィルタなし・gap12≥min_gap12のみ。notify_prerace_wt.py が発走前再検証に使用）
-    cands_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_candidates.json"
+    # 夜run（output_path が _night.txt）は _night_candidates.json に書き、朝分を上書きしない。
+    out_stem = Path(output_path).stem
+    cands_suffix = "_night_candidates.json" if out_stem.endswith("_night") else "_candidates.json"
+    cands_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{cands_suffix}"
     with open(cands_path, "w", encoding="utf-8") as f:
         json.dump(plus7_candidates, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {cands_path}  (発走前再検証用候補 {len(plus7_candidates)}件)")
@@ -1873,9 +1911,9 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         else:
             rank, bet_type, combo_str = "-", "指数のみ", "(参考)"
         all_index.append({
+            "race_key":   race_key,
             "rank":       rank,
-            "venue_name": venue_map.get(str(grp_sorted["venue_id"].iloc[0]),
-                                        str(grp_sorted["venue_id"].iloc[0])),
+            "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
             "race_no":    int(grp_sorted["race_no"].iloc[0]),
             "start_time": grp_sorted["start_time"].iloc[0],
             "n_riders":   int(n_riders),
@@ -1887,6 +1925,20 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             "combo_str":  combo_str,
             "riders":     riders_detail,
         })
+    from src.database import get_connection
+    _score_updates = [
+        (rider["pred_prob_pct"], item["race_key"], rider["frame_no"])
+        for item in all_index
+        for rider in item["riders"]
+    ]
+    if _score_updates:
+        with get_connection() as _conn:
+            _conn.executemany(
+                "UPDATE wt_entries SET race_point = ? WHERE race_key = ? AND frame_no = ?",
+                _score_updates,
+            )
+            _conn.commit()
+
     all_index.sort(key=lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"]))
     allindex_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_allindex.json"
     with open(allindex_path, "w", encoding="utf-8") as f:

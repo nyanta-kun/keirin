@@ -28,6 +28,7 @@ _PG_CONFLICT_COLS: dict[str, tuple[str, ...]] = {
     "race_results":     ("race_key", "player_id"),
     "venues":           ("code",),
     "players":          ("player_id",),
+    "model_evaluation": ("model_name", "period_type"),
 }
 
 # スキップする SQLite 固有ステートメントのパターン
@@ -424,9 +425,14 @@ def migrate_db():
                 n_combos INTEGER,
                 hit INTEGER DEFAULT 0,
                 payout INTEGER DEFAULT 0,
-                bet_amount INTEGER
+                bet_amount INTEGER,
+                prerace_gami REAL
             )
         """)
+        try:
+            conn.execute("ALTER TABLE picks_history ADD COLUMN prerace_gami REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(race_date)"
         )

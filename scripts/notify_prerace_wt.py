@@ -208,6 +208,38 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
 
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
 
+def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
+    """ピックの三連複全目の最安オッズを返す。オッズ取得失敗時は None。"""
+    if odds_data is None:
+        return None
+    p1 = pick.get("pivot1") or pick.get("pred1")
+    p2 = pick.get("pivot2") or pick.get("pred2")
+    thirds = pick.get("thirds", [])
+    if not thirds or p1 is None or p2 is None:
+        return None
+    lookup = _build_odds_lookup(odds_data, "trio")
+    valid_odds = []
+    for t in thirds:
+        key = frozenset({int(p1), int(p2), int(t)})
+        ov = lookup.get(key)
+        if ov and float(ov) > 0:
+            valid_odds.append(float(ov))
+    return min(valid_odds) if valid_odds else None
+
+
+def _save_prerace_gami(race_key: str, min_odds: float) -> None:
+    """picks_history.prerace_gami を発走前実測値で更新する。"""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE picks_history SET prerace_gami = ? WHERE race_key = ?",
+                (round(min_odds, 2), race_key),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("prerace_gami 書き込み失敗 %s: %s", race_key, e)
+
+
 def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
     rank     = pick["rank"]
     venue    = pick["venue_name"]
@@ -349,17 +381,14 @@ def main():
     if not to_notify:
         return   # 今分は通知すべきレースなし
 
-    # ヘッダー通知
-    race_count = len(to_notify)
-    jst_now_str = _jst_now().strftime("%H:%M")
-    send(f"🔔 **レース直前オッズ確認** — {today}  {jst_now_str} 時点  ({race_count}件)")
-
-    # 各レースの通知
+    # ── 推奨メッセージを収集してからまとめて送信 ──
     scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []   # (race_key, message)
+    newly_done: set[str] = set()           # 今回処理完了（条件不成立も含む）
+
     for pick, ri in to_notify:
         rk = pick["race_key"]
         rank = pick.get("rank", "?")
-        is_trifecta = rank in TRIFECTA_RANKS
 
         # ライブオッズ取得
         try:
@@ -374,24 +403,30 @@ def main():
             logger.warning("fetch_odds 失敗 %s: %s", rk, e)
             odds_data = None
 
-        # race_no をピックに付与（wt_races から取得した値を使う）
+        # 発走前の三連複最安オッズを picks_history に記録
+        min_odds = _get_min_trio_odds(pick, odds_data)
+        if min_odds is not None:
+            _save_prerace_gami(rk, min_odds)
+
+        # race_no をピックに付与
         pick_with_raceno = dict(pick)
         pick_with_raceno["race_no"] = ri["race_no"]
         pick_with_raceno["n_entries"] = ri["n_entries"]
 
-        # 候補レース（7PLUS_CAND）は現在オッズでSS/S/Aを再判定
+        # 候補レース（7PLUS_CAND）は現在オッズで SS/S/A を再判定
         if rank == "7PLUS_CAND":
             live_rank, live_thirds = _determine_live_rank(pick, odds_data)
-            if live_rank == "なし" or live_rank == "不明":
-                # 条件不成立 → 通知せずスキップ（候補のみで購入不要）
-                if live_rank == "なし":
-                    print(f"[prerace] {rk} 候補 → live判定: 条件不成立（スキップ）", flush=True)
-                else:
-                    send(f"⚠️ 候補レース {rk}: 発走前オッズ取得不可（手動確認）")
-                notified.add(rk)
+            if live_rank == "なし":
+                print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
+                newly_done.add(rk)
                 time.sleep(0.3)
                 continue
-            # 判定成立: ランクと買い目を上書きして通知
+            if live_rank == "不明":
+                # オッズ取得失敗 → 再試行の余地を残すため newly_done に追加しない
+                print(f"[prerace] {rk} 候補 → オッズ取得不可（次回再試行）", flush=True)
+                time.sleep(0.3)
+                continue
+            # 判定成立: ランクと買い目を上書き
             pick_with_raceno["rank"] = live_rank
             pick_with_raceno["thirds"] = live_thirds
             n_pts = len(live_thirds)
@@ -403,12 +438,22 @@ def main():
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
 
         msg = _build_message(pick_with_raceno, ri, odds_data)
-        send(msg)
-        print(f"[prerace] {rk} ({pick_with_raceno.get('rank', rank)}) → 通知送信完了", flush=True)
-
-        notified.add(rk)
+        messages.append((rk, msg))
+        newly_done.add(rk)
         time.sleep(0.5)   # Discord レート制限対策
 
+    # 推奨がある場合のみ Discord 送信
+    if messages:
+        jst_now_str = _jst_now().strftime("%H:%M")
+        send(f"🚲 **レース直前推奨** — {today}  {jst_now_str} 時点  ({len(messages)}件)")
+        for rk, msg in messages:
+            send(msg)
+            print(f"[prerace] {rk} → 通知送信完了", flush=True)
+            time.sleep(0.5)
+    else:
+        print(f"[prerace] {today} 推奨なし（オッズ確認のみ・通知スキップ）", flush=True)
+
+    notified |= newly_done
     _save_notified(today, notified)
 
 

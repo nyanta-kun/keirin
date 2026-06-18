@@ -4,7 +4,10 @@ wave_picks_wt_{date}.txt の公開買い目を、winticket の確定結果(wt_en
 と wt_odds(三連複) で採点し、Discord通知＋picks_history に保存する。
 欠車(finish_order=0/NULL)は着外として除外。公開した買い目のみ採点（再導出しない）。
 7+車 Sランク(#7S) / Aランク(#7A) 別に集計。
+
+また candidates.json にあり購入されなかった候補レースを miwokuri=True で保存する。
 """
+import json
 import sys
 import re
 from pathlib import Path
@@ -72,6 +75,53 @@ def _void_by_dns(p1, p2, thirds, runners, is_wide=False):
         return False, []
     valid = [t for t in thirds if t in runners]
     return (not valid), valid
+
+
+def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn) -> int:
+    """candidates.json にあり購入されなかったレースを miwokuri=True で書き込む。
+
+    purchased_base_keys: 購入済み race_key の "#" 前の base 部分の集合。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    candidates: list[dict] = []
+    for fname in (
+        f"wave_picks_wt_{target_date}_candidates.json",
+        f"wave_picks_wt_{target_date}_night_candidates.json",
+    ):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                candidates += json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+    if not candidates:
+        return 0
+
+    count = 0
+    for cand in candidates:
+        rk = cand.get("race_key")
+        if not rk or rk in purchased_base_keys:
+            continue
+        gap12 = cand.get("gap12", 0.0)
+        rank = "7PLUS_S" if gap12 >= 0.10 else "7PLUS_A"
+        p1 = cand.get("pivot1")
+        p2 = cand.get("pivot2")
+        thirds = cand.get("thirds", [])
+        pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
+        n_combos = len(thirds)
+        store_key = f"{rk}#CAND"
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,'wt',TRUE)",
+                (target_date, store_key, rank, pred, n_combos),
+            )
+            count += 1
+        except Exception as e:
+            print(f"[notify_results_wt] 見送り書き込み失敗 {store_key}: {e}", flush=True)
+    return count
 
 
 def _stats_line(label, s):
@@ -200,14 +250,19 @@ def main():
                 store_key = f"{rk}#7S"
             else:
                 store_key = f"{rk}#7A"
-            history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, bet))
+            history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, bet, False))
 
         if history:
             conn.execute("DELETE FROM picks_history WHERE route='wt' AND race_date=?", (target_date,))
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route) "
-                "VALUES (?,?,?,?,?,?,?,?,'wt')", history)
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,?,?,?,'wt',?)", history)
+
+        purchased_base_keys = {h[1].split("#")[0] for h in history}
+        n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn)
+        if n_miwokuri:
+            print(f"[notify_results_wt] {target_date} 見送り {n_miwokuri} 件書き込み", flush=True)
 
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_a
     if not total_7plus:
