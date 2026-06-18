@@ -21,10 +21,45 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
 
 
-def _sync_vps(db_url: str) -> None:
+def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
+    """VPS の picks_history から、同一 base_key に購入済みエントリが存在する
+    #CAND エントリを削除する。
+
+    migrate_sqlite_to_pg.py は upsert のみで DELETE しないため、
+    notify_results_wt.py がローカルで #CAND → #7S/7A/7SS へ置き換えた後も
+    VPS に古い #CAND が残留する。この関数で同期後に残留分を除去する。
+    """
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM keirin.picks_history
+            WHERE race_date = %s
+              AND race_key LIKE %s
+              AND SPLIT_PART(race_key, chr(35), 1) IN (
+                  SELECT SPLIT_PART(race_key, chr(35), 1)
+                  FROM keirin.picks_history
+                  WHERE race_date = %s
+                    AND race_key NOT LIKE %s
+                    AND route = %s
+              )
+              AND route = %s
+        """, (target_date, '%#CAND', target_date, '%#CAND', 'wt', 'wt'))
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        if deleted:
+            print(f"[notify_results_wt] VPS 旧CAND削除: {deleted} 件", flush=True)
+    except Exception as e:
+        print(f"[notify_results_wt] VPS 旧CAND削除失敗（継続）: {e}", flush=True)
+
+
+def _sync_vps(db_url: str, target_date: str = "") -> None:
     """picks_history.payout 書き込み後に VPS PostgreSQL へ即時同期する。
     db_url 未設定時はスキップ（エラー非致命）。
     wt_odds_snapshot は大容量のためスキップ。
+    同期後、target_date の旧 #CAND エントリ（購入済みと重複するもの）を削除する。
     """
     if not db_url:
         return
@@ -40,6 +75,9 @@ def _sync_vps(db_url: str) -> None:
         print("[notify_results_wt] VPS 同期完了", flush=True)
     except subprocess.CalledProcessError as e:
         print(f"[notify_results_wt] VPS 同期失敗（継続）: {e.stderr[:200]}", flush=True)
+        return
+    if target_date:
+        _cleanup_vps_stale_cand(db_url, target_date)
 
 
 def _parse_picks_full(target_date: str) -> dict:
@@ -168,6 +206,65 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
         except Exception as e:
             print(f"[notify_results_wt] 見送り書き込み失敗 {store_key}: {e}", flush=True)
     return count
+
+
+def _backfill_miwokuri_trio_payout(conn) -> int:
+    """trio_payout=0 の見送り記録を遡及採点する。
+
+    notify_results_wt.py の実行タイミングによっては着順/オッズが未確定で
+    trio_payout=0 のまま保存されることがある。
+    wt_entries と wt_odds に今データがあれば更新する。
+    """
+    rows = conn.execute(
+        "SELECT race_key FROM picks_history "
+        "WHERE miwokuri=1 AND trio_payout=0 AND route='wt'"
+    ).fetchall()
+    if not rows:
+        return 0
+
+    base_keys = list({rk.split("#")[0] for (rk,) in rows})
+    pm = _load_payouts_wt(base_keys)
+
+    updated = 0
+    for (store_key,) in rows:
+        base_key = store_key.split("#")[0]
+        top3_rows = conn.execute(
+            "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
+            "ORDER BY finish_order", (base_key,)
+        ).fetchall()
+        order_list = [int(r[0]) for r in top3_rows]
+        if len(order_list) < 3:
+            continue
+        top3 = frozenset(order_list[:3])
+        trio_pay = pm.get(base_key, {}).get(("trio", top3), 0)
+        if trio_pay == 0:
+            continue
+
+        # candidates.json に記録された pred_combo から hit を再判定
+        pred_row = conn.execute(
+            "SELECT pred_combo FROM picks_history WHERE race_key=?", (store_key,)
+        ).fetchone()
+        hit_val = 0
+        if pred_row and pred_row[0]:
+            body = pred_row[0].split(":", 1)[1].strip() if ":" in pred_row[0] else pred_row[0]
+            parts = body.replace("→", "-").replace("⇄", "-").split("-")
+            if len(parts) >= 3:
+                try:
+                    p1, p2 = int(parts[0]), int(parts[1])
+                    thirds = [int(x) for x in parts[2].split(",")]
+                    for t in thirds:
+                        if frozenset((p1, p2, t)) == top3:
+                            hit_val = 1
+                            break
+                except (ValueError, IndexError):
+                    pass
+
+        conn.execute(
+            "UPDATE picks_history SET trio_payout=?, hit=? WHERE race_key=?",
+            (trio_pay, hit_val, store_key),
+        )
+        updated += 1
+    return updated
 
 
 def _stats_line(label, s):
@@ -340,10 +437,15 @@ def _main_inner(date, _db_url):
         if n_miwokuri:
             print(f"[notify_results_wt] {target_date} 見送り {n_miwokuri} 件書き込み", flush=True)
 
+        # trio_payout=0 の見送り記録を遡及採点（タイミング問題で 0 のまま残った分を修正）
+        n_backfill = _backfill_miwokuri_trio_payout(conn)
+        if n_backfill:
+            print(f"[notify_results_wt] 見送り trio_payout バックフィル {n_backfill} 件", flush=True)
+
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_a
     if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
-        _sync_vps(_db_url)
+        _sync_vps(_db_url, target_date)
         return
 
     p7b = p7ssb + p7sb + p7ab
@@ -390,7 +492,7 @@ def _main_inner(date, _db_url):
           f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 7+車A {len(results_7plus_a)}R 的中{p7ah} / "
           f"欠車無効{skipped_dns}件")
 
-    _sync_vps(_db_url)
+    _sync_vps(_db_url, target_date)
 
 
 if __name__ == "__main__":
