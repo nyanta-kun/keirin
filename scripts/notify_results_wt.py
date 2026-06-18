@@ -22,17 +22,35 @@ from src.database import get_connection
 
 
 def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
-    """VPS の picks_history から、同一 base_key に購入済みエントリが存在する
-    #CAND エントリを削除する。
+    """VPS の picks_history から不要な #CAND エントリを削除する。
 
-    migrate_sqlite_to_pg.py は upsert のみで DELETE しないため、
-    notify_results_wt.py がローカルで #CAND → #7S/7A/7SS へ置き換えた後も
-    VPS に古い #CAND が残留する。この関数で同期後に残留分を除去する。
+    2 パターンを処理する:
+    1. 同一 base_key に購入済みエントリ(#7S/7A/7SS)が存在する #CAND
+       （ローカルで購入に置き換えられた後も VPS に残留するもの）
+    2. ローカル SQLite に存在しない孤立 #CAND
+       （write_candidates_wt.py が書いた後に notify_results_wt.py の処理対象外と
+       なりローカルから消えたのに VPS にだけ残ったもの）
+
+    migrate_sqlite_to_pg.py は upsert のみで DELETE しないため、この関数で整合させる。
     """
+    import sqlite3
     try:
         import psycopg2
-        conn = psycopg2.connect(db_url)
-        cur = conn.cursor()
+        from src.database import DB_PATH
+        # ローカルSQLiteのtarget_date全race_keyを取得
+        local_conn = sqlite3.connect(str(DB_PATH))
+        local_keys = {
+            row[0] for row in local_conn.execute(
+                "SELECT race_key FROM picks_history WHERE race_date=? AND route='wt'",
+                (target_date,)
+            ).fetchall()
+        }
+        local_conn.close()
+
+        pg_conn = psycopg2.connect(db_url)
+        cur = pg_conn.cursor()
+
+        # パターン1: 同一base_keyに購入済みエントリが存在する#CAND
         cur.execute("""
             DELETE FROM keirin.picks_history
             WHERE race_date = %s
@@ -46,11 +64,31 @@ def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
               )
               AND route = %s
         """, (target_date, '%#CAND', target_date, '%#CAND', 'wt', 'wt'))
-        deleted = cur.rowcount
-        conn.commit()
-        conn.close()
-        if deleted:
-            print(f"[notify_results_wt] VPS 旧CAND削除: {deleted} 件", flush=True)
+        deleted1 = cur.rowcount
+
+        # パターン2: ローカルSQLiteに存在しない孤立#CAND
+        cur.execute("""
+            SELECT race_key FROM keirin.picks_history
+            WHERE race_date = %s
+              AND race_key LIKE %s
+              AND route = %s
+        """, (target_date, '%#CAND', 'wt'))
+        vps_cands = [row[0] for row in cur.fetchall()]
+        orphans = [k for k in vps_cands if k not in local_keys]
+        deleted2 = 0
+        if orphans:
+            cur.execute(
+                "DELETE FROM keirin.picks_history WHERE race_key = ANY(%s)",
+                (orphans,)
+            )
+            deleted2 = cur.rowcount
+
+        pg_conn.commit()
+        pg_conn.close()
+        if deleted1:
+            print(f"[notify_results_wt] VPS 旧CAND削除(購入重複): {deleted1} 件", flush=True)
+        if deleted2:
+            print(f"[notify_results_wt] VPS 孤立CAND削除: {deleted2} 件 {orphans}", flush=True)
     except Exception as e:
         print(f"[notify_results_wt] VPS 旧CAND削除失敗（継続）: {e}", flush=True)
 
