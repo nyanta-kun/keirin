@@ -22,6 +22,7 @@ cron 設定（crontab -e に追加）:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -228,16 +229,38 @@ def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
 
 
 def _save_prerace_gami(race_key: str, min_odds: float) -> None:
-    """picks_history.prerace_gami を発走前実測値で更新する。"""
+    """picks_history.prerace_gami を発走前実測値で更新する（SQLite + VPS）。
+
+    picks_history の race_key は "{base_key}#7S" / "#7A" / "#7SS" / "#CAND" 等の
+    サフィックス付き形式で保存されているため、LIKE で全サフィックスを一括更新する。
+    """
+    rounded = round(min_odds, 2)
+    pattern = race_key + "#%"
+
+    # SQLite 更新
     try:
         with get_connection() as conn:
             conn.execute(
-                "UPDATE picks_history SET prerace_gami = ? WHERE race_key = ?",
-                (round(min_odds, 2), race_key),
+                "UPDATE picks_history SET prerace_gami = ? WHERE race_key LIKE ?",
+                (rounded, pattern),
             )
             conn.commit()
     except Exception as e:
-        logger.warning("prerace_gami 書き込み失敗 %s: %s", race_key, e)
+        logger.warning("prerace_gami SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    # VPS PostgreSQL 直接更新（KEIRIN_DB_URL 設定時のみ・hourly sync を待たずに即反映）
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE keirin.picks_history SET prerace_gami = %s WHERE race_key LIKE %s",
+                        (rounded, pattern),
+                    )
+        except Exception as e:
+            logger.warning("prerace_gami VPS 書き込み失敗 %s: %s", race_key, e)
 
 
 def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:

@@ -3,6 +3,9 @@
 # collect-wt は finish_order>=1 のレースをスキップするため、終了済みは再取得せず
 # 未終了レースのみ取りに行く（時間が進むほど軽くなる）。
 # 注: wt_odds は最新オッズに更新されるが、朝オッズは wt_odds_snapshot に保全済（別テーブル）。
+# 注: 0:00 実行時は前日最終レース（23時台発走分）も追加取得する。
+#     最終レースが 23:00 以降に発走した場合、23:00 のイントラデイ実行では結果未確定であり
+#     00:00 で TODAY が翌日になって取りこぼされるため、これを防ぐ。
 set -e
 set -o pipefail
 export PATH="/usr/sbin:/sbin:$PATH"
@@ -11,6 +14,24 @@ cd "$(dirname "$0")/.."
 TODAY=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"
 mkdir -p "$LOG_DIR"
+
+# 0:00 実行時: 前日最終レース（23時台発走分）の結果を取得する
+# cron スケジュール `0 0,10-23` で hour=0 の実行が該当する
+CURRENT_HOUR=$(date +%H)
+if [[ "$CURRENT_HOUR" == "00" ]]; then
+  if [[ "$(uname)" == "Darwin" ]]; then
+    PREV=$(date -v-1d +%Y-%m-%d)
+  else
+    PREV=$(date -d "yesterday" +%Y-%m-%d)
+  fi
+  echo "[$(date '+%F %H:%M:%S')] 前日最終レース取得 $PREV (23時台以降発走分の取りこぼし回収)..."
+  .venv/bin/python3 -m src.cli.main collect-wt --date "$PREV" \
+    >> "$LOG_DIR/intraday_${PREV}.log" 2>&1 \
+    || echo "[$(date '+%F %H:%M:%S')] 前日最終レース取得に失敗（継続）"
+  .venv/bin/python3 scripts/notify_results_wt.py "$PREV" --silent \
+    >> "$LOG_DIR/intraday_${PREV}.log" 2>&1 \
+    || echo "[$(date '+%F %H:%M:%S')] 前日採点に失敗（継続）"
+fi
 
 echo "[$(date '+%F %H:%M:%S')] 日中 当日結果取得 $TODAY ..."
 .venv/bin/python3 -m src.cli.main collect-wt --date "$TODAY" \

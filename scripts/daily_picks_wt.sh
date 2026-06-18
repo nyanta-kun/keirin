@@ -23,7 +23,8 @@ echo "[$(date '+%H:%M:%S')] === winticket日次処理開始 $TODAY ==="
 # --- 1. 前日成績（winticketで結果再収集→採点通知）---
 # 前日処理は当日予想の前提ではないため、失敗しても継続（pipefailで失敗は可視化）。
 echo "[$(date '+%H:%M:%S')] 前日($YESTERDAY) winticket結果再収集..."
-.venv/bin/python3 -m src.cli.main collect-wt --date "$YESTERDAY" \
+# --full-scan: midnight の前日取得で拾いきれなかった分（Mac スリープ等）を確実に回収するため全会場走査。
+.venv/bin/python3 -m src.cli.main collect-wt --date "$YESTERDAY" --full-scan \
   2>&1 | tee -a "$LOG_DIR/collect_wt_${YESTERDAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 前日再収集に失敗（継続）"
 
