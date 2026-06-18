@@ -159,7 +159,8 @@ def _query_stats(like):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
-            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_A') AND race_date LIKE ?", (like,)).fetchone()
+            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_A') "
+            "AND NOT COALESCE(miwokuri, 0) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
@@ -168,7 +169,8 @@ def _query_stats_rank(like, rank):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
-            "FROM picks_history WHERE route='wt' AND rank=? AND race_date LIKE ?", (rank, like)).fetchone()
+            "FROM picks_history WHERE route='wt' AND rank=? "
+            "AND NOT COALESCE(miwokuri, 0) AND race_date LIKE ?", (rank, like)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
