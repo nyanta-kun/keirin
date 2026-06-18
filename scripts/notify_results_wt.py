@@ -100,11 +100,15 @@ def _void_by_dns(p1, p2, thirds, runners, is_wide=False):
     return (not valid), valid
 
 
-def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn) -> int:
+def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: dict | None = None) -> int:
     """candidates.json にあり購入されなかったレースを miwokuri=True で書き込む。
 
+    pm が渡された場合は三連複払戻を採点して payout/hit も記録する
+    （不的中の場合は実際の優勝三連複払戻を参考値として保存する）。
     purchased_base_keys: 購入済み race_key の "#" 前の base 部分の集合。
     """
+    if pm is None:
+        pm = {}
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     candidates: list[dict] = []
     for fname in (
@@ -134,12 +138,32 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn) -> in
         pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
         n_combos = len(thirds)
         store_key = f"{rk}#CAND"
+
+        # 三連複採点（finish_order が揃っていれば採点）
+        hit_val, pay_val = 0, 0
+        if p1 is not None and p2 is not None and thirds:
+            rows = conn.execute(
+                "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
+                "ORDER BY finish_order", (rk,)
+            ).fetchall()
+            order_list = [int(r[0]) for r in rows]
+            if len(order_list) >= 3:
+                top3_cand = frozenset(order_list[:3])
+                for t in thirds:
+                    if frozenset((p1, p2, t)) == top3_cand:
+                        pay_val = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0)
+                        hit_val = 1
+                        break
+                if not hit_val:
+                    # 不的中: 実際の優勝三連複払戻を参考値として保存
+                    pay_val = pm.get(rk, {}).get(("trio", top3_cand), 0)
+
         try:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,0,0,0,'wt',TRUE)",
-                (target_date, store_key, rank, pred, n_combos),
+                "VALUES (?,?,?,?,?,?,?,0,'wt',TRUE)",
+                (target_date, store_key, rank, pred, n_combos, hit_val, pay_val),
             )
             count += 1
         except Exception as e:
@@ -214,7 +238,20 @@ def _main_inner(date, _db_url):
         start_map = dict(conn.execute(
             "SELECT race_key, start_at FROM wt_races WHERE race_date=?", (target_date,)).fetchall())
 
-    keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code})
+    # miwokuri採点用に candidates.json のレース分も先読みする
+    _cand_keys_extra: set[str] = set()
+    _picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    for _fname in (f"wave_picks_wt_{target_date}_candidates.json", f"wave_picks_wt_{target_date}_night_candidates.json"):
+        _p = _picks_dir / _fname
+        if _p.exists():
+            try:
+                for _cand in json.loads(_p.read_text(encoding="utf-8")):
+                    _rk = _cand.get("race_key")
+                    if _rk:
+                        _cand_keys_extra.add(_rk)
+            except Exception:
+                pass
+    keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code} | _cand_keys_extra)
     pm = _load_payouts_wt(keys)
 
     results_7plus_ss, results_7plus_s, results_7plus_a, history = [], [], [], []
@@ -251,6 +288,9 @@ def _main_inner(date, _db_url):
             for t in thirds:
                 if frozenset((p1, p2, t)) == top3:
                     pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0); hit = True; break
+            # 不的中: 実際の優勝三連複払戻を参考値として記録
+            if not hit:
+                pay = pm.get(rk, {}).get(("trio", top3), 0)
             bet = n_combos * 100
             actual = "-".join(map(str, order[:3]))
             stt = start_map.get(rk)
@@ -296,7 +336,7 @@ def _main_inner(date, _db_url):
                 "VALUES (?,?,?,?,?,?,?,?,'wt',?)", history)
 
         purchased_base_keys = {h[1].split("#")[0] for h in history}
-        n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn)
+        n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)
         if n_miwokuri:
             print(f"[notify_results_wt] {target_date} 見送り {n_miwokuri} 件書き込み", flush=True)
 

@@ -92,9 +92,14 @@ def migrate_table(
     sample = sqlite_conn.execute(f"SELECT * FROM {table} LIMIT 1").fetchone()
     sqlite_cols = list(sample.keys())
 
+    # picks_history の id は VPS 側の SERIAL に任せるため除外
+    # (SQLite と VPS で id 採番が独立しており、conflict_cols=race_key なので id は不要)
+    _exclude_cols: dict[str, set[str]] = {"picks_history": {"id"}}
+    exclude = _exclude_cols.get(table, set())
+
     # PostgreSQL に存在するカラムのみ使用
     pg_cols = get_pg_columns(pg_conn, table)
-    cols = [c for c in sqlite_cols if c in pg_cols]
+    cols = [c for c in sqlite_cols if c in pg_cols and c not in exclude]
     if len(cols) < len(sqlite_cols):
         skipped = set(sqlite_cols) - set(cols)
         print(f"  {table}: PG に存在しないカラムをスキップ: {skipped}", flush=True)
