@@ -1,6 +1,20 @@
-# セッション引継ぎメモ（最終更新 2026-06-17）
+# セッション引継ぎメモ（最終更新 2026-06-18）
 
 コンテキストリセット後にここから再開すること。
+
+---
+
+## ★現在の状態サマリ（2026-06-18 時点）
+
+### ★ バグ修正完了（2026-06-18）
+
+| バグ | 原因 | 修正 |
+|---|---|---|
+| **miwokuri=FALSE バグ** | `get_connection()` が `KEIRIN_DB_URL` 設定時に PG へ直接書き込み → 後続の migrate がSQLite（miwokuri=TRUE のまま）で上書き | `notify_results_wt.py` `main()` 冒頭で `KEIRIN_DB_URL` を pop し `get_connection()` を常に SQLite に向ける。`_sync_vps(db_url)` を明示引数化 |
+| **PGデータ不正（#CAND miwokuri=FALSE）** | 上記バグで 2026-06-17(50件)・2026-06-18(35件) の #CAND が miwokuri=FALSE | PG: `UPDATE keirin.picks_history SET miwokuri=TRUE WHERE race_key LIKE '%#CAND'` で修正済み |
+| **Discord レース数水増し** | `_query_stats` / `_query_stats_rank` が miwokuri フィルタなし → 見送り行がCOUNT(\*)に混入 | `AND NOT COALESCE(miwokuri, 0)` を両関数に追加 |
+
+**ROI計算バグ調査結果**: kiseki WEB `_aggregate()`・`backtest_wt.py`・`save_model_eval.py` 全箇所で ROI = `SUM(payout WHERE hit=1) / SUM(bet_amount ALL)` と正しく実装されていることを確認。「的中レースの投資のみで割る」バグは現時点の全コードには存在しない。
 
 ---
 
