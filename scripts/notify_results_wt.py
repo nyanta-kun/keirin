@@ -8,6 +8,8 @@ wave_picks_wt_{date}.txt の公開買い目を、winticket の確定結果(wt_en
 また candidates.json にあり購入されなかった候補レースを miwokuri=True で保存する。
 """
 import json
+import os
+import subprocess
 import sys
 import re
 from pathlib import Path
@@ -17,6 +19,27 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
+
+
+def _sync_vps() -> None:
+    """picks_history.payout 書き込み後に VPS PostgreSQL へ即時同期する。
+    KEIRIN_DB_URL 未設定時はスキップ（エラー非致命）。
+    wt_odds_snapshot は大容量のためスキップ。
+    """
+    db_url = os.environ.get("KEIRIN_DB_URL", "")
+    if not db_url:
+        return
+    script = Path(__file__).parent / "migrate_sqlite_to_pg.py"
+    try:
+        subprocess.run(
+            [sys.executable, str(script), "--skip", "wt_odds_snapshot"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print("[notify_results_wt] VPS 同期完了", flush=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[notify_results_wt] VPS 同期失敗（継続）: {e.stderr[:200]}", flush=True)
 
 
 def _parse_picks_full(target_date: str) -> dict:
@@ -312,6 +335,8 @@ def main():
     print(f"[notify_results_wt] {target_date} 7+車SS {len(results_7plus_ss)}R 的中{p7ssh} / "
           f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 7+車A {len(results_7plus_a)}R 的中{p7ah} / "
           f"欠車無効{skipped_dns}件")
+
+    _sync_vps()
 
 
 if __name__ == "__main__":
