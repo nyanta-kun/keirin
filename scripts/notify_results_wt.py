@@ -21,12 +21,11 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
 
 
-def _sync_vps() -> None:
+def _sync_vps(db_url: str) -> None:
     """picks_history.payout 書き込み後に VPS PostgreSQL へ即時同期する。
-    KEIRIN_DB_URL 未設定時はスキップ（エラー非致命）。
+    db_url 未設定時はスキップ（エラー非致命）。
     wt_odds_snapshot は大容量のためスキップ。
     """
-    db_url = os.environ.get("KEIRIN_DB_URL", "")
     if not db_url:
         return
     script = Path(__file__).parent / "migrate_sqlite_to_pg.py"
@@ -36,6 +35,7 @@ def _sync_vps() -> None:
             check=True,
             capture_output=True,
             text=True,
+            env={**os.environ, "KEIRIN_DB_URL": db_url},
         )
         print("[notify_results_wt] VPS 同期完了", flush=True)
     except subprocess.CalledProcessError as e:
@@ -174,6 +174,17 @@ def _query_stats_rank(like, rank):
 
 def main():
     from datetime import date
+    # 採点は常にローカル SQLite へ書き込む。KEIRIN_DB_URL は _sync_vps で使用する。
+    # get_connection() が KEIRIN_DB_URL を見てPGへ直接書き込むのを防ぐため、事前に退避する。
+    _db_url = os.environ.pop("KEIRIN_DB_URL", "")
+    try:
+        _main_inner(date, _db_url)
+    finally:
+        if _db_url:
+            os.environ["KEIRIN_DB_URL"] = _db_url
+
+
+def _main_inner(date, _db_url):
     # 位置引数=日付 / --silent=Discord抑止(picks_history修復のみ・バックフィル用)
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target_date = pos[0] if pos else date.today().strftime("%Y-%m-%d")
@@ -290,6 +301,7 @@ def main():
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_a
     if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
+        _sync_vps(_db_url)
         return
 
     p7b = p7ssb + p7sb + p7ab
@@ -336,7 +348,7 @@ def main():
           f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 7+車A {len(results_7plus_a)}R 的中{p7ah} / "
           f"欠車無効{skipped_dns}件")
 
-    _sync_vps()
+    _sync_vps(_db_url)
 
 
 if __name__ == "__main__":
