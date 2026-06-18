@@ -1,9 +1,242 @@
+import os
+import re
 import sqlite3
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 
 
 DB_PATH = Path(__file__).parent.parent / "data" / "keirin.db"
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 互換レイヤー
+# KEIRIN_DB_URL 環境変数が設定されている場合は psycopg2 で VPS に接続する。
+# 例: postgresql://user:pass@vps-host:5432/keiba
+# ---------------------------------------------------------------------------
+
+# INSERT OR REPLACE / INSERT OR IGNORE の ON CONFLICT 先
+_PG_CONFLICT_COLS: dict[str, tuple[str, ...]] = {
+    "wt_races":         ("race_key",),
+    "wt_entries":       ("race_key", "frame_no"),
+    "wt_odds":          ("race_key", "bet_type", "combination"),
+    "wt_odds_snapshot": ("race_key", "bet_type", "combination", "snapshot_type"),
+    "wt_weather":       ("venue_id", "dt_hour"),
+    "venue_info":       ("venue_code",),
+    "picks_history":    ("race_key",),
+    "races":            ("race_key",),
+    "odds":             ("race_key", "bet_type", "combination"),
+    "race_entries":     ("race_key", "frame_no"),
+    "race_results":     ("race_key", "player_id"),
+    "venues":           ("code",),
+    "players":          ("player_id",),
+    "model_evaluation": ("model_name", "period_type"),
+}
+
+# スキップする SQLite 固有ステートメントのパターン
+_PG_SKIP_RE = re.compile(
+    r"^\s*(?:PRAGMA\b|CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\b"
+    r"|ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\b)",
+    re.IGNORECASE,
+)
+
+_INSERT_OR_RE = re.compile(
+    r"INSERT\s+OR\s+(REPLACE|IGNORE)\s+INTO\s+(\w+)\s*\(([^)]+)\)(.*)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, object]:
+    """SQLite SQL を PostgreSQL 用に変換する。スキップすべき場合は (None, None) を返す。"""
+    sql = sql.strip()
+    if _PG_SKIP_RE.match(sql):
+        return None, None
+
+    m = _INSERT_OR_RE.match(sql)
+    if m:
+        action = m.group(1).upper()
+        table = m.group(2).lower()
+        cols_str = m.group(3)
+        rest = m.group(4).strip()
+
+        cols = [c.strip() for c in cols_str.split(",")]
+        # ? → %s, :name → %(name)s
+        rest = re.sub(r":(\w+)", r"%(\1)s", rest)
+        rest = rest.replace("?", "%s")
+        # datetime('now') → NOW()
+        rest = re.sub(r"datetime\('now'\)", "NOW()", rest, flags=re.IGNORECASE)
+
+        if action == "IGNORE":
+            sql = f"INSERT INTO keirin.{table} ({', '.join(cols)}) {rest} ON CONFLICT DO NOTHING"
+        else:
+            conflict = _PG_CONFLICT_COLS.get(table)
+            if not conflict:
+                sql = f"INSERT INTO keirin.{table} ({', '.join(cols)}) {rest}"
+            else:
+                lc_conflict = {c.lower() for c in conflict}
+                non_conf = [c for c in cols if c.lower() not in lc_conflict]
+                if non_conf:
+                    upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in non_conf)
+                    sql = (
+                        f"INSERT INTO keirin.{table} ({', '.join(cols)}) {rest} "
+                        f"ON CONFLICT ({', '.join(conflict)}) DO UPDATE SET {upd}"
+                    )
+                else:
+                    sql = (
+                        f"INSERT INTO keirin.{table} ({', '.join(cols)}) {rest} "
+                        f"ON CONFLICT ({', '.join(conflict)}) DO NOTHING"
+                    )
+        return sql, params
+
+    # 通常の SQL: keirin スキーマ付与 + パラメータ変換
+    # テーブル名に keirin. プレフィックスを付ける（既についている場合はスキップ）
+    sql = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds|wt_odds_snapshot"
+                 r"|wt_weather|venue_info|picks_history)\b",
+                 r"keirin.\1", sql, flags=re.IGNORECASE)
+    sql = re.sub(r":(\w+)", r"%(\1)s", sql)
+    sql = sql.replace("?", "%s")
+    sql = re.sub(r"datetime\('now'\)", "NOW()", sql, flags=re.IGNORECASE)
+    return sql, params
+
+
+class _PgRow:
+    """psycopg2 RealDictRow を sqlite3.Row 互換にラップする。"""
+
+    def __init__(self, mapping: dict, keys: list[str]) -> None:
+        self._m = mapping
+        self._k = keys
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._m[self._k[key]]
+        return self._m[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._m
+
+    def keys(self):
+        return self._k
+
+
+class _PgCursor:
+    """psycopg2 カーソルを sqlite3 カーソル互換にラップする。"""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def _rows(self, raw_rows):
+        if self._cur is None or self._cur.description is None:
+            return []
+        keys = [d[0] for d in self._cur.description]
+        return [_PgRow(dict(r), keys) for r in raw_rows]
+
+    def fetchall(self):
+        if self._cur is None:
+            return []
+        return self._rows(self._cur.fetchall())
+
+    def fetchone(self):
+        if self._cur is None:
+            return None
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        keys = [d[0] for d in self._cur.description]
+        return _PgRow(dict(row), keys)
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class _PgRawCursor:
+    """pandas.read_sql_query 向け DBAPI2 互換カーソル（クエリ変換付き）。"""
+
+    def __init__(self, raw_cur) -> None:
+        self._cur = raw_cur
+
+    def execute(self, sql: str, params=None):
+        translated, translated_params = _pg_translate(sql, params or ())
+        if translated is not None:
+            self._cur.execute(translated, translated_params or None)
+        return self
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def fetchmany(self, size=None):
+        return self._cur.fetchmany(size) if size is not None else self._cur.fetchmany()
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    @property
+    def description(self):
+        return self._cur.description
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def close(self):
+        self._cur.close()
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class _PgConn:
+    """psycopg2 接続を sqlite3.Connection 互換にラップする。"""
+
+    def __init__(self, conn) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, params=()) -> _PgCursor:
+        translated, translated_params = _pg_translate(sql, params)
+        if translated is None:
+            return _PgCursor(None)
+        cur = self._conn.cursor()
+        cur.execute(translated, translated_params or None)
+        return _PgCursor(cur)
+
+    def executemany(self, sql: str, params_list) -> None:
+        translated, _ = _pg_translate(sql, ())
+        if translated is None or not params_list:
+            return
+        cur = self._conn.cursor()
+        cur.executemany(translated, params_list)
+
+    def executescript(self, sql: str) -> None:
+        for stmt in sql.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                try:
+                    self.execute(stmt)
+                    self._conn.commit()
+                except Exception:
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def cursor(self) -> _PgRawCursor:
+        """pandas.read_sql_query など DBAPI2 直アクセス向け。"""
+        return _PgRawCursor(self._conn.cursor())
+
+    # sqlite3 互換: row_factory 属性は無視
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, _):
+        pass
 
 VENUE_STATIC = {
     "11": ("函館", 333, 0, "北海道"),
@@ -192,9 +425,14 @@ def migrate_db():
                 n_combos INTEGER,
                 hit INTEGER DEFAULT 0,
                 payout INTEGER DEFAULT 0,
-                bet_amount INTEGER
+                bet_amount INTEGER,
+                prerace_gami REAL
             )
         """)
+        try:
+            conn.execute("ALTER TABLE picks_history ADD COLUMN prerace_gami REAL")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(race_date)"
         )
@@ -315,20 +553,49 @@ def migrate_db():
 
 @contextmanager
 def get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")   # マルチスレッド書き込みを効率化
-    conn.execute("PRAGMA synchronous = NORMAL") # WAL時に安全かつ高速
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    """DB 接続を返す。
+
+    KEIRIN_DB_URL 環境変数が設定されている場合は VPS PostgreSQL に接続する。
+    未設定の場合は従来どおりローカル SQLite を使用する。
+
+    例:
+        export KEIRIN_DB_URL="postgresql://keirin_app:pass@vps-host:5432/keiba"
+    """
+    db_url = os.environ.get("KEIRIN_DB_URL", "")
+    if db_url:
+        import psycopg2
+        import psycopg2.extras
+
+        raw = psycopg2.connect(
+            db_url,
+            cursor_factory=psycopg2.extras.RealDictCursor,
+            connect_timeout=10,
+        )
+        raw.autocommit = False
+        conn = _PgConn(raw)
+        try:
+            yield conn
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        raw = sqlite3.connect(str(DB_PATH), timeout=30)
+        raw.row_factory = sqlite3.Row
+        raw.execute("PRAGMA journal_mode = WAL")
+        raw.execute("PRAGMA synchronous = NORMAL")
+        raw.execute("PRAGMA foreign_keys = ON")
+        try:
+            yield raw
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            raw.close()
 
 
 if __name__ == "__main__":

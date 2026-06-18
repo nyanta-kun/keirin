@@ -1,0 +1,15 @@
+# ============================================================
+# keirin - money-flow 素材収集（オッズスナップショット多時点化）
+# G03: snapshot_intraday_odds_wt.py
+#
+# 実行時刻から snapshot_type を自動決定 (h{HH})。
+# 当日の未発走レースのみ取得（発走済み・中止はスキップ）。
+# INSERT OR REPLACE のため再実行は安全（同時間帯の最新値で更新）。
+#
+# 追加先: 既存の keirin セクション末尾
+# (Terminal.app から `crontab -e` で手動適用。リモートからの書込み禁止)
+# ============================================================
+
+# keirin - 日中オッズスナップショット (10,12,14,18,20時)
+# 毎日: 10:00, 12:00, 14:00, 18:00, 20:00 に当日未発走レースのオッズを取得
+0 10,12,14,18,20 * * * cd /Users/ysuzuki/GitHub/keirin && PYTHONPATH=. .venv/bin/python3 scripts/snapshot_intraday_odds_wt.py >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1

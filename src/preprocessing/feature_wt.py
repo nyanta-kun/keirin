@@ -3,6 +3,7 @@ winticket 特徴量エンジニアリング
 
 wt_entries + wt_races + venue_info から学習用データセットを構築する。
 """
+import os
 import pandas as pd
 import numpy as np
 from ..database import get_connection
@@ -89,8 +90,19 @@ def load_raw_data_wt(min_date: str = "2025-01-01", max_date: str | None = None) 
         ORDER BY r.race_date, e.race_key, e.frame_no
     """
 
-    with get_connection() as conn:
-        df = pd.read_sql_query(query, conn, params=params)
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        from sqlalchemy import create_engine, text as sa_text
+        engine = create_engine(db_url)
+        pg_query = query.replace("wt_entries", "keirin.wt_entries") \
+                        .replace("wt_races", "keirin.wt_races") \
+                        .replace("venue_info", "keirin.venue_info")
+        with engine.connect() as sa_conn:
+            df = pd.read_sql_query(sa_text(pg_query), sa_conn, params=params)
+        engine.dispose()
+    else:
+        with get_connection() as conn:
+            df = pd.read_sql_query(query, conn, params=params)
 
     return df
 
@@ -125,9 +137,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     med_term = df["term"].median()
     df["period_norm"] = df["term"].fillna(med_term if not pd.isna(med_term) else 100) / 100.0
 
-    # グレードエンコード
-    grade_map = {"GP": 7, "G1": 6, "G2": 5, "G3": 4, "F1": 3, "F2": 2}
-    df["grade_enc"] = df["grade"].map(grade_map).fillna(1).astype(int)
+    # グレードエンコード（wt 実際の値: S級/A級/L級/SA混合）
+    grade_map = {"S級": 3, "SA混合": 3, "A級": 2, "L級": 1}
+    df["grade_enc"] = df["grade"].map(grade_map).fillna(2).astype(int)
 
     # 枠番特徴
     df["is_inner"] = (df["frame_no"] <= 3).astype(int)
@@ -227,12 +239,23 @@ def add_rolling_features_wt(df: pd.DataFrame) -> pd.DataFrame:
 
     df["_dt"] = pd.to_datetime(df["race_date"])
 
-    with get_connection() as conn:
-        H = pd.read_sql_query(
-            "SELECT e.race_key, e.player_id, e.finish_order, r.race_date, r.venue_id "
-            "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key "
-            "WHERE e.finish_order >= 1", conn,
-        )
+    rolling_sql = (
+        "SELECT e.race_key, e.player_id, e.finish_order, r.race_date, r.venue_id "
+        "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key "
+        "WHERE e.finish_order >= 1"
+    )
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        from sqlalchemy import create_engine, text as sa_text
+        engine = create_engine(db_url)
+        pg_sql = rolling_sql.replace("wt_entries", "keirin.wt_entries") \
+                             .replace("wt_races", "keirin.wt_races")
+        with engine.connect() as sa_conn:
+            H = pd.read_sql_query(sa_text(pg_sql), sa_conn)
+        engine.dispose()
+    else:
+        with get_connection() as conn:
+            H = pd.read_sql_query(rolling_sql, conn)
     H["_dt"] = pd.to_datetime(H["race_date"])
     H["win"]  = (H["finish_order"] == 1).astype(float)
     H["top3"] = H["finish_order"].between(1, 3).astype(float)

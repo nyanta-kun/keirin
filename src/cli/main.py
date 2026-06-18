@@ -13,6 +13,27 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.database import init_db
 from src.scraper.pipeline import CollectionPipeline, setup_logging
 
+# JKA venue_code → 場名（venue_info DBが取得できない場合のフォールバック）
+_VENUE_NAMES: dict[str, str] = {
+    "11": "函館",   "12": "青森",   "13": "いわき平", "21": "弥彦",
+    "22": "前橋",   "23": "取手",   "24": "宇都宮",  "25": "大宮",
+    "26": "西武園",  "27": "京王閣",  "28": "立川",    "31": "松戸",
+    "32": "千葉",   "34": "川崎",   "35": "平塚",    "36": "小田原",
+    "37": "伊東",   "38": "静岡",   "42": "名古屋",  "43": "岐阜",
+    "44": "大垣",   "45": "豊橋",   "46": "富山",    "47": "松阪",
+    "48": "四日市",  "51": "福井",   "53": "奈良",    "54": "向日町",
+    "55": "和歌山",  "56": "岸和田",  "61": "玉野",    "62": "広島",
+    "63": "防府",   "71": "高松",   "73": "小松島",  "74": "高知",
+    "75": "松山",   "81": "小倉",   "83": "久留米",  "84": "武雄",
+    "85": "佐世保",  "86": "別府",   "87": "熊本",
+}
+
+
+def _venue_name(venue_map: dict, venue_id) -> str:
+    """venue_map から場名を取得。なければ _VENUE_NAMES フォールバック、それもなければ番号。"""
+    vid = str(venue_id)
+    return venue_map.get(vid) or _VENUE_NAMES.get(vid, vid)
+
 
 @click.group()
 @click.option("--debug", is_flag=True, help="デバッグログを表示")
@@ -864,17 +885,20 @@ def wave_picks(target_date, output_path, model_type):
 @cli.command("collect-wt")
 @click.option("--date", "target_date", default=None, help="収集日 (YYYY-MM-DD), 省略時は昨日")
 @click.option("--dry-run", is_flag=True, help="DBに保存しない（動作確認用）")
-def collect_wt(target_date: str | None, dry_run: bool):
+@click.option("--full-scan", is_flag=True,
+              help="全VENUE_SLUGS会場を走査して開催を検出（初日開催の取りこぼし防止）。"
+                   "既収集日でも全会場を再探索。当日予想収集など漏れが許されない場面で使用")
+def collect_wt(target_date: str | None, dry_run: bool, full_scan: bool):
     """winticket からレースデータ（+オッズ）を収集してDBに保存"""
     from src.scraper.pipeline_wt import WinticketPipeline
 
     if target_date is None:
         target_date = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    click.echo(f"[wt] Collecting {target_date} {'(dry-run)' if dry_run else ''}")
+    click.echo(f"[wt] Collecting {target_date} {'(dry-run)' if dry_run else ''}{' (full-scan)' if full_scan else ''}")
     init_db()
     pipeline = WinticketPipeline()
-    stats = pipeline.collect_date(target_date, dry_run=dry_run)
+    stats = pipeline.collect_date(target_date, dry_run=dry_run, full_scan=full_scan)
     click.echo(f"[wt] Complete: venues={stats['venues']}, races={stats['races']}, "
                f"results={stats['results']}, errors={stats['errors']}")
 
@@ -1096,8 +1120,44 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
 @click.option("--stake-tilt/--no-stake-tilt", "stake_tilt", default=False,
               help="波乱スコア(top3_sum)で賭け金を傾斜配分（Q1_loose=2倍/Q2=1倍/Q3,Q4=見送り）。"
                    "波乱帯に資金を厚く本命堅は見送り。OOS検証でROI改善（最終オッズ上限値）")
+@click.option("--ss-trifecta-box/--no-ss-trifecta-box", "ss_trifecta_box", default=False,
+              help="SS層の3連単を pred1,pred2 1-2着BOX(6点) に拡張（pred2→pred1 の順も買う）。"
+                   "OOS検証(docs/analysis/10)で SS的中19→40%・★頑健。"
+                   "既定off=本番不変（3点）・前向き検証用。最終オッズ上限値＋高配当帯ドリフト要注意")
+@click.option("--wide/--no-wide", "wide", default=False,
+              help="ワイド1点(指数1-2位=W12)を独立プロダクトとして追加出力。≤6車全件にW12を1点。"
+                   "OOS検証(docs/analysis/12): 的中はW12が最良(全59%)・的中率↔オッズ1:1逆連動。"
+                   "既定off=本番不変・前向き検証用。--wide-min-odds と併用推奨")
+@click.option("--wide-min-odds", "wide_min_odds", default=0.0, show_default=True, type=float,
+              help="ワイド1点の足切り: W12の朝オッズ<この倍率なら出力しない。0=無効。"
+                   "推奨2.5（足切り後 的中50-53%/ROI220-271%・最終オッズ上限値・docs/analysis/12）")
+@click.option("--start-from-hour", "start_from_hour", default=None, type=int,
+              help="JST発走時がこの時(h)以降のレースのみ推奨対象（夜の部の再生成用）。例: 19")
+@click.option("--start-to-hour", "start_to_hour", default=None, type=int,
+              help="JST発走時がこの時(h)未満のレースのみ推奨対象（朝の部=昼〜夕用）。例: 19")
+@click.option("--min-gap12", "min_gap12", default=0.07, show_default=True, type=float,
+              help="A層の最低 gap12（pred1-pred2）閾値。この値未満はスキップ。"
+                   "0.07: doc46 で最安定フィルタ（VAL 9/12ヶ月黒字・HOLD 196%）")
+@click.option("--grade-split-gap12/--no-grade-split-gap12", "grade_split_gap12", default=False,
+              help="grade別に gap12 閾値を変える（doc46・2026-06-16）。"
+                   "S級: 0.05（VAL 198%・HOLDサンプル少）/ A級: 0.08（HOLD 276%）。"
+                   "デフォルト off＝--min-gap12 を全 grade に適用。")
+@click.option("--include-7plus/--no-include-7plus", "include_7plus", default=True,
+              help="7車以上レースを対象に追加（gami≥5.0倍+gap12≥min_gap12）。"
+                   "doc48 Phase2通過: VAL 129.9%★(3143R)/HOLD 138.3%★(1381R)/12.93R/日。"
+                   "既定on＝7+車専用本番モード。")
+@click.option("--7plus-s-gap12", "seven_plus_s_gap12", default=0.10, show_default=True, type=float,
+              help="7+車 Sランク閾値: gap12がこの値以上をSランク、未満をAランク（default: 0.10=HOLD143%）")
+@click.option("--min-combo-odds", "min_combo_odds", default=0.0, show_default=True,
+              type=float,
+              help="個別コンボ（各3連複目）の最低オッズ。この値未満の目は個別スキップ。"
+                   "0目になった場合はレーススキップ。0=無効。"
+                   "推奨10.0: doc50 O10戦略 VAL 112.2%★(58R)/HOLD 100.0%★(19R)。"
+                   "pred5削除は逆効果（ROI 111%★）・5〜10倍帯が最低収益(19%)のため足切り")
 def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate,
-                  gami_skip_odds, b_rank_odds, stake_tilt):
+                  gami_skip_odds, b_rank_odds, stake_tilt, ss_trifecta_box, wide, wide_min_odds,
+                  start_from_hour, start_to_hour, min_gap12, grade_split_gap12, include_7plus,
+                  seven_plus_s_gap12, min_combo_odds):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1165,6 +1225,45 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                     min_odds = v
         return min_odds
 
+    def _find_wide_odds(odds: dict, a: int, b: int) -> float | None:
+        """ワイド(quinellaPlace)で順不同ペア {a,b} のオッズを返す"""
+        wlist = odds.get("quinellaPlace", [])
+        if not wlist:
+            return None
+        target = {str(a), str(b)}
+        for item in wlist:
+            parts = set(re.split(r"[-=]", item["combination"]))
+            if parts == target:
+                return item["odds_value"]
+        return None
+
+    def _market_fav_frame(odds: dict) -> int | None:
+        """trio盤面から市場の本命(implied P(top3)最大の車)を返す。盤面不足はNone。
+
+        q_i = Σ_{iを含むtrio組} 1/odds（placeholder≥9000は除外）。
+        モデル1位と市場本命の不一致(fav_mismatch)はOOSでROI 1168/576%の頑健レバー
+        （docs/analysis/13）。タグとして記録しlive前向き検証する（挙動は変えない）。
+        """
+        q: dict[int, float] = {}
+        n_combo = 0
+        for item in odds.get("trio", []):
+            ov = item["odds_value"]
+            if ov is None or ov <= 0 or ov >= 9000:
+                continue
+            parts = re.split(r"[-=]", str(item["combination"]))
+            try:
+                frs = [int(x) for x in parts]
+            except ValueError:
+                continue
+            if len(frs) != 3:
+                continue
+            n_combo += 1
+            for fno in frs:
+                q[fno] = q.get(fno, 0.0) + 1.0 / ov
+        if n_combo < 4 or not q:
+            return None
+        return max(q, key=lambda k: q[k])
+
     def _find_trifecta_odds(odds: dict, pivot1: int, pivot2: int, thirds: list[int]) -> float | None:
         """3連単オッズの中で pivot1→pivot2→{thirds} の最小値を返す"""
         trifecta_list = odds.get("trifecta", [])
@@ -1221,11 +1320,30 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     skipped_odds = 0
     skipped_gami = 0
     skipped_tilt = 0
+    skipped_combo_odds = 0
+
+    def _hour_of(g):
+        """レースのJST発走時(h)。不明は None。"""
+        s = g["start_time"].iloc[0]
+        try:
+            return int(str(s).split(":")[0])
+        except (ValueError, IndexError):
+            return None
+
+    def _hour_skip(hh):
+        """2段階生成のJST時刻フィルタ。Trueなら対象外（hh不明は朝の部に含める=to側のみ判定）。"""
+        if start_to_hour is not None and hh is not None and hh >= start_to_hour:
+            return True
+        if start_from_hour is not None and (hh is None or hh < start_from_hour):
+            return True
+        return False
 
     for race_key, grp in df.groupby("race_key"):
         grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
         n_riders = len(grp_sorted)
         if n_riders > 6:
+            continue
+        if _hour_skip(_hour_of(grp_sorted)):
             continue
 
         p = grp_sorted["pred_prob"].tolist()
@@ -1234,7 +1352,13 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         gap12 = top1 - top2_prob
         ratio = top1 / (3 / n_riders)
 
-        if gap12 < 0.06:
+        # grade 別 gap12 閾値（doc46: S級=0.05 / A級=0.08 が最適・grade_split_gap12 有効時）
+        if grade_split_gap12 and "grade" in grp_sorted.columns:
+            _grade = grp_sorted["grade"].iloc[0]
+            _eff_min = 0.05 if _grade in ("S級", "SA混合") else max(0.08, min_gap12)
+        else:
+            _eff_min = min_gap12
+        if gap12 < _eff_min:
             continue
 
         # 波乱/非本命シグナル（確定前・朝算出可）
@@ -1245,7 +1369,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             continue
 
         venue_id = grp_sorted["venue_id"].iloc[0]
-        venue_name = venue_map.get(str(venue_id), str(venue_id))
+        venue_name = _venue_name(venue_map, venue_id)
         race_no = int(grp_sorted["race_no"].iloc[0])
         start_time = grp_sorted["start_time"].iloc[0]
 
@@ -1256,6 +1380,13 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
         # オッズ取得
         odds = _load_odds(race_key)
+
+        # 本命人物の不一致タグ（モデル1位 vs 市場本命・朝オッズ基準・タグのみ＝挙動不変）。
+        # タグは補助情報＝計算失敗が予想生成を止めないようフェイルセーフ。
+        try:
+            mkt_fav = _market_fav_frame(odds)
+        except Exception:
+            mkt_fav = None
 
         # ガミ判定: 3点それぞれの朝オッズの最小値で3段階に振り分ける。
         #   min < gami_skip_odds      → 見送り（鉄板=低価値）
@@ -1270,7 +1401,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                     leg_odds.append(_find_trifecta_odds(odds, pivot1, pivot2, [tdr]))
                 else:
                     leg_odds.append(_find_trio_odds(odds, [pivot1, pivot2, tdr]))
-            known = [o for o in leg_odds if o is not None]
+            # placeholder(9999.9=未確定)は除外（高オッズ誤判定→ガミ降格漏れを防ぐ）。
+            known = [o for o in leg_odds if o is not None and o < 9000]
             min_leg = min(known) if known else None
             if min_leg is not None:
                 if gami_skip_odds > 0 and min_leg < gami_skip_odds:
@@ -1279,14 +1411,36 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 if b_rank_odds > 0 and min_leg < b_rank_odds:
                     gami_zone = "B"
 
-        # ステーク傾斜（波乱スコア・opt-in）: 3点300円 × 帯別倍率。倍率0=見送り。
-        stake = 300
+        # コンボオッズ個別足切り（O10相当: doc50）
+        # 各3連複目(pred3/pred4/pred5)の個別オッズを確認し、min_combo_odds未満の目をスキップ。
+        # 0目になった場合はレースごとスキップ。0=無効（デフォルト=既存動作）。
+        if min_combo_odds > 0:
+            filtered_thirds = []
+            for tdr in thirds:
+                if is_ss:
+                    _co = _find_trifecta_odds(odds, pivot1, pivot2, [tdr])
+                else:
+                    _co = _find_trio_odds(odds, [pivot1, pivot2, tdr])
+                if _co is not None and _co < 9000 and _co >= min_combo_odds:
+                    filtered_thirds.append(tdr)
+            if not filtered_thirds:
+                skipped_combo_odds += 1
+                continue
+            thirds = filtered_thirds
+            thirds_str = ",".join(str(t) for t in thirds)
+
+        # SS 1-2着BOX(opt-in): pred1,pred2 を1-2着両順で買う＝点数2倍（5車なら6点）。
+        ss_box = is_ss and ss_trifecta_box
+        n_points = 2 * len(thirds) if ss_box else len(thirds)  # コンボ足切り後の点数
+
+        # ステーク傾斜（波乱スコア・opt-in）: n_points×100円 × 帯別倍率。倍率0=見送り。
+        stake = n_points * 100
         if stake_tilt:
             mult = stake_units(sig["top3_sum"])
             if mult <= 0:
                 skipped_tilt += 1
                 continue
-            stake = 300 * mult
+            stake = n_points * 100 * mult
 
         # riders_detail（PDF生成との互換性を保つ）
         riders_detail = []
@@ -1342,13 +1496,20 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             "odds_label": odds_label,
             "top3_sum":   round(float(sig["top3_sum"]), 4),
             "upset_tier": upset_t,
+            "market_fav": int(mkt_fav) if mkt_fav is not None else None,
+            "fav_mismatch": bool(mkt_fav is not None and mkt_fav != pivot1),
             "stake":      int(stake),
+            "n_points":   int(n_points),
         }
 
         if is_ss:
             base_rank = "SS"
-            entry["combo_str"] = f"{pivot1}→{pivot2}→{thirds_str}"
-            entry["bet_type"]  = "3連単"
+            if ss_box:
+                entry["combo_str"] = f"{pivot1}⇄{pivot2}→{thirds_str}"
+                entry["bet_type"]  = "3連単BOX"
+            else:
+                entry["combo_str"] = f"{pivot1}→{pivot2}→{thirds_str}"
+                entry["bet_type"]  = "3連単"
         elif gap12 >= 0.15 and ratio < 1.6:
             base_rank = "S"
             entry["combo_str"] = f"{pivot1}-{pivot2}-{thirds_str}"
@@ -1367,82 +1528,302 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
         else:
             {"SS": ss_races, "S": s_races, "A": a_races}[base_rank].append(entry)
 
-    if not ss_races and not s_races and not a_races and not b_races:
-        msg = "本日は6車立て以下の対象レース（gap12≥0.06）がありません。"
-        if skipped_odds > 0:
-            msg += f"（オッズフィルターで {skipped_odds} 件スキップ）"
-        if skipped_gami > 0:
-            msg += f"（ガミ回避<{gami_skip_odds:.0f}倍で {skipped_gami} 件スキップ）"
-        if skipped_tilt > 0:
-            msg += f"（傾斜Q3/Q4見送り {skipped_tilt} 件）"
+    # ワイド1点(W12=指数1-2位)を独立プロダクトとして生成（opt-in・docs/analysis/12）。
+    # SS/S/A の gap12/ratio/gami/tilt ロジックとは切り離し、≤6車全件に W12 を1点。
+    # 朝確定の quinellaPlace オッズで --wide-min-odds 足切り（的中率↔オッズ1:1逆連動のため
+    # 高的中=低オッズ。≥2.5倍足切りで的中50-53%/ROI220-271%＝value型・最終オッズ上限値）。
+    wide_races = []
+    skipped_wide = 0
+    if wide:
+        for race_key, grp in df.groupby("race_key"):
+            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+            n_riders = len(grp_sorted)
+            if n_riders > 6 or n_riders < 3:
+                continue
+            if _hour_skip(_hour_of(grp_sorted)):
+                continue
+            frames = grp_sorted["frame_no"].astype(int).tolist()
+            a, b = frames[0], frames[1]
+            odds = _load_odds(race_key)
+            w_odds = _find_wide_odds(odds, a, b)
+            # placeholder(9999.9=オッズ未確定)は有効オッズ扱いしない（足切り誤通過を防ぐ）。
+            w_valid = w_odds if (w_odds is not None and w_odds < 9000) else None
+            if wide_min_odds > 0 and (w_valid is None or w_valid < wide_min_odds):
+                skipped_wide += 1
+                continue
+            p = grp_sorted["pred_prob"].tolist()
+            sig = race_signals(p, n_riders)
+            riders_detail = []
+            for rank_idx, row in enumerate(grp_sorted.itertuples(index=False)):
+                rp = row.race_point
+                wr = row.first_rate
+                pv = getattr(row, "term", None)
+                riders_detail.append({
+                    "frame_no":      int(row.frame_no),
+                    "ai_rank":       rank_idx + 1,
+                    "player_class":  row.player_class if isinstance(row.player_class, str) else "",
+                    "period":        int(pv) if pv is not None and pv == pv else 0,
+                    "racing_score":  round(float(rp), 1) if rp == rp else 0.0,
+                    "win_rate_3m":   round(float(wr), 1) if wr == wr else 0.0,
+                    "line_position": row.style if isinstance(getattr(row, "style", None), str) else "",
+                    "pred_prob_pct": round(float(row.pred_prob) * 100, 1),
+                    "role":          "軸1" if rank_idx == 0 else "軸2" if rank_idx == 1 else "-",
+                })
+            wide_races.append({
+                "race_key":   race_key,
+                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                "start_time": grp_sorted["start_time"].iloc[0],
+                "n_riders":   int(n_riders),
+                "gap12":      float(p[0] - p[1]),
+                "ratio":      float(p[0] / (3 / n_riders)),
+                "pivot1":     int(a),
+                "pivot2":     int(b),
+                "thirds":     [],
+                "riders":     riders_detail,
+                "odds_label": f"{w_valid:.1f}倍" if w_valid is not None else "オッズ未確定",
+                "top3_sum":   round(float(sig["top3_sum"]), 4),
+                "upset_tier": sig["upset_tier"],
+                "stake":      100,
+                "n_points":   1,
+                "combo_str":  f"{a}-{b}",
+                "bet_type":   "ワイド",
+            })
+
+    # 7+車 gami≥5.0倍 + gap12≥min_gap12 （doc48 Phase2通過・前向き検証用）
+    # SSランク: ガミ目カット後≤3目 HOLD ~137% (doc49)
+    # gap12≥seven_plus_s_gap12 → Sランク(HOLD ~143%) / 未満 → Aランク(HOLD ~138%)
+    plus7_candidates = []   # gap12≥min_gap12のみ（gamiフィルタなし・prerace用）
+    plus7_ss_races = []
+    plus7_s_races = []
+    plus7_a_races = []
+    skipped_7plus_gami = 0
+    if include_7plus:
+        with get_connection() as conn7:
+            n_entries_map = dict(conn7.execute(
+                "SELECT race_key, n_entries FROM wt_races WHERE race_date=?",
+                (target_date,)
+            ).fetchall())
+
+        for race_key, grp in df.groupby("race_key"):
+            n_ent = n_entries_map.get(race_key, 0)
+            if n_ent < 7:
+                continue
+            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+            if len(grp_sorted) < 3:
+                continue
+            if _hour_skip(_hour_of(grp_sorted)):
+                continue
+
+            p = grp_sorted["pred_prob"].tolist()
+            gap12_7 = p[0] - p[1]
+            if gap12_7 < min_gap12:
+                continue
+
+            frames = grp_sorted["frame_no"].astype(int).tolist()
+            pivot1_7, pivot2_7 = frames[0], frames[1]
+            thirds_7 = frames[2:]
+
+            # per-combo odds map（SSランクとS/A共用）
+            odds7 = _load_odds(race_key)
+            target_sets_7 = {frozenset({pivot1_7, pivot2_7, t}) for t in thirds_7}
+            combo_odds_map = {}
+            for item in odds7.get("trio", []):
+                ov = item["odds_value"]
+                if ov is None or ov <= 0 or ov >= 9000:
+                    continue
+                parts7 = re.split(r"[-=]", str(item["combination"]))
+                try:
+                    cs = frozenset(int(x) for x in parts7)
+                except ValueError:
+                    continue
+                if cs in target_sets_7:
+                    combo_odds_map[cs] = float(ov)
+            gami_7 = min(combo_odds_map.values()) if combo_odds_map else 0.0
+
+            try:
+                mkt_fav7 = _market_fav_frame(odds7)
+            except Exception:
+                mkt_fav7 = None
+
+            venue_id7 = grp_sorted["venue_id"].iloc[0]
+            venue_name7 = _venue_name(venue_map, venue_id7)
+            race_no7 = int(grp_sorted["race_no"].iloc[0])
+            start_time7 = grp_sorted["start_time"].iloc[0]
+
+            riders_detail7 = []
+            for rank_idx7, row7 in enumerate(grp_sorted.itertuples(index=False)):
+                fn7 = int(row7.frame_no)
+                role7 = "軸1" if rank_idx7 == 0 else "軸2" if rank_idx7 == 1 else "流し" if rank_idx7 <= 4 else "-"
+                pc7 = row7.player_class if isinstance(row7.player_class, str) else ""
+                lp7 = row7.style if isinstance(getattr(row7, "style", None), str) else ""
+                pv7 = getattr(row7, "term", None)
+                rp7 = row7.race_point
+                wr7 = row7.first_rate
+                riders_detail7.append({
+                    "frame_no":      fn7,
+                    "ai_rank":       rank_idx7 + 1,
+                    "player_class":  pc7,
+                    "period":        int(pv7) if pv7 is not None and pv7 == pv7 else 0,
+                    "racing_score":  round(float(rp7), 1) if rp7 == rp7 else 0.0,
+                    "win_rate_3m":   round(float(wr7), 1) if wr7 == wr7 else 0.0,
+                    "line_position": lp7,
+                    "pred_prob_pct": round(float(row7.pred_prob) * 100, 1),
+                    "role":          role7,
+                })
+
+            sig7 = race_signals(p, int(n_ent))
+
+            # 候補（gamiフィルタなし・発走前再検証用）
+            plus7_candidates.append({
+                "rank":          "7PLUS_CAND",
+                "race_key":      race_key,
+                "venue_name":    venue_name7,
+                "race_no":       race_no7,
+                "start_time":    start_time7,
+                "n_riders":      int(n_ent),
+                "gap12":         float(gap12_7),
+                "ratio":         float(p[0] / (3 / n_ent)) if n_ent else 0.0,
+                "pivot1":        int(pivot1_7),
+                "pivot2":        int(pivot2_7),
+                "thirds":        [int(t) for t in thirds_7],
+                "riders":        riders_detail7,
+                "top3_sum":      round(float(sig7["top3_sum"]), 4),
+                "upset_tier":    sig7["upset_tier"],
+                "bet_type":      "3連複",
+                "min_trio_odds": round(float(gami_7), 2) if gami_7 > 0 else None,
+                "gami_rank":     None,  # loop後に plus7_ss/s/a_races との照合で上書き
+            })
+
+            # SSランク: ガミ目カット後≤3目 (doc49 Phase2通過 HOLD ~137%)
+            valid_thirds_ss = [t for t in thirds_7
+                               if combo_odds_map.get(frozenset({pivot1_7, pivot2_7, t}), 0.0) >= 5.0]
+            if 1 <= len(valid_thirds_ss) <= 3:
+                n_pts_ss = len(valid_thirds_ss)
+                thirds_str_ss = ",".join(str(t) for t in valid_thirds_ss)
+                min_odds_ss = min(
+                    combo_odds_map.get(frozenset({pivot1_7, pivot2_7, t}), 0.0)
+                    for t in valid_thirds_ss
+                )
+                plus7_ss_races.append({
+                    "race_key":    race_key,
+                    "venue_name":  venue_name7,
+                    "race_no":     race_no7,
+                    "start_time":  start_time7,
+                    "n_riders":    int(n_ent),
+                    "gap12":       float(gap12_7),
+                    "ratio":       float(p[0] / (3 / n_ent)) if n_ent else 0.0,
+                    "pivot1":      int(pivot1_7),
+                    "pivot2":      int(pivot2_7),
+                    "thirds":      [int(t) for t in valid_thirds_ss],
+                    "riders":      riders_detail7,
+                    "odds_label":  f"min{min_odds_ss:.1f}倍",
+                    "top3_sum":    round(float(sig7["top3_sum"]), 4),
+                    "upset_tier":  sig7["upset_tier"],
+                    "market_fav":  int(mkt_fav7) if mkt_fav7 is not None else None,
+                    "fav_mismatch": bool(mkt_fav7 is not None and mkt_fav7 != pivot1_7),
+                    "stake":       int(n_pts_ss * 100),
+                    "n_points":    int(n_pts_ss),
+                    "combo_str":   f"{pivot1_7}-{pivot2_7}-{thirds_str_ss}",
+                    "bet_type":    "3連複",
+                })
+
+            # S/Aランク: 全目gami≥5.0倍
+            if gami_7 < 5.0:
+                skipped_7plus_gami += 1
+                continue
+
+            thirds_str7 = ",".join(str(t) for t in thirds_7)
+            n_pts7 = len(thirds_7)
+
+            # gap12でS/Aランク分岐
+            p7_rank_list = plus7_s_races if gap12_7 >= seven_plus_s_gap12 else plus7_a_races
+            p7_rank_list.append({
+                "race_key":    race_key,
+                "venue_name":  venue_name7,
+                "race_no":     race_no7,
+                "start_time":  start_time7,
+                "n_riders":    int(n_ent),
+                "gap12":       float(gap12_7),
+                "ratio":       float(p[0] / (3 / n_ent)) if n_ent else 0.0,
+                "pivot1":      int(pivot1_7),
+                "pivot2":      int(pivot2_7),
+                "thirds":      [int(t) for t in thirds_7],
+                "riders":      riders_detail7,
+                "odds_label":  f"{gami_7:.1f}倍",
+                "top3_sum":    round(float(sig7["top3_sum"]), 4),
+                "upset_tier":  sig7["upset_tier"],
+                "market_fav":  int(mkt_fav7) if mkt_fav7 is not None else None,
+                "fav_mismatch": bool(mkt_fav7 is not None and mkt_fav7 != pivot1_7),
+                "stake":       int(n_pts7 * 100),
+                "n_points":    int(n_pts7),
+                "combo_str":   f"{pivot1_7}-{pivot2_7}-{thirds_str7}",
+                "bet_type":    "3連複",
+            })
+
+    if not plus7_ss_races and not plus7_s_races and not plus7_a_races:
+        # 推奨0件でもファイルは書き切る（exit 1で中断しない）。
+        # notify_picks.py が「推奨はありません」通知＋全レース指数PDF送付の0件正常系を持っており、
+        # ここで中断するとファイル欠如→「⚠️ picksファイルが見つかりません」となり
+        # 本物の障害（cron不発・収集失敗）と区別できなくなるため（2026-06-12修正）。
+        msg = f"本日は7+車の対象レース（gap12≥{min_gap12:.2f}）がありません。"
+        if skipped_7plus_gami > 0:
+            msg += f"（S/Aランク gami不足スキップ:{skipped_7plus_gami}件）"
         click.echo(msg, err=True)
-        raise SystemExit(1)
 
     sort_key = lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"])
-    for lst in (ss_races, s_races, a_races, b_races):
+    for lst in (plus7_ss_races, plus7_s_races, plus7_a_races):
         lst.sort(key=sort_key)
 
     def _fmt(entry):
         n_str = f"{entry['n_riders']}車"
         odds_str = f"  [{entry['odds_label']}]" if entry.get("odds_label") else ""
         base = f"(元{entry['base_rank']}) " if entry.get("base_rank") else ""
+        npts = int(entry.get("n_points", 3))
         stk = int(entry.get("stake", 300))
-        tilt_str = f"  ★傾斜x{stk//300}" if stake_tilt and stk != 300 else ""
+        unit = npts * 100
+        tilt_str = f"  ★傾斜x{stk//unit}" if stake_tilt and stk != unit else ""
         return (
             f"  {entry['start_time']}  {entry['venue_name']:<6} {entry['race_no']:>2}R  "
-            f"[{n_str}]  {base}{entry['bet_type']}: {entry['combo_str']}  (3点/{stk:,}円){odds_str}{tilt_str}"
+            f"[{n_str}]  {base}{entry['bet_type']}: {entry['combo_str']}  ({npts}点/{stk:,}円){odds_str}{tilt_str}"
         )
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append("=" * 70)
-    lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (SS:3連単 / S+A:3連複 / 3点300円)")
+    lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 三連複・SSランク/Sランク/Aランク)")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
-    if min_trio_odds > 0:
-        lines.append(f" オッズフィルター: ≥{min_trio_odds:.1f}倍  (スキップ: {skipped_odds}件)")
-    if gami_skip_odds > 0:
-        lines.append(f" ガミ回避(見送り): 3点中<{gami_skip_odds:.0f}倍を含むレースを除外  (スキップ: {skipped_gami}件)")
-    if b_rank_odds > 0:
-        lines.append(f" Bランク: 最安目が{gami_skip_odds:.0f}〜{b_rank_odds:.0f}倍未満（購入は各自判断）")
-    if stake_tilt:
-        lines.append(f" 波乱ステーク傾斜: Q1_loose=600円/Q2=300円/Q3,Q4=見送り(スキップ:{skipped_tilt}件)")
+    lines.append(f" 7+車(gap12≥{min_gap12:.2f}): SS:{len(plus7_ss_races)}件  S:{len(plus7_s_races)}件/A:{len(plus7_a_races)}件"
+                 f"  (S/A gami不足スキップ:{skipped_7plus_gami}件)"
+                 f"  Sランク閾値gap12≥{seven_plus_s_gap12:.2f}(HOLD~143%) / Aランク(HOLD~138%)")
     lines.append("=" * 70)
-    lines.append(" 対象: 6車立て以下  gap12≥0.06 のみ")
-    lines.append(" SS: gap12≥0.15&ratio<1.3(3連単)  S: gap12≥0.15&ratio[1.3,1.6)(3連複)  A: gap12[0.06,0.15)(3連複)")
+    lines.append(f" SSランク: ガミ目カット後≤3目(HOLD~137%)  対象: 7車以上  gap12≥{min_gap12:.2f}")
+    lines.append(f" Sランク: gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}  Aランク: gami≥5倍+gap12[{min_gap12:.2f},{seven_plus_s_gap12:.2f})")
     lines.append("=" * 70)
     lines.append("")
 
-    _RANK_INFO = [
-        ("SS", ss_races),
-        ("S",  s_races),
-        ("A",  a_races),
-    ]
-    for rank, races in _RANK_INFO:
-        lines.append(f"【{rank}ランク】 {len(races)}件")
+    for p7_rank, p7_list, p7_desc in [
+        ("SS", plus7_ss_races, "ガミ目カット後≤3目  HOLD ~137%"),
+        ("S",  plus7_s_races,  f"gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}  HOLD ~143%"),
+        ("A",  plus7_a_races,  f"gami≥5倍+gap12 [{min_gap12:.2f},{seven_plus_s_gap12:.2f})  HOLD ~138%"),
+    ]:
+        lines.append(f"【7+車 {p7_rank}ランク】 {len(p7_list)}件  ※{p7_desc}  三連複")
         lines.append("─" * 60)
-        lines.append("  (該当なし)" if not races else "")
-        for e in races:
-            lines.append(_fmt(e))
-        lines.append("")
-
-    if b_rank_odds > 0:
-        lines.append(f"【Bランク】 {len(b_races)}件  ※最安目が{gami_skip_odds:.0f}〜{b_rank_odds:.0f}倍未満＝鉄板寄り・購入は各自判断")
-        lines.append("─" * 60)
-        lines.append("  (該当なし)" if not b_races else "")
-        for e in b_races:
+        lines.append("  (該当なし)" if not p7_list else "")
+        for e in p7_list:
             lines.append(_fmt(e))
         lines.append("")
 
     lines.append("=" * 70)
     _cost = lambda lst: sum(int(e.get("stake", 300)) for e in lst)
-    ss_cost, s_cost, a_cost = _cost(ss_races), _cost(s_races), _cost(a_races)
-    total_cost = ss_cost + s_cost + a_cost
-    lines.append(f"  SS: {len(ss_races)}件 = {ss_cost:,}円  (3連単)")
-    lines.append(f"  S : {len(s_races)}件 = {s_cost:,}円  (3連複)")
-    lines.append(f"  A : {len(a_races)}件 = {a_cost:,}円  (3連複)")
-    lines.append(f"  推奨合計投資額: {total_cost:,}円  (SS/S/A)")
-    if b_rank_odds > 0:
-        lines.append(f"  B : {len(b_races)}件 = {_cost(b_races):,}円  (購入は各自判断・上記合計に含めず)")
+    p7ss_cost = _cost(plus7_ss_races)
+    p7s_cost = _cost(plus7_s_races)
+    p7a_cost = _cost(plus7_a_races)
+    p7_total = p7ss_cost + p7s_cost + p7a_cost
+    lines.append(f"  7+車 SSランク: {len(plus7_ss_races)}件 = {p7ss_cost:,}円")
+    lines.append(f"  7+車 Sランク: {len(plus7_s_races)}件 = {p7s_cost:,}円")
+    lines.append(f"  7+車 Aランク: {len(plus7_a_races)}件 = {p7a_cost:,}円")
+    lines.append(f"  推奨合計投資額: {p7_total:,}円  (7+車)")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)
@@ -1460,23 +1841,127 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
     # per-race detail JSON（notify_picks.py の PDF 生成と互換）
     all_race_details = (
-        [{"rank": "SS", **e} for e in ss_races] +
-        [{"rank": "S",  **e} for e in s_races] +
-        [{"rank": "A",  **e} for e in a_races] +
-        [{"rank": "B",  **e} for e in b_races]
+        [{"rank": "7PLUS_SS", **e} for e in plus7_ss_races] +
+        [{"rank": "7PLUS_S",  **e} for e in plus7_s_races] +
+        [{"rank": "7PLUS_A",  **e} for e in plus7_a_races]
     )
     detail_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_detail.json"
     with open(detail_path, "w", encoding="utf-8") as f:
         json.dump(all_race_details, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {detail_path}")
 
+    # candidates に gami_rank を付与（SS/S/A に入ったレースかを朝通知で表示するため）
+    _ss_keys = {r["race_key"] for r in plus7_ss_races}
+    _s_keys  = {r["race_key"] for r in plus7_s_races}
+    _a_keys  = {r["race_key"] for r in plus7_a_races}
+    for _cand in plus7_candidates:
+        _rk = _cand["race_key"]
+        if _rk in _ss_keys:
+            _cand["gami_rank"] = "SS"
+        elif _rk in _s_keys:
+            _cand["gami_rank"] = "S"
+        elif _rk in _a_keys:
+            _cand["gami_rank"] = "A"
+
+    # 候補JSON（gamiフィルタなし・gap12≥min_gap12のみ。notify_prerace_wt.py が発走前再検証に使用）
+    # 夜run（output_path が _night.txt）は _night_candidates.json に書き、朝分を上書きしない。
+    out_stem = Path(output_path).stem
+    cands_suffix = "_night_candidates.json" if out_stem.endswith("_night") else "_candidates.json"
+    cands_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{cands_suffix}"
+    with open(cands_path, "w", encoding="utf-8") as f:
+        json.dump(plus7_candidates, f, ensure_ascii=False, indent=2)
+    click.echo(f"[保存先] {cands_path}  (発走前再検証用候補 {len(plus7_candidates)}件)")
+
+    # 全レース指数 JSON（全レース。推奨レースは rank/買い目を付与）。
+    # notify_picks.py がこれを読み「全レース指数PDF」を朝のDiscordに添付する。
+    rec_by_key = {}
+    for rk_, ent in ([("7PLUS_SS", e) for e in plus7_ss_races]
+                     + [("7PLUS_S",  e) for e in plus7_s_races]
+                     + [("7PLUS_A",  e) for e in plus7_a_races]):
+        rec_by_key.setdefault(ent["race_key"], (rk_, ent))
+
+    all_index = []
+    for race_key, grp in df.groupby("race_key"):
+        grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+        n_riders = len(grp_sorted)
+        if n_riders < 2:
+            continue
+        p = grp_sorted["pred_prob"].tolist()
+        sig = race_signals(p, n_riders)
+        riders_detail = []
+        for rank_idx, row in enumerate(grp_sorted.itertuples(index=False)):
+            rp = row.race_point
+            wr = row.first_rate
+            pv = getattr(row, "term", None)
+            riders_detail.append({
+                "frame_no":      int(row.frame_no),
+                "ai_rank":       rank_idx + 1,
+                "player_class":  row.player_class if isinstance(row.player_class, str) else "",
+                "period":        int(pv) if pv is not None and pv == pv else 0,
+                "racing_score":  round(float(rp), 1) if rp == rp else 0.0,
+                "win_rate_3m":   round(float(wr), 1) if wr == wr else 0.0,
+                "line_position": row.style if isinstance(getattr(row, "style", None), str) else "",
+                "pred_prob_pct": round(float(row.pred_prob) * 100, 1),
+                "role":          "軸1" if rank_idx == 0 else "軸2" if rank_idx == 1 else "流し" if rank_idx <= 4 else "-",
+            })
+        rec = rec_by_key.get(race_key)
+        if rec:
+            rank, ent = rec
+            bet_type, combo_str = ent.get("bet_type", ""), ent.get("combo_str", "")
+        else:
+            rank, bet_type, combo_str = "-", "指数のみ", "(参考)"
+        all_index.append({
+            "race_key":   race_key,
+            "rank":       rank,
+            "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+            "race_no":    int(grp_sorted["race_no"].iloc[0]),
+            "start_time": grp_sorted["start_time"].iloc[0],
+            "n_riders":   int(n_riders),
+            "gap12":      float(sig["gap12"]),
+            "ratio":      float(sig["ratio"]),
+            "top3_sum":   round(float(sig["top3_sum"]), 4),
+            "upset_tier": sig["upset_tier"],
+            "bet_type":   bet_type,
+            "combo_str":  combo_str,
+            "riders":     riders_detail,
+        })
+    from src.database import get_connection
+    _score_updates = [
+        (rider["pred_prob_pct"], item["race_key"], rider["frame_no"])
+        for item in all_index
+        for rider in item["riders"]
+    ]
+    if _score_updates:
+        with get_connection() as _conn:
+            _conn.executemany(
+                "UPDATE wt_entries SET race_point = ? WHERE race_key = ? AND frame_no = ?",
+                _score_updates,
+            )
+            _conn.commit()
+
+    all_index.sort(key=lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"]))
+    allindex_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_allindex.json"
+    with open(allindex_path, "w", encoding="utf-8") as f:
+        json.dump(all_index, f, ensure_ascii=False, indent=2)
+    click.echo(f"[保存先] {allindex_path}  (全{len(all_index)}レース指数)")
+
 
 @cli.command("backtest-wt")
 @click.option("--from", "from_date", default="2025-01-01", help="評価開始日")
 @click.option("--to", "to_date", default=None, help="評価終了日")
-@click.option("--model", "model_name", default="lgbm_wt", help="モデルファイル名（.pklなし）")
+@click.option("--model", "model_name", default="lgbm_wt",
+              help="モデルファイル名（.pklなし）。"
+                   "注意: デフォルトの lgbm_wt は週次再学習済みで評価期間をin-sampleで学習している。"
+                   "リーク無し検証には --eval-model オプションで期間限定学習モデルを指定すること"
+                   "（docs/analysis/18-backtest-bias-rescore.md バイアス③参照）。")
+@click.option("--eval-model", "eval_model_name", default=None,
+              help="評価専用モデルのファイル名（.pklなし）。"
+                   "指定すると --model の代わりにこのモデルで予測確率を計算する。"
+                   "週次再学習 lgbm_wt のリークを避けるため、"
+                   "TRAIN期間のみで学習したモデル（例: lgbm_wt_train_only）を指定すると"
+                   "doc18セマンティクスのリーク無し評価ができる。")
 @click.option("--max-riders", "max_riders", default=None, type=int,
-              help="出走頭数フィルター（実運用は6）")
+              help="出走頭数フィルター（実運用は6）。出走表基準で適用する。")
 @click.option("--min-gap12", "min_gap12", default=None, type=float,
               help="top1-top2 pred_prob 差フィルター（wave-picks-wtは0.06）")
 @click.option("--tiered", is_flag=True,
@@ -1490,14 +1975,24 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 @click.option("--max-ratio", "max_ratio", default=None, type=float,
               help="バリューモード: top1_prob/(3/n)<この値の拮抗レースのみ（例1.3）")
 def backtest_wt(from_date: str, to_date: str | None, model_name: str,
+                eval_model_name: str | None,
                 max_riders: int | None, min_gap12: float | None, tiered: bool,
                 value_mode: bool, ev_min: float, max_per_race: int,
                 max_ratio: float | None):
     """winticket モデルで買い目バックテストを実行（wt_odds の実オッズ使用）
 
+    [doc18 本番忠実セマンティクス適用済み]
+    - 出走表基準の ≤6車フィルタ（完走者基準ではない）
+    - 全エントリーでランキング（欠車を事前に知らない）
+    - 欠車処理: 軸欠車=レース無効 / 相手欠車=その目のみ除外
+
+    週次再学習済み lgbm_wt をデフォルトモデルとして使う場合は評価期間内にリークがある。
+    リーク無し評価には --eval-model でTRAIN期間限定学習モデルを指定すること。
+
     例: python -m src.cli.main backtest-wt --from 2026-01-01
         python -m src.cli.main backtest-wt --from 2026-01-01 --max-riders 6 --min-gap12 0.06
         python -m src.cli.main backtest-wt --from 2026-01-01 --tiered
+        python -m src.cli.main backtest-wt --from 2025-07-01 --tiered --eval-model lgbm_wt_train_only
     """
     from src.preprocessing.feature_wt import load_raw_data_wt, build_features_wt
     from src.models.trainer import load_model
@@ -1507,12 +2002,20 @@ def backtest_wt(from_date: str, to_date: str | None, model_name: str,
         run_value_backtest_wt, print_value_backtest_wt,
     )
 
+    # --eval-model が指定されている場合はそちらを使う（リーク無し評価用）
+    active_model_name = eval_model_name if eval_model_name else model_name
     try:
-        model = load_model(model_name)
+        model = load_model(active_model_name)
     except FileNotFoundError:
-        click.echo(f"モデル '{model_name}' が見つかりません。先に train-wt を実行してください。",
+        click.echo(f"モデル '{active_model_name}' が見つかりません。先に train-wt を実行してください。",
                    err=True)
         raise SystemExit(1)
+
+    if eval_model_name:
+        click.echo(f"[wt] 評価モデル: {eval_model_name} (リーク無し専用モデル)")
+    elif active_model_name == "lgbm_wt":
+        click.echo(f"[wt] 警告: lgbm_wt は週次再学習済みで評価期間をin-sampleで学習しています。"
+                   f" リーク上振れに注意（doc18 バイアス③）。リーク無し評価には --eval-model を使用してください。")
 
     click.echo(f"[wt] Loading {from_date} ~ {to_date or 'latest'} ...")
     df_raw = load_raw_data_wt(min_date=from_date, max_date=to_date)

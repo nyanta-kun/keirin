@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-wave-picks の結果を Discord へ通知する。
-daily_picks.sh から呼び出す。
+wave-picks の結果を Discord へ通知する（7+車専用版）。
+daily_picks_wt.sh から呼び出す。
 
-ランク別フォーマット:
-  SS: "  HH:MM  会場   NR  [N車]  3連単: A→B→C,D,E  (3点/300円)"
-  S/A: "  HH:MM  会場   NR  [N車]  3連複: A-B-C,D,E  (3点/300円)"
+朝の通知: 全候補レース（gap12≥0.07）をガミ判定付きで一覧表示 + 推奨ランク詳細 + 全指数PDF
+夜の通知: 夜の部候補レース同様
 """
 import json
 import re
@@ -18,31 +17,30 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send, send_file
 
 
-def _parse_picks(text: str) -> dict[str, list[dict]]:
-    """wave-picks テキストから SS/S/A ランク別にエントリを抽出する。"""
-    result = {"SS": [], "S": [], "A": []}
+def _parse_7plus_ranked(text: str) -> dict[str, list[dict]]:
+    """wave-picks テキストから 7+車 SSランク・Sランク・Aランク を抽出する。"""
+    result: dict[str, list[dict]] = {"SS": [], "S": [], "A": []}
     current_rank = None
 
     for line in text.splitlines():
-        if "【SSランク】" in line:
+        if "【7+車 SSランク】" in line:
             current_rank = "SS"
             continue
-        if "【Sランク】" in line:
+        if "【7+車 Sランク】" in line:
             current_rank = "S"
             continue
-        if "【Aランク】" in line:
+        if "【7+車 Aランク】" in line:
             current_rank = "A"
-            continue
-        if "【Bランク】" in line:
-            current_rank = None  # B=各自判断＝ツイート(推奨)には含めない
             continue
         if current_rank is None:
             continue
+        if line.startswith("【"):
+            current_rank = None
+            continue
 
-        # SS: "  HH:MM  会場   NR  [N車]  3連単: A→B→C,D,E  (3点/300円)"
-        # S/A: "  HH:MM  会場   NR  [N車]  3連複: A-B-C,D,E  (3点/300円)"
+        # "  HH:MM  会場   NR  [N車]  3連複: A-B-C,D,E  (N点/M円)  [X.X倍]"
         m = re.match(
-            r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(3連単|3連複):\s+(\S+)\s+\(",
+            r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[(\d+)車\]\s+3連複:\s+(\S+)\s+\((\d+)点/(\d+)円\)(?:\s+\[(.+?)\])?",
             line
         )
         if m:
@@ -50,59 +48,84 @@ def _parse_picks(text: str) -> dict[str, list[dict]]:
                 "start_time": m.group(1),
                 "venue":      m.group(2),
                 "race_no":    m.group(3),
-                "bet_type":   m.group(4),
+                "n_riders":   m.group(4),
                 "combo":      m.group(5),
+                "n_points":   m.group(6),
+                "stake":      m.group(7),
+                "odds_label": m.group(8) or "",
             })
 
     return result
 
 
-def _build_tweet_texts(target_date: str, picks_by_rank: dict) -> list[str]:
-    """Xへのコピペ用テキストを280字制限で分割して返す。"""
-    md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
-    max_chars = 270
+def _load_candidates(today: str, prefix: str, night: bool) -> list[dict]:
+    """candidates.json から候補一覧を取得する。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    suffix = "_night_candidates.json" if night else "_candidates.json"
+    p = picks_dir / f"{prefix}_{today}{suffix}"
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
-    header  = f"🎯 穴車AI予想 {md}\n\n"
-    footer  = "\n\n#競輪 #穴車AI #AI予想"
-    cont_hd = f"🎯 穴車AI予想 {md}（続き）\n\n"
-    cont_ft = "\n\n#競輪 #穴車AI"
 
-    # SS→S→A の順でまとめる（SSを先頭に）
-    all_picks = [("SS", p) for p in picks_by_rank.get("SS", [])] \
-              + [("S",  p) for p in picks_by_rank.get("S",  [])] \
-              + [("A",  p) for p in picks_by_rank.get("A",  [])]
+def _fmt_candidates_block(cands: list[dict]) -> str:
+    """全候補をガミ判定付きで整形した文字列を返す。"""
+    lines = []
+    sorted_cands = sorted(
+        cands,
+        key=lambda x: (x.get("start_time", ""), x.get("venue_name", ""), x.get("race_no", 0)),
+    )
+    for c in sorted_cands:
+        venue   = c.get("venue_name", "?")
+        race_no = c.get("race_no", "?")
+        n       = c.get("n_riders", "?")
+        gap12   = c.get("gap12", 0.0)
+        start   = c.get("start_time", "--:--")
+        min_odds  = c.get("min_trio_odds")
+        gami_rank = c.get("gami_rank")
 
-    tweets = []
-    body = ""
-    cur_hd, cur_ft = header, footer
-
-    for rank, p in all_picks:
-        if rank == "SS":
-            line2 = f"  3連単 {p['combo']}（3点）⭐"
+        if gami_rank:
+            status = f"✅{gami_rank}"
+        elif min_odds is not None and min_odds > 0:
+            status = f"❌{min_odds:.1f}倍"
         else:
-            line2 = f"  3連複 {p['combo']}（3点）"
+            status = "❌オッズなし"
 
-        block = (
-            f"◇ [{rank}] {p['venue']} {p['race_no']}R  発走{p['start_time']}\n"
-            f"{line2}\n\n"
+        lines.append(
+            f"{start} {venue:<5} {int(race_no):>2}R [{n}車] gap={gap12:.3f} {status}"
         )
-        if len(cur_hd + body + block + cur_ft) > max_chars and body:
-            tweets.append(cur_hd + body.rstrip() + cur_ft)
-            body = block
-            cur_hd, cur_ft = cont_hd, cont_ft
-        else:
-            body += block
-
-    if body:
-        tweets.append(cur_hd + body.rstrip() + cur_ft)
-
-    return tweets
+    return "\n".join(lines)
 
 
-def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
-    """全車指数PDFを生成してoutput_pathに保存する。
-    matplotlib でページごとにPNG→Pillowで1本のPDFに結合。
-    """
+def _send_candidates(cands: list[dict], title: str) -> None:
+    """候補一覧を Discord に送信する（2000文字制限で分割）。"""
+    if not cands:
+        return
+    block = _fmt_candidates_block(cands)
+    lines = block.split("\n")
+
+    chunk_lines: list[str] = []
+    chunk_len = len(title) + 10  # コードブロック記号分
+
+    for line in lines:
+        if chunk_len + len(line) + 1 > 1800:
+            send(f"{title}\n```\n" + "\n".join(chunk_lines) + "\n```")
+            chunk_lines = []
+            chunk_len = 10
+            title = ""  # 2枚目以降はタイトルなし
+        chunk_lines.append(line)
+        chunk_len += len(line) + 1
+
+    if chunk_lines:
+        prefix = f"{title}\n" if title else ""
+        send(f"{prefix}```\n" + "\n".join(chunk_lines) + "\n```")
+
+
+def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150) -> bool:
+    """全車指数PDFを生成してoutput_pathに保存する。"""
     import tempfile
 
     try:
@@ -131,7 +154,11 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
     plt.rcParams["font.family"] = "Hiragino Sans"
     plt.rcParams["axes.unicode_minus"] = False
 
-    rank_colors = {"SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1"}
+    rank_colors = {
+        "7PLUS_S": "#AED6F1",
+        "7PLUS_A": "#ABEBC6",
+        "SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1",
+    }
     role_bg = {"軸1": "#AED6F1", "軸2": "#D6EAF8", "流し": "#EBF5FB", "-": "#FFFFFF"}
     col_labels = ["AI順", "車番", "クラス", "期", "得点", "勝率3m%", "脚質", "AI確率%", "役割"]
 
@@ -197,7 +224,7 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
                     cell.get_text().set_fontweight("bold")
 
             png_path = f"{tmpdir}/race_{i:03d}.png"
-            fig.savefig(png_path, dpi=150, bbox_inches="tight")
+            fig.savefig(png_path, dpi=dpi, bbox_inches="tight")
             plt.close(fig)
             png_paths.append(png_path)
 
@@ -217,80 +244,107 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str) -> bool:
 
 def main():
     target_date = sys.argv[1] if len(sys.argv) > 1 else date.today().strftime("%Y-%m-%d")
-    # 第2引数でファイルプレフィックス指定（ks="wave_picks" / winticket="wave_picks_wt"）
     prefix = sys.argv[2] if len(sys.argv) > 2 else "wave_picks"
-    picks_path = Path(__file__).parent.parent / "data" / "picks" / f"{prefix}_{target_date}.txt"
+    night = len(sys.argv) > 3 and sys.argv[3] == "night"
+    fname = f"{prefix}_{target_date}_night.txt" if night else f"{prefix}_{target_date}.txt"
+    title_label = "競輪AI予想（夜の部）" if night else "競輪AI予想"
+    picks_path = Path(__file__).parent.parent / "data" / "picks" / fname
 
-    if not picks_path.exists():
-        send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません")
-        return
+    # 候補レース読み込み（朝: _candidates.json / 夜: _night_candidates.json）
+    cands = _load_candidates(target_date, prefix, night)
 
-    text = picks_path.read_text(encoding="utf-8")
-    picks_by_rank = _parse_picks(text)
+    # txt ファイルから推奨ピック（SS/S/A）を抽出
+    picks_by_rank: dict[str, list[dict]] = {"SS": [], "S": [], "A": []}
+    if picks_path.exists():
+        try:
+            text = picks_path.read_text(encoding="utf-8")
+            picks_by_rank = _parse_7plus_ranked(text)
+        except Exception:
+            text = ""
+    else:
+        text = ""
+
     ss_n = len(picks_by_rank["SS"])
     s_n  = len(picks_by_rank["S"])
     a_n  = len(picks_by_rank["A"])
     total = ss_n + s_n + a_n
 
-    m_cost = re.search(r"合計投資額:\s*([\d,]+)円", text)
+    md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
+
+    m_cost = re.search(r"推奨合計投資額:\s*([\d,]+)円", text) if text else None
     total_cost = m_cost.group(1) if m_cost else f"{total * 300:,}"
 
-    if total == 0:
-        md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
-        send(f"🏁 **競輪AI予想 {target_date}**\n本日の対象レースはありません（6車立て以下 gap12≥0.06 なし）")
-        tweet_none = f"🎯 穴車AI予想 {md}\n\n本日の対象レースはありません\n\n#競輪 #穴車AI #AI予想"
-        send(f"**--- Xポスト用（コピペ）---**\n```\n{tweet_none}\n```")
-        return
+    n_cands = len(cands)
 
-    def fmt_section(rank_label, picks):
-        if not picks:
-            return ""
-        lines = [f"**【{rank_label}ランク】{len(picks)}件**"]
-        for p in picks:
-            arrow = "⭐" if rank_label == "SS" else "  "
-            lines.append(f"{arrow} {p['start_time']}  {p['venue']:<6} {int(p['race_no']):>2}R  {p['combo']}")
-        return "\n".join(lines)
-
-    sections = []
-    for rank in ("SS", "S", "A"):
-        s = fmt_section(rank, picks_by_rank[rank])
-        if s:
-            sections.append(s)
-
-    detail = "\n\n".join(sections)
-    msg = (
-        f"🏁 **競輪AI予想 {target_date}**\n"
-        f"SS:{ss_n}件 / S:{s_n}件 / A:{a_n}件　計{total}件\n"
-        f"投資: {total_cost}円  (6車立て以下)\n"
-        f"```\n{detail}\n```"
-    )
-    if len(msg) > 1900:
-        msg = msg[:1900] + "\n…(省略)```"
-    send(msg)
-
-    tweets = _build_tweet_texts(target_date, picks_by_rank)
-    for i, tw in enumerate(tweets, 1):
-        label = (
-            f"**--- Xポスト用 {i}/{len(tweets)}（コピペ）---**"
-            if len(tweets) > 1
-            else "**--- Xポスト用（コピペ）---**"
-        )
-        send(f"{label}\n```\n{tw}\n```")
-
-    print(f"[notify_picks] Discord 送信完了 ({target_date}, SS:{ss_n}/S:{s_n}/A:{a_n})")
-
-    # 全車指数PDF
-    detail_json = picks_path.parent / f"{prefix}_{target_date}_detail.json"
-    if detail_json.exists():
-        pdf_path = str(picks_path.parent / f"{prefix}_{target_date}_detail.pdf")
-        if _generate_picks_pdf(str(detail_json), pdf_path):
-            md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
-            send_file(pdf_path, caption=f"📊 全車指数 {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
-            print(f"[notify_picks] PDF 送信完了: {pdf_path}")
+    def _send_index_pdf():
+        """全レース指数PDF（allindex.json優先・無ければ推奨のみdetail.json）を送信。"""
+        allidx = picks_path.parent / f"{prefix}_{target_date}_allindex.json"
+        detail = picks_path.parent / f"{prefix}_{target_date}_detail.json"
+        if allidx.exists():
+            src, pdf, dpi, label = allidx, picks_path.parent / f"{prefix}_{target_date}_allindex.pdf", 100, "全レース指数"
+        elif detail.exists():
+            src, pdf, dpi, label = detail, picks_path.parent / f"{prefix}_{target_date}_detail.pdf", 150, "全車指数(推奨のみ)"
+        else:
+            print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
+        if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
+            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}/A:{a_n}")
+            print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
+
+    # ── ヘッダー送信 ──────────────────────────────────────────────────────────
+    if total == 0:
+        gami_skip = n_cands  # 全候補がガミ不足 or 候補なし
+        header = (
+            f"🚲 **{title_label} {target_date}**  [7+車]\n"
+            f"推奨なし（ガミ不足）　候補{gami_skip}件（gap12≥0.07）"
+        )
     else:
-        print(f"[notify_picks] detail JSON なし（wave-picks を先に実行してください）")
+        header = (
+            f"🚲 **{title_label} {target_date}**  [7+車]\n"
+            f"SS:{ss_n} / S:{s_n} / A:{a_n} = {total}件　投資:{total_cost}円\n"
+            f"候補{n_cands}件（gap12≥0.07）"
+        )
+    send(header)
+
+    # ── 推奨ランク詳細ブロック（SS/S/Aある場合のみ） ──────────────────────────
+    def _fmt_rank_block(rank_label: str, picks: list[dict], desc: str) -> str:
+        lines = [f"**【{rank_label}ランク】{len(picks)}件** （{desc}）"]
+        for p in picks:
+            odds_part = f"  [{p['odds_label']}]" if p.get("odds_label") else ""
+            lines.append(
+                f"  {p['start_time']}  {p['venue']:<6} {int(p['race_no']):>2}R"
+                f"  [{p['n_riders']}車]  {p['combo']}  ({p['n_points']}点/{p['stake']}円){odds_part}"
+            )
+        return "\n".join(lines)
+
+    if total > 0:
+        sections = []
+        if picks_by_rank["SS"]:
+            sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "ガミ目カット後≤3目  HOLD ~137%"))
+        if picks_by_rank["S"]:
+            sections.append(_fmt_rank_block("S",  picks_by_rank["S"],  "gami≥5倍+gap12≥0.10  HOLD ~143%"))
+        if picks_by_rank["A"]:
+            sections.append(_fmt_rank_block("A",  picks_by_rank["A"],  "gami≥5倍+gap12[0.07,0.10)  HOLD ~138%"))
+        for section in sections:
+            msg = f"```\n{section}\n```"
+            if len(msg) > 1900:
+                msg = msg[:1900] + "\n…(省略)```"
+            send(msg)
+
+    # ── 全候補一覧（ガミ判定付き） ─────────────────────────────────────────────
+    if cands:
+        scope = "夜の部" if night else "本日"
+        _send_candidates(cands, f"📋 {scope}候補レース一覧（{n_cands}件 / gap12≥0.07 / 朝オッズ）")
+    else:
+        # candidates JSON がない場合（古い形式やエラー）はスキップ
+        if not picks_path.exists():
+            send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません")
+
+    # ── 全レース指数PDF ────────────────────────────────────────────────────────
+    _send_index_pdf()
+
+    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}/A:{a_n}, 候補:{n_cands})")
 
 
 if __name__ == "__main__":

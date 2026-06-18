@@ -1,6 +1,6 @@
 # システムアーキテクチャ
 
-> 最終更新: 2026-06-08
+> 最終更新: 2026-06-13
 
 ---
 
@@ -44,10 +44,18 @@ keirin/
 │       └── main.py                    # CLIエントリーポイント（全コマンド定義）
 ├── scripts/
 │   ├── daily_picks_wt.sh              # ★本番日次（cron 8:00）
+│   ├── evening_picks_wt.sh            # ★本番夕方（cron 16:00）夜レース用2段階生成
+│   ├── intraday_results_wt.sh         # ★本番日中（cron 0,10-23時）当日結果逐次収集・通知なし
 │   ├── weekly_retrain_wt.sh           # ★本番週次（cron 日23:30）
 │   ├── notify_picks.py                # wave-picks 通知 + PDF生成 → Discord
 │   ├── notify_results_wt.py           # wt前日結果採点 + picks_history(route='wt') → Discord
 │   ├── snapshot_morning_odds_wt.py    # 朝オッズ退避(wt_odds_snapshot) / --report ドリフト計測
+│   ├── snapshot_intraday_odds_wt.py   # 日中オッズスナップショット（money-flow素材・G03）
+│   ├── live_report_wt.py              # live実測レポート（ランク別/タグ別成績・ドリフト分布・標本数・G02）
+│   ├── collect_weather.py             # 気象データバックフィル（Open-Meteo API・G05）
+│   ├── exp_moneyflow_wt.py            # money-flow 検証ハーネス（G04）
+│   ├── exp_wind_wt.py                 # 風×バンク特徴リーク無し検証（G06）
+│   ├── exp_highpay_fusion_wt.py       # 高配当検知×新シグナル合成（ゲート判定・G07）
 │   └── analyze_*/backtest_*_wt.py     # 各種検証スクリプト
 ├── data/
 │   ├── keirin.db                      # SQLite DB（wt 96,455R + ks凍結 / WALモード）
@@ -80,8 +88,17 @@ keirin/
 - `--gami-skip-odds 3.0`：3点中1点でも朝オッズ<3倍ならレース見送り
 - `--b-rank-odds 5.0`：最安目が3〜5倍未満ならBランク（購入は各自判断・別枠）
 - `--upset-gate Q1_loose|Q2|Q3`：top3_sum波乱ゲート（opt-in。省略時は全pickに upset_tier タグ付けのみ）
+- `--stake-tilt`：波乱スコア(top3_sum)で賭け金傾斜（opt-in・既定off）
+- `--ss-trifecta-box`：SS層の3連単を pred1,pred2 1-2着BOX(6点)に拡張（opt-in・既定off=3点で本番不変。検証=`docs/analysis/10-le6-fav-position.md`）
 
-補助スクリプト: `scripts/snapshot_morning_odds_wt.py [date]`（朝オッズ退避）/ `--report`（朝→最終ドリフト計測）。
+補助スクリプト:
+- `scripts/snapshot_morning_odds_wt.py [date]`（朝オッズ退避）/ `--report`（朝→最終ドリフト計測）
+- `scripts/snapshot_intraday_odds_wt.py [--date]`（日中オッズスナップショット・money-flow素材）
+- `scripts/live_report_wt.py [--from] [--to] [--format md]`（live実測レポート・ランク別/タグ別成績・ドリフト分布・必要標本数推定）
+- `scripts/collect_weather.py [--from] [--to]`（気象データバックフィル・全43会場・Open-Meteo Historical API）
+- `scripts/exp_moneyflow_wt.py [--from] [--to] [--report]`（money-flow検証ハーネス・ドリフト記述統計・スマートマネー仮説）
+- `scripts/exp_wind_wt.py [--from] [--to]`（風×バンク特徴のリーク無し LGBM 検証）
+- `scripts/exp_highpay_fusion_wt.py [--report]`（高配当×新シグナル合成・G06/G04ゲート判定）
 
 ### keirin-station ルート（収集停止・ロールバック保持）
 
@@ -142,7 +159,8 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 | `wt_races` | レース情報（cup_id, day_index, grade, start_at 等） |
 | `wt_entries` | 出走情報（34カラム: race_point, 脚質, lineup情報, 戦術率, finish_order 等） |
 | `wt_odds` | 事前オッズ（bet_type: trifecta/trio/exacta/quinella 等, odds_value・最終値で上書き） |
-| `wt_odds_snapshot` | 朝オッズ退避（snapshot_type='morning'・初回値保持。朝→最終ドリフト計測用） |
+| `wt_odds_snapshot` | オッズスナップショット（snapshot_type='morning'/'h06'/'h10'等・初回値保持。朝→最終ドリフト計測・money-flow用） |
+| `wt_weather` | 気象データ（venue_id×dt_hour PK・wind_speed/wind_gust/temperature 等。Open-Meteo API 経由バックフィル済） |
 
 ---
 
@@ -170,8 +188,9 @@ AM 8:00 （daily_picks_wt.sh）
   ③ collect-wt --date $(today)                   # 当日出走表+オッズ収集
   ④ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
   ⑤ wave-picks-wt --date $(today) \
-       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 39特徴・SS/S/A＋ガミ3段階）
+       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 40特徴・SS/S/A＋ガミ3段階）
   ⑥ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord（Bは各自判断・成績/ツイート対象外）
+日中（0,10-23時, intraday_results_wt.sh）: collect-wt --date $(today) で当日結果を逐次収集（未終了のみ・通知なし・最終R23:30発走を0:00でカバー）。
 週次（日 23:30, weekly_retrain_wt.sh）: train-wt 再学習。
 ```
 （旧ksフロー daily_picks.sh / notify_results.py / wave-picks は廃止。lgbm_v6等は保持＝ロールバック用）
@@ -189,3 +208,7 @@ AM 8:00 （daily_picks_wt.sh）
 | 2026-06-05 | S ランクに ratio<1.6 上限追加（低配当レース除外） |
 | 2026-06-07 | winticket 全期間収集（96k）。ローリング特徴移植・ks比較検証 |
 | **2026-06-08** | **DNS(欠車)バグ修正 → winticket本番移行**（lgbm_wt_v1・39特徴・CV AUC 0.7720）。3タスク分析（`docs/analysis/`）→ 波乱ゲート(`strategy_wt.py`)・ガミ回避3段階・朝オッズ前向き計測を実装 |
+| **2026-06-09** | n_senko 特徴追加（FEATURE_COLS_WT 39→40）。SS三連単BOX(6点)・ワイド1点推奨(opt-in)実装。7+クローズ（公開オッズ内を3経路で確定）。fav_mismatch タグ記録開始。夕方2段階生成（`evening_picks_wt.sh`）実装。 |
+| **2026-06-10** | 欠車無効化（`notify_results_wt._void_by_dns`）・結果バックフィル実装。会場取得漏れバグ修正（ks references → wt_races）。`linePrediction=null` クラッシュ修正。 |
+| **2026-06-12** | バックテスト3バイアス発見（`docs/analysis/18`）。夕方cron 16:00登録完了。各種検証スクリプト追加（gap13打ち切り・B閾値緩和全滅・条件先行新方式なし・高配当10点リーク無し不通過・コメント特徴無情報・Web予想監査不通過）。 |
+| **2026-06-13** | G01〜G07完了（`backtest_wt.py`リーク無し化・live実測レポート・日中オッズスナップショット・money-flow検証ハーネス・気象データ収集・風特徴検証・高配当融合ゲート）。 |
