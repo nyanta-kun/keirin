@@ -263,7 +263,7 @@ def _backfill_miwokuri_trio_payout(conn) -> int:
     """
     rows = conn.execute(
         "SELECT race_key FROM picks_history "
-        "WHERE miwokuri=1 AND trio_payout=0 AND route='wt'"
+        "WHERE miwokuri=TRUE AND trio_payout=0 AND route='wt'"
     ).fetchall()
     if not rows:
         return 0
@@ -326,7 +326,7 @@ def _query_stats(like):
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
             "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_A') "
-            "AND NOT COALESCE(miwokuri, 0) AND race_date LIKE ?", (like,)).fetchone()
+            "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
@@ -336,7 +336,7 @@ def _query_stats_rank(like, rank):
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
             "FROM picks_history WHERE route='wt' AND rank=? "
-            "AND NOT COALESCE(miwokuri, 0) AND race_date LIKE ?", (rank, like)).fetchone()
+            "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (rank, like)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
 
