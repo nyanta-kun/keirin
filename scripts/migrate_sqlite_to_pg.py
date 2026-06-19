@@ -179,8 +179,9 @@ def main() -> None:
         sys.exit(1)
 
     if not SQLITE_PATH.exists():
-        print(f"ERROR: SQLite DB が見つかりません: {SQLITE_PATH}")
-        sys.exit(1)
+        # VPS上で直接PGに書き込む運用では SQLite が存在しない（スキップで正常）
+        print(f"[skip] SQLite DB が見つかりません（VPS直接書き込み運用）: {SQLITE_PATH}")
+        sys.exit(0)
 
     tables = [t for t in TABLES_ESSENTIAL + (TABLES_LARGE if args.full else [])
               if t[0] not in args.skip]
