@@ -62,7 +62,7 @@ jobs:
               "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}" << 'SSHEOF'
           set -e
           cd ~/keirin
-          git pull origin main
+          git pull origin master
           .venv/bin/pip install -r requirements_vps_slim.txt -q
           echo "[deploy] $(date '+%Y-%m-%d %H:%M:%S') OK"
           SSHEOF
