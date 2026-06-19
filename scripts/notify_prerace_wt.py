@@ -228,6 +228,51 @@ def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
     return min(valid_odds) if valid_odds else None
 
 
+def _save_picks_history_state(race_key: str, miwokuri: bool, new_rank: str | None = None) -> None:
+    """picks_history の miwokuri / rank を即時更新する（SQLite + VPS PG）。
+
+    ガミ落ち確定（miwokuri=True）とSSランク昇格（new_rank='7PLUS_SS'）を
+    当日中にkisekiへ反映させるために呼ぶ。翌朝の notify_results_wt.py が
+    最終的に上書き確定するため、この更新は「当日中の暫定表示」として機能する。
+    """
+    pattern = race_key + "#%"
+    cand_key = race_key + "#CAND"
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE picks_history SET miwokuri = ? WHERE race_key LIKE ? AND route = 'wt'",
+                (int(miwokuri), pattern),
+            )
+            if new_rank is not None:
+                conn.execute(
+                    "UPDATE picks_history SET rank = ? WHERE race_key = ? AND route = 'wt'",
+                    (new_rank, cand_key),
+                )
+            conn.commit()
+    except Exception as e:
+        logger.warning("picks_history SQLite 更新失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE keirin.picks_history SET miwokuri = %s"
+                        " WHERE race_key LIKE %s AND route = 'wt'",
+                        (miwokuri, pattern),
+                    )
+                    if new_rank is not None:
+                        cur.execute(
+                            "UPDATE keirin.picks_history SET rank = %s"
+                            " WHERE race_key = %s AND route = 'wt'",
+                            (new_rank, cand_key),
+                        )
+        except Exception as e:
+            logger.warning("picks_history VPS 更新失敗 %s: %s", race_key, e)
+
+
 def _save_prerace_gami(race_key: str, min_odds: float) -> None:
     """picks_history.prerace_gami を発走前実測値で更新する（SQLite + VPS）。
 
@@ -440,6 +485,8 @@ def main():
         if rank == "7PLUS_CAND":
             live_rank, live_thirds = _determine_live_rank(pick, odds_data)
             if live_rank == "なし":
+                # gami条件不成立 → kisekiに見送りを即時反映
+                _save_picks_history_state(rk, True)
                 print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
                 newly_done.add(rk)
                 time.sleep(0.3)
@@ -458,7 +505,14 @@ def main():
             pick_with_raceno["combo_str"] = f"{pivot1}-{pivot2}-{','.join(str(t) for t in live_thirds)}"
             pick_with_raceno["n_points"] = n_pts
             pick_with_raceno["stake"] = n_pts * 100
+            # SSランク確定をkisekiに即時反映
+            if live_rank == "7PLUS_SS":
+                _save_picks_history_state(rk, False, "7PLUS_SS")
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
+        else:
+            # 非候補（朝ガミ通過済み）: 直前でガミ落ちなら見送りを即時反映
+            if min_odds is not None and min_odds < GAMI_THRESHOLD:
+                _save_picks_history_state(rk, True)
 
         msg = _build_message(pick_with_raceno, ri, odds_data)
         messages.append((rk, msg))

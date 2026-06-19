@@ -206,6 +206,14 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
         rk = cand.get("race_key")
         if not rk or rk in purchased_base_keys:
             continue
+        # 未確定レース（finish_order 未記録）はスキップ。
+        # 30分cron（results_check_wt.sh）から呼ばれる場合、まだ発走していない
+        # 候補を miwokuri=TRUE にしないための安全弁。翌朝には全レース確定済み。
+        has_result = conn.execute(
+            "SELECT 1 FROM wt_entries WHERE race_key=? AND finish_order > 0 LIMIT 1", (rk,)
+        ).fetchone()
+        if not has_result:
+            continue
         gap12 = cand.get("gap12", 0.0)
         rank = "7PLUS_S" if gap12 >= 0.10 else "7PLUS_A"
         p1 = cand.get("pivot1")
@@ -391,6 +399,8 @@ def _main_inner(date, _db_url):
     pm = _load_payouts_wt(keys)
 
     # prerace_gami を事前取得（DELETE前）。prerace_gami < 5.0 のピックは見送り扱いにする。
+    # キーはサフィックス (#CAND/#7S 等) を除いた base_key で正規化することで、
+    # 当日中は #CAND として保存されている prerace_gami を翌朝の #7S 等で参照できる。
     existing_gami: dict[str, float] = {}
     with get_connection() as _conn:
         for _rk, _pg in _conn.execute(
@@ -398,7 +408,7 @@ def _main_inner(date, _db_url):
             "WHERE route='wt' AND race_date=? AND prerace_gami IS NOT NULL",
             (target_date,),
         ).fetchall():
-            existing_gami[_rk] = _pg
+            existing_gami[_rk.split("#")[0]] = _pg
 
     results_7plus_ss, results_7plus_s, results_7plus_a, history = [], [], [], []
     p7ssb = p7ssr = p7ssh = 0  # 7+車 SSランク 合計
@@ -453,7 +463,8 @@ def _main_inner(date, _db_url):
                 store_key = f"{rk}#7S"
             else:
                 store_key = f"{rk}#7A"
-            pg = existing_gami.get(store_key)
+            # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
+            pg = existing_gami.get(rk)
             is_gami_skip = pg is not None and pg < 5.0
             mark = f"◎ ¥{pay:,}" if hit else "×"
             rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"

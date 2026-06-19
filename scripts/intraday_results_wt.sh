@@ -44,6 +44,12 @@ echo "[$(date '+%H:%M:%S')] 日中採点（--silent）..."
   2>&1 >> "$LOG_DIR/intraday_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 日中採点に失敗（継続）"
 
+# 未来レース候補を復元（notify_results_wt.py の DELETE で消えた #CAND を戻す）
+echo "[$(date '+%H:%M:%S')] 未来レース候補復元..."
+.venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" \
+  2>&1 >> "$LOG_DIR/intraday_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 候補復元に失敗（継続）"
+
 # VPS PostgreSQL 同期（wt_races.status / wt_entries.finish_order / picks_history.payout を反映）
 if [[ -n "$KEIRIN_DB_URL" ]]; then
   echo "[$(date '+%H:%M:%S')] VPS 同期（wt_races + wt_entries + picks_history）..."
