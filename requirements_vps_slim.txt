@@ -1,0 +1,32 @@
+# VPS用 slim requirements（Python 3.12対応・Selenium/Jupyter/可視化系除外）
+# このファイルは VPS デプロイ・CI で使用する
+# requirements.txt から以下を変更:
+#   scikit-learn==1.4.1 → >=1.4.0 (Python 3.12 互換)
+# 除外: selenium, webdriver-manager, jupyter, matplotlib, seaborn, xgboost, ipykernel
+
+# Data collection
+requests==2.31.0
+beautifulsoup4==4.12.3
+lxml==5.1.0
+
+# Data processing
+pandas==2.2.1
+numpy==1.26.4
+sqlalchemy==2.0.28
+
+# Machine learning
+scikit-learn>=1.4.0
+lightgbm==4.3.0
+optuna==3.5.0
+
+# CLI
+click==8.1.7
+
+# Testing
+pytest==8.1.0
+
+# SNS
+tweepy==4.14.0
+
+# Database (PostgreSQL)
+psycopg2-binary
