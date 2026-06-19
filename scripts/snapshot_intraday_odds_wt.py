@@ -86,7 +86,8 @@ def snapshot(target_date: str, snapshot_type: Optional[str] = None,
     init_db()
 
     # 当日の未発走レース（start_at > 現在の UNIX 秒、cancel=0）を取得
-    now_unix = int(_jst_now().timestamp())
+    # start_at は TEXT 型のため文字列で比較（SQLite/PostgreSQL 共通）
+    now_unix = str(int(_jst_now().timestamp()))
     with get_connection() as conn:
         races = conn.execute(
             """
