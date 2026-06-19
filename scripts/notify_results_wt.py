@@ -341,13 +341,25 @@ def _query_stats_rank(like, rank):
 
 
 def main():
+    import sqlite3 as _sqlite3
     from datetime import date
     from src.database import DB_PATH
     _db_url = os.environ.get("KEIRIN_DB_URL", "")
-    # VPS直接書き込みモード: KEIRIN_DB_URL が設定されていてローカル SQLite が存在しない場合
+
+    def _sqlite_has_schema() -> bool:
+        """SQLiteにpicks_historyテーブルが存在するか確認。"""
+        try:
+            with _sqlite3.connect(str(DB_PATH)) as c:
+                return bool(c.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='picks_history'"
+                ).fetchone())
+        except Exception:
+            return False
+
+    # VPS直接書き込みモード: KEIRIN_DB_URL が設定されていてSQLiteにスキーマがない場合
     # get_connection() が PostgreSQL を直接使う。_sync_vps は不要（既にPGへ書いている）。
     # Mac 通常モード: KEIRIN_DB_URL を退避して SQLite へ書き込み、後で _sync_vps で同期。
-    _vps_native = bool(_db_url) and not DB_PATH.exists()
+    _vps_native = bool(_db_url) and not _sqlite_has_schema()
     if not _vps_native:
         os.environ.pop("KEIRIN_DB_URL", "")
     try:
