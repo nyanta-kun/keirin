@@ -12,7 +12,7 @@ import notify_results_wt as nr  # scripts/ は conftest で path 追加済
     ("(元A) 3連複: 4-1-5,2,3", (4, 1, [5, 2, 3])),   # Bランクの (元X) 接頭辞
     ("3連単: 4→1→5", (4, 1, [5])),                    # 順序付き（→区切り）
     ("1-2-3,4,5", (1, 2, [3, 4, 5])),                 # コロン無し
-    ("3連複: 1-2-3,4,5,6", (1, 2, [3, 4, 5])),        # thirds は3つに切詰め
+    ("3連複: 1-2-3,4,5,6", (1, 2, [3, 4, 5, 6])),      # thirds は全て返す（切り詰めなし）
     ("3連単BOX: 4⇄5→1,2,3", (4, 5, [1, 2, 3])),       # SS 1-2着BOX（⇄=両順・→区切り）
     ("ワイド: 4-5", (4, 5, [])),                        # ワイド1点（2車・thirds空）
 ])
@@ -78,24 +78,21 @@ def test_void_by_dns_wide_leg_scratched():
     assert nr._void_by_dns(2, 4, [], runners={2, 3, 4, 5}, is_wide=True)[0] is False
 
 
-# ── _parse_picks_full: 【Bランク】は採点対象から除外される ──
+# ── _parse_picks_full: 7+車フォーマット SS/S/A の採点対象確認 ──
 _FIXTURE_DATE = "2099-12-31"
 _FIXTURE = """\
 ======================================================================
- 競輪AI予想PICK [wt]  2099-12-31
+ 競輪AI予想PICK [wt]  2099-12-31  (7+車 三連複・SSランク/Sランク/Aランク)
 ======================================================================
 
-【SSランク】 0件
+【7+車 SSランク】 0件
   (該当なし)
 
-【Sランク】 0件
+【7+車 Sランク】 0件
   (該当なし)
 
-【Aランク】 1件
-  10:00  京王閣 3R  [6車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
-
-【Bランク】 1件  ※各自判断
-  17:43  いわき平 6R  [6車]  (元A) 3連複: 4-1-5,2,3  (3点/300円)  [4.7倍]
+【7+車 Aランク】 1件
+  10:00  京王閣 3R  [7車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
 """
 
 
@@ -112,29 +109,29 @@ def fixture_picks_file():
 
 def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
     picks = nr._parse_picks_full(_FIXTURE_DATE)
-    # Aランクのみ採点対象。Bランク(いわき平6R)は含めない。キーは (venue, race_no, slot)。
-    assert ("京王閣", 3, "main") in picks
-    assert picks[("京王閣", 3, "main")][0] == "A"
-    assert ("いわき平", 6, "main") not in picks, "Bランクは採点対象から除外されるべき"
+    # 7+車 Aランクのみ採点対象。slot は "7plus_a"。
+    assert ("京王閣", 3, "7plus_a") in picks
+    assert picks[("京王閣", 3, "7plus_a")][0] == "7PLUS_A"
     assert len(picks) == 1
 
 
-# ── ワイド1点: 同一レースで SS/S/A(main) と並立し、slot で分離される ──
+# ── _parse_picks_full: 同一レースで SS と A が別 slot で並立する ──
 _WIDE_DATE = "2099-12-29"
 _WIDE_FIXTURE = """\
-【SSランク】 0件
+======================================================================
+ 競輪AI予想PICK [wt]  2099-12-29  (7+車 三連複・SSランク/Sランク/Aランク)
+======================================================================
+【7+車 SSランク】 1件
+  10:00  京王閣 3R  [7車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
+【7+車 Sランク】 0件
   (該当なし)
-【Sランク】 0件
-  (該当なし)
-【Aランク】 1件
-  10:00  京王閣 3R  [6車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
-【ワイド1点】 1件  ※指数1-2位ワイド・1点100円
-  10:00  京王閣 3R  [6車]  ワイド: 1-2  (1点/100円)  [3.0倍]
+【7+車 Aランク】 1件
+  11:00  京王閣 5R  [7車]  3連複: 2-3-4,5,6  (3点/300円)  [8.0倍]
 """
 
 
 def test_parse_picks_full_wide_coexists_with_main():
-    """同一レース(京王閣3R)の A(main) と ワイド(wide) が衝突せず両立する。"""
+    """同一ファイル内の 7PLUS_SS と 7PLUS_A が別エントリとして並立する。"""
     path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_WIDE_DATE}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_WIDE_FIXTURE, encoding="utf-8")
@@ -142,12 +139,11 @@ def test_parse_picks_full_wide_coexists_with_main():
         picks = nr._parse_picks_full(_WIDE_DATE)
     finally:
         path.unlink(missing_ok=True)
-    assert ("京王閣", 3, "main") in picks
-    assert ("京王閣", 3, "wide") in picks
-    assert picks[("京王閣", 3, "main")][0] == "A"
-    assert picks[("京王閣", 3, "wide")][0] == "WIDE"
-    assert picks[("京王閣", 3, "wide")][2] == "ワイド: 1-2"
-    assert len(picks) == 2, "main と wide が別エントリとして並立すべき"
+    assert ("京王閣", 3, "7plus_ss") in picks
+    assert ("京王閣", 5, "7plus_a") in picks
+    assert picks[("京王閣", 3, "7plus_ss")][0] == "7PLUS_SS"
+    assert picks[("京王閣", 5, "7plus_a")][0] == "7PLUS_A"
+    assert len(picks) == 2, "7plus_ss と 7plus_a が別エントリとして並立すべき"
 
 
 # ── notify_results_wt.main: Bランクのみ(推奨0件)を「ファイル無し」と誤通知しない ──
