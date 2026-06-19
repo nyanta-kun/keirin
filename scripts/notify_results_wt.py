@@ -342,13 +342,18 @@ def _query_stats_rank(like, rank):
 
 def main():
     from datetime import date
-    # 採点は常にローカル SQLite へ書き込む。KEIRIN_DB_URL は _sync_vps で使用する。
-    # get_connection() が KEIRIN_DB_URL を見てPGへ直接書き込むのを防ぐため、事前に退避する。
-    _db_url = os.environ.pop("KEIRIN_DB_URL", "")
+    from src.database import DB_PATH
+    _db_url = os.environ.get("KEIRIN_DB_URL", "")
+    # VPS直接書き込みモード: KEIRIN_DB_URL が設定されていてローカル SQLite が存在しない場合
+    # get_connection() が PostgreSQL を直接使う。_sync_vps は不要（既にPGへ書いている）。
+    # Mac 通常モード: KEIRIN_DB_URL を退避して SQLite へ書き込み、後で _sync_vps で同期。
+    _vps_native = bool(_db_url) and not DB_PATH.exists()
+    if not _vps_native:
+        os.environ.pop("KEIRIN_DB_URL", "")
     try:
-        _main_inner(date, _db_url)
+        _main_inner(date, "" if _vps_native else _db_url)
     finally:
-        if _db_url:
+        if _db_url and not _vps_native:
             os.environ["KEIRIN_DB_URL"] = _db_url
 
 
