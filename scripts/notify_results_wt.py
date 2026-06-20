@@ -347,12 +347,17 @@ def main():
     _db_url = os.environ.get("KEIRIN_DB_URL", "")
 
     def _sqlite_has_schema() -> bool:
-        """SQLiteにpicks_historyテーブルが存在するか確認。"""
+        """SQLiteに最新スキーマ(miwokuri列あり)のpicks_historyが存在するか確認。
+        miwokuri列がなければ放棄済みSQLiteとみなしFalseを返す（VPSネイティブモードへ）。
+        """
         try:
             with _sqlite3.connect(str(DB_PATH)) as c:
-                return bool(c.execute(
+                if not c.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='picks_history'"
-                ).fetchone())
+                ).fetchone():
+                    return False
+                cols = {r[1] for r in c.execute("PRAGMA table_info(picks_history)").fetchall()}
+                return "miwokuri" in cols
         except Exception:
             return False
 
