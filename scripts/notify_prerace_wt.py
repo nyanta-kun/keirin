@@ -121,7 +121,7 @@ def _load_race_info(race_keys: list[str]) -> dict[str, dict]:
     with get_connection() as conn:
         placeholders = ",".join("?" * len(race_keys))
         rows = conn.execute(
-            f"SELECT race_key, start_at, venue_id, cup_id, day_index, n_entries, race_date "
+            f"SELECT race_key, start_at, venue_id, cup_id, day_index, n_entries, race_date, race_no "
             f"FROM wt_races WHERE race_key IN ({placeholders})",
             race_keys,
         ).fetchall()
