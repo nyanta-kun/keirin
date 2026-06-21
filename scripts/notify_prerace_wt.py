@@ -241,7 +241,7 @@ def _save_picks_history_state(race_key: str, miwokuri: bool, new_rank: str | Non
         with get_connection() as conn:
             conn.execute(
                 "UPDATE picks_history SET miwokuri = ? WHERE race_key LIKE ? AND route = 'wt'",
-                (int(miwokuri), pattern),
+                (miwokuri, pattern),
             )
             if new_rank is not None:
                 conn.execute(

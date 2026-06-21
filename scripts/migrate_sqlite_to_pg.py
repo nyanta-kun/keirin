@@ -94,7 +94,7 @@ def migrate_table(
 
     # picks_history の id は VPS 側の SERIAL に任せるため除外
     # (SQLite と VPS で id 採番が独立しており、conflict_cols=race_key なので id は不要)
-    _exclude_cols: dict[str, set[str]] = {"picks_history": {"id"}}
+    _exclude_cols: dict[str, set[str]] = {"picks_history": {"id"}, "wt_entries": {"id"}}
     exclude = _exclude_cols.get(table, set())
 
     # PostgreSQL に存在するカラムのみ使用
