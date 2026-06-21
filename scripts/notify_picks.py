@@ -151,7 +151,12 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150)
     if not races:
         return False
 
-    plt.rcParams["font.family"] = "Hiragino Sans"
+    # macOS: Hiragino Sans / Linux: IPAGothic
+    import platform
+    if platform.system() == "Darwin":
+        plt.rcParams["font.family"] = "Hiragino Sans"
+    else:
+        plt.rcParams["font.family"] = "IPAGothic"
     plt.rcParams["axes.unicode_minus"] = False
 
     rank_colors = {
