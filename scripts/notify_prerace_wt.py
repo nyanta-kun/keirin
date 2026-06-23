@@ -92,23 +92,31 @@ def _load_picks(today: str) -> list[dict]:
     candidates がなければ detail JSON（フィルタ済み）にフォールバック。
     """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
-    # 候補ファイル優先（gap12のみ・gamiフィルタなし）
-    for fname in (f"wave_picks_wt_{today}_candidates.json",
-                  f"wave_picks_wt_{today}_detail.json"):
-        p = picks_dir / fname
-        if p.exists():
-            try:
-                entries = json.loads(p.read_text(encoding="utf-8"))
-                # night 候補は別ファイル (candidates は日中のみ)
-                night_cands = picks_dir / f"wave_picks_wt_{today}_night_candidates.json"
-                if night_cands.exists():
-                    try:
-                        entries += json.loads(night_cands.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
-                return entries
-            except Exception as e:
-                logger.warning("%s 読み込み失敗: %s", fname, e)
+    cands_path = picks_dir / f"wave_picks_wt_{today}_candidates.json"
+    detail_path = picks_dir / f"wave_picks_wt_{today}_detail.json"
+    night_path  = picks_dir / f"wave_picks_wt_{today}_night_candidates.json"
+
+    if cands_path.exists():
+        try:
+            entries = json.loads(cands_path.read_text(encoding="utf-8"))
+            # candidates は日中（〜19時）のみ → 夜候補を追記
+            if night_path.exists():
+                try:
+                    entries += json.loads(night_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            return entries
+        except Exception as e:
+            logger.warning("candidates JSON 読み込み失敗: %s", e)
+
+    if detail_path.exists():
+        try:
+            # detail.json は日中・夜 両方含む確定ピック → night_candidates 追記不要
+            # (追記すると同一 race_key が CAND と確定ランクの2重エントリになる)
+            return json.loads(detail_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("detail JSON 読み込み失敗: %s", e)
+
     return []
 
 

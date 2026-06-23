@@ -516,7 +516,15 @@ def _main_inner(date, _db_url):
                 history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, bet, False, pg))
 
         if history:
-            conn.execute("DELETE FROM picks_history WHERE route='wt' AND race_date=?", (target_date,))
+            # 採点済みレースのベースキー単位で選択削除する。
+            # 全日付削除にすると .txt が欠落した日（夜 .txt のみ読み込み）に
+            # 日中スコア済みエントリが消えてしまうため。
+            base_keys = {h[1].split("#")[0] for h in history}
+            for bk in base_keys:
+                conn.execute(
+                    "DELETE FROM picks_history WHERE race_key LIKE ? AND route='wt'",
+                    (bk + "#%",),
+                )
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
