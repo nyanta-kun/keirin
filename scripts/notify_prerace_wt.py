@@ -286,17 +286,34 @@ def _save_prerace_gami(race_key: str, min_odds: float) -> None:
 
     picks_history の race_key は "{base_key}#7S" / "#7A" / "#7SS" / "#CAND" 等の
     サフィックス付き形式で保存されているため、LIKE で全サフィックスを一括更新する。
+
+    #CAND エントリが存在しない（candidates.json のガミフィルタで除外された）レースは
+    UPDATE が 0 件になる。その場合 #GAMI プレースホルダーを INSERT し、
+    notify_results_wt.py が existing_gami を参照できるようにする。
     """
     rounded = round(min_odds, 2)
     pattern = race_key + "#%"
+    gami_key = race_key + "#GAMI"
+    # race_date を race_key から復元（例: 20260624_37_03 → 2026-06-24）
+    _parts = race_key.split("_")
+    _d = _parts[0] if _parts else ""
+    race_date = f"{_d[:4]}-{_d[4:6]}-{_d[6:8]}" if len(_d) == 8 else date.today().strftime("%Y-%m-%d")
 
     # SQLite 更新
     try:
         with get_connection() as conn:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE picks_history SET prerace_gami = ? WHERE race_key LIKE ?",
                 (rounded, pattern),
             )
+            if cur.rowcount == 0:
+                # #CAND なし → プレースホルダーを INSERT
+                conn.execute(
+                    "INSERT OR IGNORE INTO picks_history "
+                    "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
+                    "VALUES (?,?,'GAMI',NULL,0,0,0,0,0,'wt',True,?)",
+                    (race_date, gami_key, rounded),
+                )
             conn.commit()
     except Exception as e:
         logger.warning("prerace_gami SQLite 書き込み失敗 %s: %s", race_key, e)
@@ -312,6 +329,14 @@ def _save_prerace_gami(race_key: str, min_odds: float) -> None:
                         "UPDATE keirin.picks_history SET prerace_gami = %s WHERE race_key LIKE %s",
                         (rounded, pattern),
                     )
+                    if cur.rowcount == 0:
+                        cur.execute(
+                            "INSERT INTO keirin.picks_history "
+                            "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
+                            "VALUES (%s,%s,'GAMI',NULL,0,0,0,0,0,'wt',TRUE,%s) "
+                            "ON CONFLICT DO NOTHING",
+                            (race_date, gami_key, rounded),
+                        )
         except Exception as e:
             logger.warning("prerace_gami VPS 書き込み失敗 %s: %s", race_key, e)
 
