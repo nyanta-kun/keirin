@@ -488,12 +488,6 @@ def _main_inner(date, _db_url):
             # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
             pg = existing_gami.get(rk)
             is_gami_skip = pg is not None and pg < 5.0
-            # candidates.json に含まれていない S/A ランク pick = 朝のガミ値 < 5.0 でフィルタ済み。
-            # prerace_gami が保存されていない（#CAND エントリがない）ため existing_gami=None だが、
-            # スキップ対象として扱う（SS ランクは別ロジックなので除外）。
-            if not is_gami_skip and pg is None and rank != "7PLUS_SS" and rk not in _cand_keys_extra:
-                is_gami_skip = True
-                pg = 4.99  # sentinel: 朝ガミフィルタ済み（実値不明）
             mark = f"◎ ¥{pay:,}" if hit else "×"
             rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
