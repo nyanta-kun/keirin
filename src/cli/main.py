@@ -1012,11 +1012,16 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
         raise SystemExit(1)
 
     df = build_features_wt(df_raw)
-    # M-2: 学習母集団を finish_order>=1 に統一（DNS=0/欠車・欠損を除外）。
-    # backtest(_apply_pred_prob_wt)・採点と同一母集団にし、DNS負例混入を排除。
-    df_train = df[df["finish_order"] >= 1].copy()
+    # M-2: 学習母集団は finish_order が確定済みの全行（NaN=未確定のみ除外）。
+    # finish_order=0（欠車/失格）は top3_flag=0 の負例として含める。
+    # 予測時・バックテスト(_apply_pred_prob_wt)は全エントリーで確率付与するため
+    # 学習も同一母集団にしないと train/serve skew（欠車楽観バイアス）が生じる。
+    # ローリング特徴の履歴計算は引き続き finish_order>=1 のみを参照（仕様変更なし）。
+    df_train = df[df["finish_order"].notna()].copy()
+    n_dns = (df_train["finish_order"] == 0).sum()
     click.echo(f"Training samples: {len(df_train):,} entries / "
-               f"{df_train['race_key'].nunique():,} races  (finish_order>=1)")
+               f"{df_train['race_key'].nunique():,} races  "
+               f"(finish_order!=NaN; DNS/DNF={n_dns:,}件を負例に含む)")
 
     if len(df_train) < 100:
         click.echo("学習データが不足しています（100行未満）。", err=True)
@@ -1148,6 +1153,10 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
                    "既定on＝7+車専用本番モード。")
 @click.option("--7plus-s-gap12", "seven_plus_s_gap12", default=0.10, show_default=True, type=float,
               help="7+車 Sランク閾値: gap12がこの値以上をSランク、未満をAランク（default: 0.10=HOLD143%）")
+@click.option("--include-7plus-a/--no-include-7plus-a", "include_7plus_a", default=False,
+              help="7+車 Aランク（gap12<Sランク閾値）を購入対象に含める。"
+                   "デフォルト off＝Aランク無効化。"
+                   "バックテスト: VAL 70.1%/HOLD 84.8%（gap12≥0.09でも < 100%）で構造的損失確認済み（2026-06-26）。")
 @click.option("--min-combo-odds", "min_combo_odds", default=0.0, show_default=True,
               type=float,
               help="個別コンボ（各3連複目）の最低オッズ。この値未満の目は個別スキップ。"
@@ -1157,7 +1166,7 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, save_as
 def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gate,
                   gami_skip_odds, b_rank_odds, stake_tilt, ss_trifecta_box, wide, wide_min_odds,
                   start_from_hour, start_to_hour, min_gap12, grade_split_gap12, include_7plus,
-                  seven_plus_s_gap12, min_combo_odds):
+                  seven_plus_s_gap12, include_7plus_a, min_combo_odds):
     """winticket モデルで wave-picks を生成（オッズ表示・フィルター付き）
 
     オッズは AI 予想後の購入判断に使用。市場が既に織り込んでいる
@@ -1736,8 +1745,13 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             thirds_str7 = ",".join(str(t) for t in thirds_7)
             n_pts7 = len(thirds_7)
 
-            # gap12でS/Aランク分岐
-            p7_rank_list = plus7_s_races if gap12_7 >= seven_plus_s_gap12 else plus7_a_races
+            # gap12でS/Aランク分岐（Aランクは--include-7plus-a が有効な場合のみ）
+            if gap12_7 >= seven_plus_s_gap12:
+                p7_rank_list = plus7_s_races
+            elif include_7plus_a:
+                p7_rank_list = plus7_a_races
+            else:
+                continue  # Aランク無効化（バックテストで構造的損失確認・2026-06-26）
             p7_rank_list.append({
                 "race_key":    race_key,
                 "venue_name":  venue_name7,
@@ -1790,23 +1804,28 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
+    a_status = f"{len(plus7_a_races)}件" if include_7plus_a else "無効化(ROI<100%確認・2026-06-26)"
     lines.append("=" * 70)
     lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 三連複・SSランク/Sランク/Aランク)")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
-    lines.append(f" 7+車(gap12≥{min_gap12:.2f}): SS:{len(plus7_ss_races)}件  S:{len(plus7_s_races)}件/A:{len(plus7_a_races)}件"
+    lines.append(f" 7+車(gap12≥{min_gap12:.2f}): SS:{len(plus7_ss_races)}件  S:{len(plus7_s_races)}件/A:{a_status}"
                  f"  (S/A gami不足スキップ:{skipped_7plus_gami}件)"
-                 f"  Sランク閾値gap12≥{seven_plus_s_gap12:.2f}(HOLD~143%) / Aランク(HOLD~138%)")
+                 f"  Sランク閾値gap12≥{seven_plus_s_gap12:.2f}(HOLD~143%)")
     lines.append("=" * 70)
     lines.append(f" SSランク: ガミ目カット後≤3目(HOLD~137%)  対象: 7車以上  gap12≥{min_gap12:.2f}")
-    lines.append(f" Sランク: gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}  Aランク: gami≥5倍+gap12[{min_gap12:.2f},{seven_plus_s_gap12:.2f})")
+    lines.append(f" Sランク: gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}")
+    a_note = f"Aランク: {'有効' if include_7plus_a else '無効化'}  gami≥5倍+gap12[{min_gap12:.2f},{seven_plus_s_gap12:.2f})"
+    lines.append(f" {a_note}")
     lines.append("=" * 70)
     lines.append("")
 
-    for p7_rank, p7_list, p7_desc in [
+    rank_sections = [
         ("SS", plus7_ss_races, "ガミ目カット後≤3目  HOLD ~137%"),
         ("S",  plus7_s_races,  f"gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}  HOLD ~143%"),
-        ("A",  plus7_a_races,  f"gami≥5倍+gap12 [{min_gap12:.2f},{seven_plus_s_gap12:.2f})  HOLD ~138%"),
-    ]:
+    ]
+    if include_7plus_a:
+        rank_sections.append(("A", plus7_a_races, f"gami≥5倍+gap12[{min_gap12:.2f},{seven_plus_s_gap12:.2f})"))
+    for p7_rank, p7_list, p7_desc in rank_sections:
         lines.append(f"【7+車 {p7_rank}ランク】 {len(p7_list)}件  ※{p7_desc}  三連複")
         lines.append("─" * 60)
         lines.append("  (該当なし)" if not p7_list else "")
@@ -1819,10 +1838,13 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
     p7ss_cost = _cost(plus7_ss_races)
     p7s_cost = _cost(plus7_s_races)
     p7a_cost = _cost(plus7_a_races)
-    p7_total = p7ss_cost + p7s_cost + p7a_cost
+    p7_total = p7ss_cost + p7s_cost + (p7a_cost if include_7plus_a else 0)
     lines.append(f"  7+車 SSランク: {len(plus7_ss_races)}件 = {p7ss_cost:,}円")
     lines.append(f"  7+車 Sランク: {len(plus7_s_races)}件 = {p7s_cost:,}円")
-    lines.append(f"  7+車 Aランク: {len(plus7_a_races)}件 = {p7a_cost:,}円")
+    if include_7plus_a:
+        lines.append(f"  7+車 Aランク: {len(plus7_a_races)}件 = {p7a_cost:,}円")
+    else:
+        lines.append(f"  7+車 Aランク: 無効化（ROI<100%確認・2026-06-26）")
     lines.append(f"  推奨合計投資額: {p7_total:,}円  (7+車)")
     lines.append("=" * 70)
 
