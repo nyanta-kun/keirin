@@ -91,6 +91,9 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
     sql = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds|wt_odds_snapshot"
                  r"|wt_weather|venue_info|picks_history)\b",
                  r"keirin.\1", sql, flags=re.IGNORECASE)
+    # psycopg2 は % をフォーマット文字として扱う。
+    # LIKE '7PLUS%' 等リテラル % を先に %% にエスケープしてから :name / ? を変換する。
+    sql = sql.replace("%", "%%")
     sql = re.sub(r":(\w+)", r"%(\1)s", sql)
     sql = sql.replace("?", "%s")
     sql = re.sub(r"datetime\('now'\)", "NOW()", sql, flags=re.IGNORECASE)
