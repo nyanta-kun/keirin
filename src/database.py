@@ -142,6 +142,12 @@ class _PgCursor:
         keys = [d[0] for d in self._cur.description]
         return _PgRow(dict(row), keys)
 
+    @property
+    def rowcount(self) -> int:
+        if self._cur is None:
+            return 0
+        return self._cur.rowcount
+
     def __iter__(self):
         return iter(self.fetchall())
 
