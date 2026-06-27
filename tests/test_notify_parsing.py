@@ -78,20 +78,17 @@ def test_void_by_dns_wide_leg_scratched():
     assert nr._void_by_dns(2, 4, [], runners={2, 3, 4, 5}, is_wide=True)[0] is False
 
 
-# ── _parse_picks_full: 7+車フォーマット SS/S/A の採点対象確認 ──
+# ── _parse_picks_full: 7+車フォーマット SS/S の採点対象確認 ──
 _FIXTURE_DATE = "2099-12-31"
 _FIXTURE = """\
 ======================================================================
- 競輪AI予想PICK [wt]  2099-12-31  (7+車 三連複・SSランク/Sランク/Aランク)
+ 競輪AI予想PICK [wt]  2099-12-31  (7+車 三連複・SSランク/Sランク)
 ======================================================================
 
 【7+車 SSランク】 0件
   (該当なし)
 
-【7+車 Sランク】 0件
-  (該当なし)
-
-【7+車 Aランク】 1件
+【7+車 Sランク】 1件
   10:00  京王閣 3R  [7車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
 """
 
@@ -109,29 +106,29 @@ def fixture_picks_file():
 
 def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
     picks = nr._parse_picks_full(_FIXTURE_DATE)
-    # 7+車 Aランクのみ採点対象。slot は "7plus_a"。
-    assert ("京王閣", 3, "7plus_a") in picks
-    assert picks[("京王閣", 3, "7plus_a")][0] == "7PLUS_A"
+    # 7+車 Sランクを採点対象。slot は "7plus_s"。
+    assert ("京王閣", 3, "7plus_s") in picks
+    assert picks[("京王閣", 3, "7plus_s")][0] == "7PLUS_S"
     assert len(picks) == 1
 
 
-# ── _parse_picks_full: 同一レースで SS と A が別 slot で並立する ──
+# ── _parse_picks_full: SS と S が別 slot で並立し、Aランクは無視される ──
 _WIDE_DATE = "2099-12-29"
 _WIDE_FIXTURE = """\
 ======================================================================
- 競輪AI予想PICK [wt]  2099-12-29  (7+車 三連複・SSランク/Sランク/Aランク)
+ 競輪AI予想PICK [wt]  2099-12-29  (7+車 三連複・SSランク/Sランク)
 ======================================================================
 【7+車 SSランク】 1件
   10:00  京王閣 3R  [7車]  3連複: 1-2-3,4,5  (3点/300円)  [6.0倍]
-【7+車 Sランク】 0件
-  (該当なし)
-【7+車 Aランク】 1件
+【7+車 Sランク】 1件
   11:00  京王閣 5R  [7車]  3連複: 2-3-4,5,6  (3点/300円)  [8.0倍]
+【7+車 Aランク】 1件
+  12:00  京王閣 7R  [7車]  3連複: 3-4-5,6,7  (3点/300円)  [9.0倍]
 """
 
 
 def test_parse_picks_full_wide_coexists_with_main():
-    """同一ファイル内の 7PLUS_SS と 7PLUS_A が別エントリとして並立する。"""
+    """SS と S が別エントリとして並立し、廃止済みのAランクは無視される。"""
     path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_WIDE_DATE}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_WIDE_FIXTURE, encoding="utf-8")
@@ -140,10 +137,11 @@ def test_parse_picks_full_wide_coexists_with_main():
     finally:
         path.unlink(missing_ok=True)
     assert ("京王閣", 3, "7plus_ss") in picks
-    assert ("京王閣", 5, "7plus_a") in picks
+    assert ("京王閣", 5, "7plus_s") in picks
+    assert ("京王閣", 7, "7plus_a") not in picks  # Aランク廃止 → 無視
     assert picks[("京王閣", 3, "7plus_ss")][0] == "7PLUS_SS"
-    assert picks[("京王閣", 5, "7plus_a")][0] == "7PLUS_A"
-    assert len(picks) == 2, "7plus_ss と 7plus_a が別エントリとして並立すべき"
+    assert picks[("京王閣", 5, "7plus_s")][0] == "7PLUS_S"
+    assert len(picks) == 2, "7plus_ss と 7plus_s のみ2エントリ"
 
 
 # ── notify_results_wt.main: Bランクのみ(推奨0件)を「ファイル無し」と誤通知しない ──

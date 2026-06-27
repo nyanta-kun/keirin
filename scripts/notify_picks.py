@@ -18,8 +18,8 @@ from src.notify.discord import send, send_file
 
 
 def _parse_7plus_ranked(text: str) -> dict[str, list[dict]]:
-    """wave-picks テキストから 7+車 SSランク・Sランク・Aランク を抽出する。"""
-    result: dict[str, list[dict]] = {"SS": [], "S": [], "A": []}
+    """wave-picks テキストから 7+車 SSランク・Sランク を抽出する。"""
+    result: dict[str, list[dict]] = {"SS": [], "S": []}
     current_rank = None
 
     for line in text.splitlines():
@@ -30,7 +30,7 @@ def _parse_7plus_ranked(text: str) -> dict[str, list[dict]]:
             current_rank = "S"
             continue
         if "【7+車 Aランク】" in line:
-            current_rank = "A"
+            current_rank = None  # 廃止済み
             continue
         if current_rank is None:
             continue
@@ -161,7 +161,6 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150)
 
     rank_colors = {
         "7PLUS_S": "#AED6F1",
-        "7PLUS_A": "#ABEBC6",
         "SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1",
     }
     role_bg = {"軸1": "#AED6F1", "軸2": "#D6EAF8", "流し": "#EBF5FB", "-": "#FFFFFF"}

@@ -180,7 +180,7 @@ def _build_odds_lookup(odds_data: dict, bet_type: str) -> dict:
 def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]:
     """7PLUS_CANDレースの現在オッズでSS/S/A を判定する。
     returns (live_rank, valid_thirds)
-      - "7PLUS_SS" / "7PLUS_S" / "7PLUS_A": 条件成立
+      - "7PLUS_SS" / "7PLUS_S": 条件成立
       - "なし": 購入条件不成立（全目ガミ or S/A gami全不通過 and SS残り0 or >3）
     """
     p1 = pick.get("pivot1")
@@ -210,9 +210,10 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
     if len(valid_ge5) <= 3:
         return "7PLUS_SS", valid_ge5
 
-    # S/Aランク: 有効目が4目以上（ガミ目は除外して買う）
-    rank = "7PLUS_S" if gap12 >= SEVEN_PLUS_S_GAP12 else "7PLUS_A"
-    return rank, valid_ge5
+    # Sランク: 有効目が4目以上（ガミ目は除外して買う）。Aランク廃止（2026-06-28）
+    if gap12 < SEVEN_PLUS_S_GAP12:
+        return "なし", []
+    return "7PLUS_S", valid_ge5
 
 
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
@@ -355,7 +356,7 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
 
     # ランク表示
     rank_icon = {
-        "7PLUS_SS": "🚲⭐", "7PLUS_S": "🚲🔵", "7PLUS_A": "🚲🟢",
+        "7PLUS_SS": "🚲⭐", "7PLUS_S": "🚲🔵",
         "7PLUS": "🚲", "SS": "⭐", "S": "🔵", "A": "🟢",
     }.get(rank, "▪️")
     is_trifecta = rank in TRIFECTA_RANKS

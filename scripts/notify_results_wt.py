@@ -1,9 +1,9 @@
-"""winticket 成績通知＋picks_history保存（7+車 S/A ランク専用）
+"""winticket 成績通知＋picks_history保存（7+車 SS/S ランク専用）
 
 wave_picks_wt_{date}.txt の公開買い目を、winticket の確定結果(wt_entries.finish_order)
 と wt_odds(三連複) で採点し、Discord通知＋picks_history に保存する。
 欠車(finish_order=0/NULL)は着外として除外。公開した買い目のみ採点（再導出しない）。
-7+車 Sランク(#7S) / Aランク(#7A) 別に集計。
+7+車 SSランク(#7SS) / Sランク(#7S) 別に集計。Aランクは廃止済み（2026-06-28）。
 
 また candidates.json にあり購入されなかった候補レースを miwokuri=True で保存する。
 """
@@ -136,7 +136,7 @@ def _parse_picks_full(target_date: str) -> dict:
         for line in p.read_text(encoding="utf-8").splitlines():
             if "【7+車 SSランク】" in line: rank = "7PLUS_SS"
             elif "【7+車 Sランク】" in line: rank = "7PLUS_S"
-            elif "【7+車 Aランク】" in line: rank = "7PLUS_A"
+            elif "【7+車 Aランク】" in line: rank = None   # 廃止済み
             elif "【7+車】" in line: rank = "7PLUS_S"  # 旧フォーマット後方互換
             elif "【SSランク】" in line: rank = None   # 旧SS/S/A/B/WIDEは採点対象外
             elif "【Sランク】" in line: rank = None
@@ -146,7 +146,7 @@ def _parse_picks_full(target_date: str) -> dict:
             elif rank:
                 m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
                 if m:
-                    slot = "7plus_ss" if rank == "7PLUS_SS" else "7plus_s" if rank == "7PLUS_S" else "7plus_a"
+                    slot = "7plus_ss" if rank == "7PLUS_SS" else "7plus_s"
                     picks[(m.group(2), int(m.group(3)), slot)] = (rank, m.group(1), m.group(4))
     return picks
 
@@ -215,7 +215,9 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
         if not has_result:
             continue
         gap12 = cand.get("gap12", 0.0)
-        rank = "7PLUS_S" if gap12 >= 0.10 else "7PLUS_A"
+        if gap12 < 0.10:
+            continue  # Aランク廃止（2026-06-28）
+        rank = "7PLUS_S"
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")
         thirds = cand.get("thirds", [])
@@ -325,7 +327,7 @@ def _query_stats(like):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*), SUM(hit), SUM(payout), SUM(bet_amount) "
-            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_A') "
+            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S') "
             "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r[0] or 0, "hits": r[1] or 0, "returns": r[2] or 0, "bets": r[3] or 0}
 
@@ -432,10 +434,9 @@ def _main_inner(date, _db_url):
         ).fetchall():
             existing_gami[_rk.split("#")[0]] = _pg
 
-    results_7plus_ss, results_7plus_s, results_7plus_a, history = [], [], [], []
+    results_7plus_ss, results_7plus_s, history = [], [], []
     p7ssb = p7ssr = p7ssh = 0  # 7+車 SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 Sランク 合計
-    p7ab = p7ar = p7ah = 0    # 7+車 Aランク 合計
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -481,15 +482,13 @@ def _main_inner(date, _db_url):
             # store_key を先定義（prerace_gami 参照のため stats より前）
             if rank == "7PLUS_SS":
                 store_key = f"{rk}#7SS"
-            elif rank == "7PLUS_S":
-                store_key = f"{rk}#7S"
             else:
-                store_key = f"{rk}#7A"
+                store_key = f"{rk}#7S"
             # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
             pg = existing_gami.get(rk)
             is_gami_skip = pg is not None and pg < 5.0
             mark = f"◎ ¥{pay:,}" if hit else "×"
-            rank_label = "7SS" if rank == "7PLUS_SS" else "7S" if rank == "7PLUS_S" else "7A"
+            rank_label = "7SS" if rank == "7PLUS_SS" else "7S"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
             if rank == "7PLUS_SS":
                 if not is_gami_skip:
@@ -497,18 +496,12 @@ def _main_inner(date, _db_url):
                     if hit:
                         p7ssr += pay; p7ssh += 1
                 results_7plus_ss.append(row_str)
-            elif rank == "7PLUS_S":
+            else:  # 7PLUS_S
                 if not is_gami_skip:
                     p7sb += bet
                     if hit:
                         p7sr += pay; p7sh += 1
                 results_7plus_s.append(row_str)
-            else:  # 7PLUS_A および旧 7PLUS
-                if not is_gami_skip:
-                    p7ab += bet
-                    if hit:
-                        p7ar += pay; p7ah += 1
-                results_7plus_a.append(row_str)
             # prerace ガミ条件落ち → 見送り（bet/pay=0, miwokuri=True）として記録
             if is_gami_skip:
                 history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, 0, True, pg))
@@ -540,15 +533,15 @@ def _main_inner(date, _db_url):
         if n_backfill:
             print(f"[notify_results_wt] 見送り trio_payout バックフィル {n_backfill} 件", flush=True)
 
-    total_7plus = results_7plus_ss + results_7plus_s + results_7plus_a
+    total_7plus = results_7plus_ss + results_7plus_s
     if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         _sync_vps(_db_url, target_date)
         return
 
-    p7b = p7ssb + p7sb + p7ab
-    p7r = p7ssr + p7sr + p7ar
-    p7h = p7ssh + p7sh + p7ah
+    p7b = p7ssb + p7sb
+    p7r = p7ssr + p7sr
+    p7h = p7ssh + p7sh
     p7roi = p7r / p7b * 100 if p7b else 0
     n7 = len(total_7plus)
     header = (
@@ -568,10 +561,8 @@ def _main_inner(date, _db_url):
     rank_lines = []
     ss_line = _rank_line("SS", results_7plus_ss, p7ssb, p7ssr, p7ssh)
     s_line  = _rank_line("S",  results_7plus_s,  p7sb,  p7sr,  p7sh)
-    a_line  = _rank_line("A",  results_7plus_a,  p7ab,  p7ar,  p7ah)
     if ss_line: rank_lines.append(ss_line)
     if s_line:  rank_lines.append(s_line)
-    if a_line:  rank_lines.append(a_line)
 
     msg = header
     if rank_lines:
@@ -587,8 +578,7 @@ def _main_inner(date, _db_url):
 
     emit(msg[:1900])
     print(f"[notify_results_wt] {target_date} 7+車SS {len(results_7plus_ss)}R 的中{p7ssh} / "
-          f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 7+車A {len(results_7plus_a)}R 的中{p7ah} / "
-          f"欠車無効{skipped_dns}件")
+          f"7+車S {len(results_7plus_s)}R 的中{p7sh} / 欠車無効{skipped_dns}件")
 
     _sync_vps(_db_url, target_date)
 

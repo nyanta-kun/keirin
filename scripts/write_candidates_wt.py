@@ -235,7 +235,9 @@ def main() -> None:
         if not rk:
             continue
         gap12 = cand.get("gap12", 0.0)
-        rank = "7PLUS_S" if gap12 >= 0.10 else "7PLUS_A"
+        if gap12 < 0.10:
+            continue  # Aランク廃止（2026-06-28）
+        rank = "7PLUS_S"
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")
         thirds = cand.get("thirds", [])
