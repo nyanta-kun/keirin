@@ -203,16 +203,16 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
 
     valid_ge5 = [t for t in thirds if combo_odds.get(t, 0.0) >= GAMI_THRESHOLD]
 
-    # SSランク: gami≥5倍の目が1〜3残る
-    if 1 <= len(valid_ge5) <= 3:
+    if not valid_ge5:
+        return "なし", []  # 全目ガミ → 購入不可
+
+    # SSランク: ガミカット後の有効目が1〜3目
+    if len(valid_ge5) <= 3:
         return "7PLUS_SS", valid_ge5
 
-    # S/Aランク: 全目がgami≥5倍
-    if len(valid_ge5) == len(thirds) and valid_ge5:
-        rank = "7PLUS_S" if gap12 >= SEVEN_PLUS_S_GAP12 else "7PLUS_A"
-        return rank, thirds
-
-    return "なし", []
+    # S/Aランク: 有効目が4目以上（ガミ目は除外して買う）
+    rank = "7PLUS_S" if gap12 >= SEVEN_PLUS_S_GAP12 else "7PLUS_A"
+    return rank, valid_ge5
 
 
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
