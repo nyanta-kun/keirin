@@ -353,6 +353,9 @@ class WinticketScraper:
                 if item.get("absent"):
                     continue
                 combo = item.get("key", "")
+                # key がリスト形式 ([1, 2, 3]) の場合は "1-2-3" 形式に統一
+                if isinstance(combo, list):
+                    combo = "-".join(str(n) for n in combo)
                 odds_val = item.get("odds")
                 # ワイド(quinellaPlace)等のレンジ市場は odds=0、minOdds を採用（保守的な下限）
                 if not odds_val:
