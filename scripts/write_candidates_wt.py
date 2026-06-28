@@ -88,15 +88,19 @@ def _insert_candidates_vps(target_date: str, rows: list[tuple], existing: set[st
 
 
 def _save_initial_gami(race_key: str, race_date: str, min_odds: float, miwokuri: bool) -> None:
-    """prerace_gami（初回）と miwokuri を SQLite + VPS に保存する。"""
+    """prerace_gami（初回）と miwokuri を SQLite + VPS に保存する。
+
+    #CAND エントリのみを更新する。#7SS / #7S などの採点済みエントリは
+    notify_results_wt.py が管理するため上書きしない。
+    """
     rounded = round(min_odds, 2)
-    pattern = race_key + "#%"
+    cand_key = race_key + "#CAND"  # #CAND のみ対象（採点済みエントリを上書きしない）
 
     try:
         with get_connection() as conn:
             conn.execute(
-                "UPDATE picks_history SET prerace_gami = ?, miwokuri = ? WHERE race_key LIKE ?",
-                (rounded, miwokuri, pattern),
+                "UPDATE picks_history SET prerace_gami = ?, miwokuri = ? WHERE race_key = ?",
+                (rounded, miwokuri, cand_key),
             )
             conn.commit()
     except Exception as e:
@@ -111,8 +115,8 @@ def _save_initial_gami(race_key: str, race_date: str, min_odds: float, miwokuri:
             with pg_conn.cursor() as cur:
                 cur.execute(
                     "UPDATE keirin.picks_history SET prerace_gami = %s, miwokuri = %s"
-                    " WHERE race_key LIKE %s",
-                    (rounded, miwokuri, pattern),
+                    " WHERE race_key = %s",
+                    (rounded, miwokuri, cand_key),
                 )
     except Exception as e:
         print(f"[write_candidates_wt] VPS prerace_gami 更新失敗 {race_key}: {e}", flush=True)
