@@ -351,6 +351,7 @@ def main():
     def _sqlite_has_schema() -> bool:
         """SQLiteに最新スキーマ(miwokuri列あり)のpicks_historyが存在するか確認。
         miwokuri列がなければ放棄済みSQLiteとみなしFalseを返す（VPSネイティブモードへ）。
+        過去7日以内のwt_entriesデータがなければVPSがPGに直接書いているとみなしFalseを返す。
         """
         try:
             with _sqlite3.connect(str(DB_PATH)) as c:
@@ -359,7 +360,20 @@ def main():
                 ).fetchone():
                     return False
                 cols = {r[1] for r in c.execute("PRAGMA table_info(picks_history)").fetchall()}
-                return "miwokuri" in cols
+                if "miwokuri" not in cols:
+                    return False
+                # 過去7日以内のwt_entriesがなければVPSがPGに直接書いているとみなす
+                from datetime import date as _date, timedelta as _td
+                cutoff = (_date.today() - _td(days=7)).strftime("%Y%m%d")
+                has_wt = c.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wt_entries'"
+                ).fetchone()
+                if not has_wt:
+                    return False
+                return bool(c.execute(
+                    "SELECT 1 FROM wt_entries WHERE race_key >= ? LIMIT 1",
+                    (cutoff,),
+                ).fetchone())
         except Exception:
             return False
 

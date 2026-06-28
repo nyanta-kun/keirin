@@ -52,3 +52,6 @@ data/models/upset_cuts_wt.json
 # モデル世代退避・メタ（再生成可能・ローカル）
 data/models/archive/
 data/models/*.meta.json
+
+# 予想ファイル（日次生成・再生成可能）
+data/picks/
