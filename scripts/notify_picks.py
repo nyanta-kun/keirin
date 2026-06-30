@@ -3,7 +3,7 @@
 wave-picks の結果を Discord へ通知する（7+車専用版）。
 daily_picks_wt.sh から呼び出す。
 
-朝の通知: 全候補レース（gap12≥0.07）をガミ判定付きで一覧表示 + 推奨ランク詳細 + 全指数PDF
+朝の通知: 全候補レース（gap12≥0.10）をガミ判定付きで一覧表示 + 推奨ランク詳細 + 全指数PDF
 夜の通知: 夜の部候補レース同様
 """
 import json
@@ -345,7 +345,7 @@ def main():
     # ── 全レース指数PDF ────────────────────────────────────────────────────────
     _send_index_pdf()
 
-    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}/A:{a_n}, 候補:{n_cands})")
+    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}, 候補:{n_cands})")
 
 
 if __name__ == "__main__":
