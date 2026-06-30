@@ -101,14 +101,23 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
 
 
 class _PgRow:
-    """psycopg2 RealDictRow を sqlite3.Row 互換にラップする。"""
+    """psycopg2 RealDictRow を sqlite3.Row 互換にラップする。
 
-    def __init__(self, mapping: dict, keys: list[str]) -> None:
+    PostgreSQL の集約関数（SUM, COUNT 等）は列名が重複する場合がある（例: SUM(*) が
+    複数あると全て "sum" になる）。dict() 変換すると重複キーが上書きされるため、
+    インデックスアクセス(r[0], r[1], ...)は元の値リストから取得する。
+    """
+
+    def __init__(self, mapping: dict, keys: list[str], values: list | None = None) -> None:
         self._m = mapping
         self._k = keys
+        self._v = values  # 列順を保持した値リスト（重複キー対応）
 
     def __getitem__(self, key):
         if isinstance(key, int):
+            # 重複キーがある場合でも正しい位置の値を返す
+            if self._v is not None:
+                return self._v[key]
             return self._m[self._k[key]]
         return self._m[key]
 
@@ -125,11 +134,15 @@ class _PgCursor:
     def __init__(self, cur):
         self._cur = cur
 
+    def _make_row(self, raw_row) -> "_PgRow":
+        keys = [d[0] for d in self._cur.description]
+        values = list(raw_row.values()) if hasattr(raw_row, "values") else list(raw_row)
+        return _PgRow(dict(raw_row), keys, values)
+
     def _rows(self, raw_rows):
         if self._cur is None or self._cur.description is None:
             return []
-        keys = [d[0] for d in self._cur.description]
-        return [_PgRow(dict(r), keys) for r in raw_rows]
+        return [self._make_row(r) for r in raw_rows]
 
     def fetchall(self):
         if self._cur is None:
@@ -142,8 +155,7 @@ class _PgCursor:
         row = self._cur.fetchone()
         if row is None:
             return None
-        keys = [d[0] for d in self._cur.description]
-        return _PgRow(dict(row), keys)
+        return self._make_row(row)
 
     @property
     def rowcount(self) -> int:
