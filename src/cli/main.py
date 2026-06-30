@@ -1595,7 +1595,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                 "bet_type":   "ワイド",
             })
 
-    # 7+車 gami≥5.0倍 + gap12≥min_gap12 （doc48 Phase2通過・前向き検証用）
+    # 7+車 gami≥7.0倍 + gap12≥min_gap12 （doc48 Phase2通過・前向き検証用）
     # SSランク: ガミ目カット後≤3目 HOLD ~137% (doc49)
     # gap12≥seven_plus_s_gap12 → Sランク(HOLD ~143%) / 未満はスキップ（Aランク廃止 2026-06-28）
     plus7_candidates = []   # gap12≥min_gap12のみ（gamiフィルタなし・prerace用）
@@ -1732,8 +1732,8 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                     "bet_type":    "3連複",
                 })
 
-            # S/Aランク: 全目gami≥5.0倍
-            if gami_7 < 5.0:
+            # S/Aランク: 全目gami≥7.0倍
+            if gami_7 < 7.0:
                 skipped_7plus_gami += 1
                 continue
 
@@ -1802,7 +1802,7 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
                  f"  (gami不足スキップ:{skipped_7plus_gami}件)")
     lines.append("=" * 70)
     lines.append(f" SSランク: ガミ目カット後≤3目(HOLD~137%)  対象: 7車以上  gap12≥{seven_plus_s_gap12:.2f}")
-    lines.append(f" Sランク: gami≥5倍+gap12≥{seven_plus_s_gap12:.2f}  HOLD ~143%")
+    lines.append(f" Sランク: gami≥7倍+gap12≥{seven_plus_s_gap12:.2f}  HOLD ~268%")
     lines.append("=" * 70)
     lines.append("")
 

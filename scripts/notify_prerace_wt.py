@@ -46,7 +46,7 @@ NOTIFY_BEFORE_START_SEC = 15 * 60   # 15分前 = 締切（5分前）の10分前
 NOTIFY_WINDOW_SEC       = 70        # 通知ウィンドウ幅（cron の遅延を吸収）
 
 # ガミ足切り閾値
-GAMI_THRESHOLD = 5.0
+GAMI_THRESHOLD = 7.0
 
 # 三連単を通知に含めるランク
 TRIFECTA_RANKS = {"SS"}

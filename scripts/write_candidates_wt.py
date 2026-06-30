@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 
-GAMI_THRESHOLD = 5.0
+GAMI_THRESHOLD = 7.0
 
 
 def _insert_candidates_sqlite(
