@@ -406,7 +406,7 @@ def _main_inner(date, _db_url):
             emit(f"⚠️ 競輪AI[wt] [{target_date}] 予想ファイルが見つかりません")
         else:
             emit(f"📊 競輪AI[wt] [{target_date}] 7+車推奨なし＝採点対象なし"
-                 f"（gami≥5.0倍+gap12≥0.07 の該当レースなし）")
+                 f"（gami≥7.0倍+gap12≥0.07 の該当レースなし）")
         return
 
     with get_connection() as conn:
@@ -436,7 +436,7 @@ def _main_inner(date, _db_url):
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code} | _cand_keys_extra)
     pm = _load_payouts_wt(keys)
 
-    # prerace_gami を事前取得（DELETE前）。prerace_gami < 5.0 のピックは見送り扱いにする。
+    # prerace_gami を事前取得（DELETE前）。prerace_gami < 7.0 のピックは見送り扱いにする。
     # キーはサフィックス (#CAND/#7S 等) を除いた base_key で正規化することで、
     # 当日中は #CAND として保存されている prerace_gami を翌朝の #7S 等で参照できる。
     existing_gami: dict[str, float] = {}
@@ -500,7 +500,7 @@ def _main_inner(date, _db_url):
                 store_key = f"{rk}#7S"
             # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
             pg = existing_gami.get(rk)
-            is_gami_skip = pg is not None and pg < 5.0
+            is_gami_skip = pg is not None and pg < 7.0
             mark = f"◎ ¥{pay:,}" if hit else "×"
             rank_label = "7SS" if rank == "7PLUS_SS" else "7S"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
