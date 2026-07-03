@@ -54,6 +54,12 @@ TRIFECTA_RANKS = {"SS"}
 # 7+車 gap12閾値（Sランク境界）
 SEVEN_PLUS_S_GAP12 = 0.10
 
+# 合成オッズ下限（SO < この値は通知しない）
+SYNTH_ODDS_MIN = 8.0
+
+# gap23 下限・%ポイント（2位-3位予測確率差 < この値は通知しない）
+GAP23_MIN = 1.0
+
 
 def _jst_now() -> datetime:
     return datetime.now(_JST)
@@ -206,6 +212,17 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
     if not valid_ge5:
         return "なし", []  # 全目ガミ → 購入不可
 
+    # SOフィルタ: gami通過目の合成オッズ < SYNTH_ODDS_MIN なら不成立
+    _valid_ov = [combo_odds[t] for t in valid_ge5]
+    _synth = 1.0 / sum(1.0 / ov for ov in _valid_ov)
+    if _synth < SYNTH_ODDS_MIN:
+        return "なし", []
+
+    # gap23フィルタ: モデル予測確率 2位-3位差 < GAP23_MIN なら不成立
+    _gap23 = _calc_gap23(pick)
+    if _gap23 is not None and _gap23 < GAP23_MIN:
+        return "なし", []
+
     # SSランク: ガミカット後の有効目が1〜3目
     if len(valid_ge5) <= 3:
         return "7PLUS_SS", valid_ge5
@@ -342,6 +359,54 @@ def _save_prerace_gami(race_key: str, min_odds: float) -> None:
             logger.warning("prerace_gami VPS 書き込み失敗 %s: %s", race_key, e)
 
 
+
+def _calc_gap23(pick: dict) -> float | None:
+    """ピックのモデル予測確率から gap23（2位-3位差, パーセント点）を計算する。
+
+    riders リストの ai_rank 順に並べ、2位と3位の pred_prob_pct の差を返す。
+    3人以上いない場合は None を返す。
+    """
+    riders = pick.get("riders", [])
+    sorted_riders = sorted(riders, key=lambda r: r.get("ai_rank", 99))
+    if len(sorted_riders) < 3:
+        return None
+    p2 = sorted_riders[1].get("pred_prob_pct")
+    p3 = sorted_riders[2].get("pred_prob_pct")
+    if p2 is None or p3 is None:
+        return None
+    return round(float(p2) - float(p3), 3)
+
+
+def _save_gap23(race_key: str, gap23: float) -> None:
+    """picks_history.gap23 を発走前実測値で保存する（SQLite + VPS PG）。
+
+    UPDATE が 0 件（#CAND エントリが存在しない）の場合はスキップする。
+    """
+    pattern = race_key + "#%"
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE picks_history SET gap23 = ? WHERE race_key LIKE ?",
+                (gap23, pattern),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("gap23 SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE keirin.picks_history SET gap23 = %s WHERE race_key LIKE %s",
+                        (gap23, pattern),
+                    )
+        except Exception as e:
+            logger.warning("gap23 VPS 書き込み失敗 %s: %s", race_key, e)
+
+
 def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
     rank     = pick["rank"]
     venue    = pick["venue_name"]
@@ -473,6 +538,10 @@ def main():
         if ri is None:
             continue
 
+        # 7車以外は推奨対象外（ROI 構造的に不利）
+        if ri.get("n_entries") != 7:
+            continue
+
         start_at_unix = int(ri["start_at"])
         notify_at     = start_at_unix - NOTIFY_BEFORE_START_SEC
 
@@ -509,6 +578,11 @@ def main():
         min_odds = _get_min_trio_odds(pick, odds_data)
         if min_odds is not None:
             _save_prerace_gami(rk, min_odds)
+
+        # gap23（モデル予測確率 2位-3位差）を保存
+        gap23_val = _calc_gap23(pick)
+        if gap23_val is not None:
+            _save_gap23(rk, gap23_val)
 
         # race_no をピックに付与
         pick_with_raceno = dict(pick)

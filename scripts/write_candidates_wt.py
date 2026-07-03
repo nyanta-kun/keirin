@@ -240,11 +240,29 @@ def main() -> None:
         print(f"[write_candidates_wt] {target_date}: candidates なし", flush=True)
         return
 
+    # 7車レースのみを対象（9車・8車は ROI 構造的に不利のため除外）
+    # n_entries を wt_races から一括取得
+    all_rks = [c.get("race_key") for c in candidates if c.get("race_key")]
+    n_entries_map: dict[str, int] = {}
+    if all_rks:
+        with get_connection() as conn:
+            _phs = ",".join("?" * len(all_rks))
+            n_entries_map = {
+                r["race_key"]: r["n_entries"]
+                for r in conn.execute(
+                    f"SELECT race_key, n_entries FROM wt_races WHERE race_key IN ({_phs})",
+                    all_rks,
+                ).fetchall()
+                if r["n_entries"] is not None
+            }
+
     rows: list[tuple] = []
     for cand in candidates:
         rk = cand.get("race_key")
         if not rk:
             continue
+        if n_entries_map.get(rk) != 7:
+            continue  # 7車以外は推奨対象外
         gap12 = cand.get("gap12", 0.0)
         if gap12 < 0.07:
             continue  # SS候補（gap12 0.07〜0.10）も #CAND として追跡する
