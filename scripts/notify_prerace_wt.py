@@ -645,10 +645,8 @@ def main():
         newly_done.add(rk)
         time.sleep(0.5)   # Discord レート制限対策
 
-    # 推奨がある場合のみ Discord 送信
+    # 推奨がある場合のみ Discord 送信（ヘッダーなし・詳細メッセージのみ）
     if messages:
-        jst_now_str = _jst_now().strftime("%H:%M")
-        send(f"🚲 **レース直前推奨** — {today}  {jst_now_str} 時点  ({len(messages)}件)")
         for rk, msg in messages:
             send(msg)
             print(f"[prerace] {rk} → 通知送信完了", flush=True)
