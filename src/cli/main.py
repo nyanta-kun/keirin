@@ -1700,8 +1700,9 @@ def wave_picks_wt(target_date, output_path, model_name, min_trio_odds, upset_gat
             })
 
             # SSランク: ガミ目カット後≤3目 (doc49 Phase2通過 HOLD ~137%)
+            # ガミ閾値(7.0)以上の目のみ残してSS判定する（Sと同一閾値）
             valid_thirds_ss = [t for t in thirds_7
-                               if combo_odds_map.get(frozenset({pivot1_7, pivot2_7, t}), 0.0) >= 5.0]
+                               if combo_odds_map.get(frozenset({pivot1_7, pivot2_7, t}), 0.0) >= 7.0]
             if 1 <= len(valid_thirds_ss) <= 3:
                 n_pts_ss = len(valid_thirds_ss)
                 thirds_str_ss = ",".join(str(t) for t in valid_thirds_ss)

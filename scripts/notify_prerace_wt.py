@@ -541,6 +541,23 @@ def main():
             pick_with_raceno["stake"] = n_pts * 100
             # SSランク確定をkisekiに即時反映
             if live_rank == "7PLUS_SS":
+                # SS固有目（>= GAMI_THRESHOLD）のみで prerace_gami を上書き。
+                # 上記 _save_prerace_gami(rk, min_odds) は全thirds最安値を使っており
+                # SS切り捨て済みの低オッズ目が含まれると prerace_gami < 7.0 になる。
+                # notify_results_wt.py が prerace_gami < 7.0 でガミ判定するため、
+                # SS固有目（live_thirds, 全目 >= GAMI_THRESHOLD）で上書きが必須。
+                if odds_data:
+                    _lookup_ss = _build_odds_lookup(odds_data, "trio")
+                    _p1_ss = pick.get("pivot1")
+                    _p2_ss = pick.get("pivot2")
+                    _ss_live_odds = []
+                    for _t in live_thirds:
+                        _k = frozenset({int(_p1_ss), int(_p2_ss), int(_t)})
+                        _ov = _lookup_ss.get(_k)
+                        if _ov and float(_ov) > 0:
+                            _ss_live_odds.append(float(_ov))
+                    if _ss_live_odds:
+                        _save_prerace_gami(rk, min(_ss_live_odds))  # SS固有: >= GAMI_THRESHOLD
                 _save_picks_history_state(rk, False, "7PLUS_SS")
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
