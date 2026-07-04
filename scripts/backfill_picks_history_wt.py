@@ -232,7 +232,8 @@ def backfill_period(
             for t in combo_frames:
                 cs = frozenset({pivot1, pivot2, t})
                 if cs == top3_set:
-                    payout = int(round(combo_odds.get(t, 0) * 100))
+                    # 公式払戻金は10円単位に切り捨て
+                    payout = round(combo_odds.get(t, 0) * 100) // 10 * 10
                     hit = True
                     break
             history.append((race_date, store_key, rank, pred, n_combos,

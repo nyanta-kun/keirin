@@ -192,7 +192,8 @@ def run_7plus_backtest(
                 total_bets += 100
                 ss_bets += 100
                 if cs == top3_set:
-                    payout = int(round(ov * 100))
+                    # 公式払戻金は10円単位に切り捨て
+                    payout = round(ov * 100) // 10 * 10
                     total_returns += payout
                     total_hits += 1
                     ss_returns += payout
@@ -211,7 +212,7 @@ def run_7plus_backtest(
                 cs = frozenset({pivot1, pivot2, t})
                 total_bets += 100
                 hit_this = (cs == top3_set)
-                pay = int(round(ov * 100)) if hit_this else 0
+                pay = (round(ov * 100) // 10 * 10) if hit_this else 0
                 if is_s_rank:
                     s_bets += 100
                     if hit_this:

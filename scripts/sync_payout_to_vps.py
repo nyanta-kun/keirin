@@ -87,7 +87,8 @@ def _load_trio_payouts_local(race_keys: list[str], local_db: sqlite3.Connection)
             except ValueError:
                 continue
             key = frozenset(nums)
-            payout_map.setdefault(race_key, {})[key] = int(round(float(odds_value) * 100))
+            # 公式払戻金は10円単位に切り捨て。round()で浮動小数点誤差を吸収してから10円に丸める
+            payout_map.setdefault(race_key, {})[key] = round(float(odds_value) * 100) // 10 * 10
     return payout_map
 
 

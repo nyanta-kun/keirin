@@ -71,7 +71,7 @@ def _apply_pred_prob_wt(model, df: pd.DataFrame) -> pd.DataFrame:
 def _load_payouts_wt(race_keys: list[str]) -> dict[str, dict]:
     """wt_odds から {race_key: {(market, key): payout}} を構築。
 
-    payout = odds_value * 100（100円賭けたときの払戻金）。
+    payout = odds_value * 100（100円賭けたときの払戻金）を10円単位に切り捨て。
     key は順序市場なら tuple(int) / 順不同市場なら frozenset(int)。
     """
     payout_map: dict[str, dict] = {}
@@ -97,7 +97,8 @@ def _load_payouts_wt(race_keys: list[str]) -> dict[str, dict]:
                 except ValueError:
                     continue
                 key = tuple(nums) if market in _ORDERED_BETS else frozenset(nums)
-                payout = int(round(odds_value * 100))
+                # 公式払戻金は10円単位に切り捨て。round()で浮動小数点誤差を吸収してから10円に丸める
+                payout = round(odds_value * 100) // 10 * 10
                 payout_map.setdefault(race_key, {})[(market, key)] = payout
     return payout_map
 
