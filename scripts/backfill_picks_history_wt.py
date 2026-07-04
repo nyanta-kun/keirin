@@ -232,7 +232,7 @@ def backfill_period(
             for t in combo_frames:
                 cs = frozenset({pivot1, pivot2, t})
                 if cs == top3_set:
-                    payout = int(combo_odds.get(t, 0) * 100)
+                    payout = int(round(combo_odds.get(t, 0) * 100))
                     hit = True
                     break
             history.append((race_date, store_key, rank, pred, n_combos,
