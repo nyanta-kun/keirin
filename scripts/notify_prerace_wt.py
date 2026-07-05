@@ -562,7 +562,8 @@ def main():
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
             # 非候補（朝ガミ通過済み）: 直前でガミ落ちなら見送りを即時反映
-            if min_odds is not None and min_odds < GAMI_THRESHOLD:
+            # SSはガミ目カット済みのため gami判定を適用しない（全目最安値でmiwokuri=Trueにしない）
+            if rank != "7PLUS_SS" and min_odds is not None and min_odds < GAMI_THRESHOLD:
                 _save_picks_history_state(rk, True)
 
         msg = _build_message(pick_with_raceno, ri, odds_data)

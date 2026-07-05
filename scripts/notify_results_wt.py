@@ -500,7 +500,8 @@ def _main_inner(date, _db_url):
                 store_key = f"{rk}#7S"
             # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
             pg = existing_gami.get(rk)
-            is_gami_skip = pg is not None and pg < 7.0
+            # SSはガミ目カット済み（定義上ガミ目なし）→ gami判定不適用。Sのみ対象。
+            is_gami_skip = (rank != "7PLUS_SS") and (pg is not None and pg < 7.0)
             mark = f"◎ ¥{pay:,}" if hit else "×"
             rank_label = "7SS" if rank == "7PLUS_SS" else "7S"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
