@@ -246,8 +246,8 @@ def main() -> None:
         if not rk:
             continue
         gap12 = cand.get("gap12", 0.0)
-        if gap12 < 0.10:
-            continue  # Aランク廃止（2026-06-28）
+        if gap12 < 0.07:
+            continue  # SS候補（gap12 0.07〜0.10）も #CAND として追跡する
         rank = "7PLUS_S"
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")
