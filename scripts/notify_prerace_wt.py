@@ -109,6 +109,29 @@ def _load_decisions(today: str) -> dict:
     return {}
 
 
+def _score_stats(pick: dict) -> dict:
+    """競走得点の構造統計（軸信頼度の live 評価用・判定には未使用）。
+
+    12ヶ月検証 (2026-07-07): 得点SD・上位2と残りの格差が大きいレースほど
+    2軸(pivot)が堅く ROI が高い（sd>=Q1 で残すと 2.87→3.0-3.6 / 除外帯 1.5-1.7）。
+    live 蓄積後に除外条件へ昇格するか判断する。
+    """
+    scores = [r.get("racing_score") for r in pick.get("riders", [])
+              if r.get("racing_score") is not None]
+    if len(scores) < 5:
+        return {}
+    vs = sorted(scores, reverse=True)
+    n = len(vs)
+    mean = sum(vs) / n
+    sd = (sum((x - mean) ** 2 for x in vs) / n) ** 0.5
+    rest_mean = sum(vs[2:]) / (n - 2)
+    return {
+        "score_mean": round(mean, 2),
+        "score_sd": round(sd, 3),
+        "score_gap2r": round((vs[0] + vs[1]) / 2 - rest_mean, 3),
+    }
+
+
 def _save_decision(today: str, race_key: str, record: dict) -> None:
     decisions = _load_decisions(today)
     record["decided_at"] = _jst_now().strftime("%H:%M:%S")
@@ -646,6 +669,7 @@ def main():
                     "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
                     "all_min_odds": min_odds,
                     "leg_odds": {str(t): o for t, o in live_odds.items()},
+                    **_score_stats(pick),
                 })
                 print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
                 newly_done.add(rk)
@@ -685,6 +709,7 @@ def main():
                 "thirds": [int(t) for t in live_thirds],
                 "leg_odds": {str(t): o for t, o in live_odds.items()},
                 "all_min_odds": min_odds,
+                **_score_stats(pick),
             })
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
@@ -696,6 +721,7 @@ def main():
                     "decision": "skip",
                     "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
                     "all_min_odds": min_odds,
+                    **_score_stats(pick),
                 })
             else:
                 _save_decision(today, rk, {
@@ -704,6 +730,7 @@ def main():
                     "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
                     "thirds": [int(t) for t in pick.get("thirds", [])],
                     "all_min_odds": min_odds,
+                    **_score_stats(pick),
                 })
 
         msg = _build_message(pick_with_raceno, ri, odds_data)
