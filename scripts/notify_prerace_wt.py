@@ -116,20 +116,30 @@ def _score_stats(pick: dict) -> dict:
     2軸(pivot)が堅く ROI が高い（sd>=Q1 で残すと 2.87→3.0-3.6 / 除外帯 1.5-1.7）。
     live 蓄積後に除外条件へ昇格するか判断する。
     """
+    out: dict = {}
     scores = [r.get("racing_score") for r in pick.get("riders", [])
               if r.get("racing_score") is not None]
-    if len(scores) < 5:
-        return {}
-    vs = sorted(scores, reverse=True)
-    n = len(vs)
-    mean = sum(vs) / n
-    sd = (sum((x - mean) ** 2 for x in vs) / n) ** 0.5
-    rest_mean = sum(vs[2:]) / (n - 2)
-    return {
-        "score_mean": round(mean, 2),
-        "score_sd": round(sd, 3),
-        "score_gap2r": round((vs[0] + vs[1]) / 2 - rest_mean, 3),
-    }
+    if len(scores) >= 5:
+        vs = sorted(scores, reverse=True)
+        n = len(vs)
+        mean = sum(vs) / n
+        sd = (sum((x - mean) ** 2 for x in vs) / n) ** 0.5
+        rest_mean = sum(vs[2:]) / (n - 2)
+        out.update({
+            "score_mean": round(mean, 2),
+            "score_sd": round(sd, 3),
+            "score_gap2r": round((vs[0] + vs[1]) / 2 - rest_mean, 3),
+        })
+    # 指数(モデル予測確率)の分散: 配当予測比較(2026-07-08)で最強の低配当予測子
+    # (低配当<1000円 AUC 0.637 > 得点統計の最良 0.582)
+    preds = [r.get("pred_prob_pct") for r in pick.get("riders", [])
+             if r.get("pred_prob_pct") is not None]
+    if len(preds) >= 5:
+        pv = sorted((p / 100.0 for p in preds), reverse=True)
+        pm = sum(pv) / len(pv)
+        out["pred_sd"] = round((sum((x - pm) ** 2 for x in pv) / len(pv)) ** 0.5, 4)
+        out["pred_top2sum"] = round(pv[0] + pv[1], 4)
+    return out
 
 
 def _save_decision(today: str, race_key: str, record: dict) -> None:
