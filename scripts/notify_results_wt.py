@@ -398,8 +398,20 @@ def _main_inner(date, _db_url):
     emit = (lambda m: None) if silent else send
     dc = target_date.replace("-", "")
 
+    # 発走前判定（prerace_decisions_*.json）を読み込む。
+    # 存在するレースは 15分前判定（推奨/見送り・ランク・購入買い目）を最優先で採点し、
+    # 事後のオッズや txt のランクで上書きしない。
+    decisions: dict[str, dict] = {}
+    _dec_path = Path(__file__).parent.parent / "data" / f"prerace_decisions_{target_date}.json"
+    if _dec_path.exists():
+        try:
+            decisions = json.loads(_dec_path.read_text(encoding="utf-8"))
+        except Exception as _e:
+            print(f"[notify_results_wt] prerace_decisions 読み込み失敗: {_e}", flush=True)
+    has_buy_decisions = any(d.get("decision") == "buy" for d in decisions.values())
+
     picks = _parse_picks_full(target_date)
-    if not picks:
+    if not picks and not has_buy_decisions:
         # ファイル不在(真のエラー) と 7+車推奨0件(静かな日・正常) を区別する
         picks_file = Path(__file__).parent.parent / "data" / "picks" / f"wave_picks_wt_{target_date}.txt"
         if not picks_file.exists():
@@ -419,6 +431,28 @@ def _main_inner(date, _db_url):
         name2code = {n: c for c, n in conn.execute("SELECT venue_code, name FROM venue_info").fetchall()}
         start_map = dict(conn.execute(
             "SELECT race_key, start_at FROM wt_races WHERE race_date=?", (target_date,)).fetchall())
+
+    # 発走前判定で購入となったが txt に載っていないレースを picks に注入する。
+    # （gap12∈[0.07,0.10) 候補の SS 昇格などは朝の txt に含まれず、従来は採点漏れしていた）
+    code2name = {c: n for n, c in name2code.items()}
+    _txt_bases = {f"{dc}_{name2code[v]}_{int(rn):02d}"
+                  for (v, rn, _s) in picks if v in name2code}
+    for _rk, _dec in decisions.items():
+        if _dec.get("decision") != "buy" or not _dec.get("thirds"):
+            continue
+        if not _rk.startswith(dc) or _rk in _txt_bases:
+            continue
+        try:
+            _, _code, _rno = _rk.split("_")
+        except ValueError:
+            continue
+        _venue = code2name.get(_code)
+        if _venue is None:
+            continue
+        _rank = _dec.get("rank", "7PLUS_S")
+        _slot = "7plus_ss" if _rank == "7PLUS_SS" else "7plus_s"
+        _combo = f"{_dec['pivot1']}-{_dec['pivot2']}-" + ",".join(map(str, _dec["thirds"]))
+        picks[(_venue, int(_rno), _slot)] = (_rank, "", _combo)
 
     # miwokuri採点用に candidates.json のレース分も先読みする
     _cand_keys_extra: set[str] = set()
@@ -458,6 +492,12 @@ def _main_inner(date, _db_url):
             if code is None:
                 continue
             rk = f"{dc}_{code}_{int(race_no):02d}"
+            # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
+            dec = decisions.get(rk)
+            if dec and dec.get("decision") == "buy" and dec.get("thirds"):
+                rank = dec.get("rank", rank)
+                combo_str = (f"{dec['pivot1']}-{dec['pivot2']}-"
+                             + ",".join(map(str, dec["thirds"])))
             rows = conn.execute(
                 "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
                 "ORDER BY finish_order", (rk,)).fetchall()
@@ -500,9 +540,25 @@ def _main_inner(date, _db_url):
                 store_key = f"{rk}#7S"
             # existing_gami は base_key で正規化済み（#CAND → #7S 等をまたいで参照可能）
             pg = existing_gami.get(rk)
-            # SSはガミ目カット済み（定義上ガミ目なし）→ gami判定不適用。Sのみ対象。
-            is_gami_skip = (rank != "7PLUS_SS") and (pg is not None and pg < 7.0)
+            if dec is not None:
+                # 発走前判定を最優先（15分前判定を事後変更しない）
+                is_gami_skip = dec.get("decision") == "skip"
+                if not is_gami_skip:
+                    # 購入目（ガミ目カット後）の発走前最安オッズを prerace_gami に採用。
+                    # 全thirds最安値のままだとカット済み低オッズ目で <7.0 になり
+                    # kiseki 側でガミ見送り表示される。
+                    _leg_odds = dec.get("leg_odds") or {}
+                    _buy_ov = [float(_leg_odds[str(_t)]) for _t in dec.get("thirds", [])
+                               if _leg_odds.get(str(_t))]
+                    if _buy_ov:
+                        pg = round(min(_buy_ov), 2)
+            else:
+                # 判定記録なし（未チェックレース）: 従来のprerace_gamiフォールバック
+                # SSはガミ目カット済み（定義上ガミ目なし）→ gami判定不適用。Sのみ対象。
+                is_gami_skip = (rank != "7PLUS_SS") and (pg is not None and pg < 7.0)
             mark = f"◎ ¥{pay:,}" if hit else "×"
+            if is_gami_skip:
+                mark += "（見送り）"
             rank_label = "7SS" if rank == "7PLUS_SS" else "7S"
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
             if rank == "7PLUS_SS":

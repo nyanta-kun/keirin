@@ -91,6 +91,33 @@ def _save_notified(today: str, notified: set[str]) -> None:
     p.write_text(json.dumps(sorted(notified), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ── 発走前判定の永続化 ─────────────────────────────────────────────────────────
+# 発走15分前の判定（推奨/見送り・ランク・購入買い目・レグ別オッズ）を確定記録する。
+# notify_results_wt.py はこの記録を最優先で採点する（15分前判定を事後変更しない）。
+
+def _decisions_path(today: str) -> Path:
+    return Path(__file__).parent.parent / "data" / f"prerace_decisions_{today}.json"
+
+
+def _load_decisions(today: str) -> dict:
+    p = _decisions_path(today)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_decision(today: str, race_key: str, record: dict) -> None:
+    decisions = _load_decisions(today)
+    record["decided_at"] = _jst_now().strftime("%H:%M:%S")
+    decisions[race_key] = record
+    p = _decisions_path(today)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(decisions, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 # ── picks の読み込み ─────────────────────────────────────────────────────────
 
 def _load_picks(today: str) -> list[dict]:
@@ -183,11 +210,12 @@ def _build_odds_lookup(odds_data: dict, bet_type: str) -> dict:
 
 # ── 候補レースのリアルタイムランク判定 ─────────────────────────────────────────
 
-def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]:
+def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list, dict]:
     """7PLUS_CANDレースの現在オッズでSS/S/A を判定する。
-    returns (live_rank, valid_thirds)
+    returns (live_rank, valid_thirds, combo_odds)
       - "7PLUS_SS" / "7PLUS_S": 条件成立
       - "なし": 購入条件不成立（全目ガミ or S/A gami全不通過 and SS残り0 or >3）
+      combo_odds は {third: 現在オッズ}（判定に使った値・記録用）
     """
     p1 = pick.get("pivot1")
     p2 = pick.get("pivot2")
@@ -195,7 +223,7 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
     gap12 = pick.get("gap12", 0.0)
 
     if odds_data is None:
-        return "不明", thirds
+        return "不明", thirds, {}
 
     lookup = _build_odds_lookup(odds_data, "trio")
 
@@ -210,27 +238,27 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list]
     valid_ge5 = [t for t in thirds if combo_odds.get(t, 0.0) >= GAMI_THRESHOLD]
 
     if not valid_ge5:
-        return "なし", []  # 全目ガミ → 購入不可
+        return "なし", [], combo_odds  # 全目ガミ → 購入不可
 
     # SOフィルタ: gami通過目の合成オッズ < SYNTH_ODDS_MIN なら不成立
     _valid_ov = [combo_odds[t] for t in valid_ge5]
     _synth = 1.0 / sum(1.0 / ov for ov in _valid_ov)
     if _synth < SYNTH_ODDS_MIN:
-        return "なし", []
+        return "なし", [], combo_odds
 
     # gap23フィルタ: モデル予測確率 2位-3位差 < GAP23_MIN なら不成立
     _gap23 = _calc_gap23(pick)
     if _gap23 is not None and _gap23 < GAP23_MIN:
-        return "なし", []
+        return "なし", [], combo_odds
 
     # SSランク: ガミカット後の有効目が1〜3目
     if len(valid_ge5) <= 3:
-        return "7PLUS_SS", valid_ge5
+        return "7PLUS_SS", valid_ge5, combo_odds
 
     # Sランク: 有効目が4目以上（ガミ目は除外して買う）。Aランク廃止（2026-06-28）
     if gap12 < SEVEN_PLUS_S_GAP12:
-        return "なし", []
-    return "7PLUS_S", valid_ge5
+        return "なし", [], combo_odds
+    return "7PLUS_S", valid_ge5, combo_odds
 
 
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
@@ -254,12 +282,18 @@ def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
     return min(valid_odds) if valid_odds else None
 
 
-def _save_picks_history_state(race_key: str, miwokuri: bool, new_rank: str | None = None) -> None:
-    """picks_history の miwokuri / rank を即時更新する（SQLite + VPS PG）。
+def _save_picks_history_state(
+    race_key: str,
+    miwokuri: bool,
+    new_rank: str | None = None,
+    new_pred: tuple[str, int] | None = None,
+) -> None:
+    """picks_history の miwokuri / rank / 買い目 を即時更新する（SQLite + VPS PG）。
 
-    ガミ落ち確定（miwokuri=True）とSSランク昇格（new_rank='7PLUS_SS'）を
-    当日中にkisekiへ反映させるために呼ぶ。翌朝の notify_results_wt.py が
-    最終的に上書き確定するため、この更新は「当日中の暫定表示」として機能する。
+    ガミ落ち確定（miwokuri=True）とランク昇格（new_rank='7PLUS_SS'/'7PLUS_S'）を
+    当日中にkisekiへ反映させるために呼ぶ。new_pred（ガミ目カット後の買い目）を
+    渡すと pred_combo / n_combos も更新し、Webページに購入買い目が正しく出る。
+    翌朝の notify_results_wt.py が prerace_decisions_*.json に基づき最終確定する。
     """
     pattern = race_key + "#%"
     cand_key = race_key + "#CAND"
@@ -273,6 +307,12 @@ def _save_picks_history_state(race_key: str, miwokuri: bool, new_rank: str | Non
                 conn.execute(
                     "UPDATE picks_history SET rank = ? WHERE race_key = ? AND route = 'wt'",
                     (new_rank, cand_key),
+                )
+            if new_pred is not None:
+                conn.execute(
+                    "UPDATE picks_history SET pred_combo = ?, n_combos = ? "
+                    "WHERE race_key = ? AND route = 'wt'",
+                    (new_pred[0], new_pred[1], cand_key),
                 )
             conn.commit()
     except Exception as e:
@@ -294,6 +334,12 @@ def _save_picks_history_state(race_key: str, miwokuri: bool, new_rank: str | Non
                             "UPDATE keirin.picks_history SET rank = %s"
                             " WHERE race_key = %s AND route = 'wt'",
                             (new_rank, cand_key),
+                        )
+                    if new_pred is not None:
+                        cur.execute(
+                            "UPDATE keirin.picks_history SET pred_combo = %s, n_combos = %s"
+                            " WHERE race_key = %s AND route = 'wt'",
+                            (new_pred[0], new_pred[1], cand_key),
                         )
         except Exception as e:
             logger.warning("picks_history VPS 更新失敗 %s: %s", race_key, e)
@@ -591,10 +637,16 @@ def main():
 
         # 候補レース（7PLUS_CAND）は現在オッズで SS/S/A を再判定
         if rank == "7PLUS_CAND":
-            live_rank, live_thirds = _determine_live_rank(pick, odds_data)
+            live_rank, live_thirds, live_odds = _determine_live_rank(pick, odds_data)
             if live_rank == "なし":
-                # gami条件不成立 → kisekiに見送りを即時反映
+                # gami条件不成立 → kisekiに見送りを即時反映 + 判定を確定記録
                 _save_picks_history_state(rk, True)
+                _save_decision(today, rk, {
+                    "decision": "skip",
+                    "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
+                    "all_min_odds": min_odds,
+                    "leg_odds": {str(t): o for t, o in live_odds.items()},
+                })
                 print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
                 newly_done.add(rk)
                 time.sleep(0.3)
@@ -613,32 +665,46 @@ def main():
             pick_with_raceno["combo_str"] = f"{pivot1}-{pivot2}-{','.join(str(t) for t in live_thirds)}"
             pick_with_raceno["n_points"] = n_pts
             pick_with_raceno["stake"] = n_pts * 100
-            # SSランク確定をkisekiに即時反映
-            if live_rank == "7PLUS_SS":
-                # SS固有目（>= GAMI_THRESHOLD）のみで prerace_gami を上書き。
-                # 上記 _save_prerace_gami(rk, min_odds) は全thirds最安値を使っており
-                # SS切り捨て済みの低オッズ目が含まれると prerace_gami < 7.0 になる。
-                # notify_results_wt.py が prerace_gami < 7.0 でガミ判定するため、
-                # SS固有目（live_thirds, 全目 >= GAMI_THRESHOLD）で上書きが必須。
-                if odds_data:
-                    _lookup_ss = _build_odds_lookup(odds_data, "trio")
-                    _p1_ss = pick.get("pivot1")
-                    _p2_ss = pick.get("pivot2")
-                    _ss_live_odds = []
-                    for _t in live_thirds:
-                        _k = frozenset({int(_p1_ss), int(_p2_ss), int(_t)})
-                        _ov = _lookup_ss.get(_k)
-                        if _ov and float(_ov) > 0:
-                            _ss_live_odds.append(float(_ov))
-                    if _ss_live_odds:
-                        _save_prerace_gami(rk, min(_ss_live_odds))  # SS固有: >= GAMI_THRESHOLD
-                _save_picks_history_state(rk, False, "7PLUS_SS")
+            # prerace_gami を購入目（ガミカット後・全目 >= GAMI_THRESHOLD）の最安値で上書き。
+            # 上記 _save_prerace_gami(rk, min_odds) は全thirds最安値を使っており、
+            # カット済み低オッズ目が含まれると prerace_gami < 7.0 のまま残り
+            # notify_results_wt.py / kiseki 側でガミ見送り扱いに誤記される（SS/S共通）。
+            _buy_leg_odds = [live_odds[t] for t in live_thirds if t in live_odds]
+            if _buy_leg_odds:
+                _save_prerace_gami(rk, min(_buy_leg_odds))
+            # ランク確定をkisekiに即時反映（SS/Sとも・カット後の買い目も更新）
+            _save_picks_history_state(
+                rk, False, live_rank,
+                new_pred=(pick_with_raceno["combo_str"], n_pts),
+            )
+            # 判定を確定記録（翌朝の採点はこの内容で行う）
+            _save_decision(today, rk, {
+                "decision": "buy",
+                "rank": live_rank,
+                "pivot1": pivot1, "pivot2": pivot2,
+                "thirds": [int(t) for t in live_thirds],
+                "leg_odds": {str(t): o for t, o in live_odds.items()},
+                "all_min_odds": min_odds,
+            })
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
             # 非候補（朝ガミ通過済み）: 直前でガミ落ちなら見送りを即時反映
             # SSはガミ目カット済みのため gami判定を適用しない（全目最安値でmiwokuri=Trueにしない）
             if rank != "7PLUS_SS" and min_odds is not None and min_odds < GAMI_THRESHOLD:
                 _save_picks_history_state(rk, True)
+                _save_decision(today, rk, {
+                    "decision": "skip",
+                    "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
+                    "all_min_odds": min_odds,
+                })
+            else:
+                _save_decision(today, rk, {
+                    "decision": "buy",
+                    "rank": rank,
+                    "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
+                    "thirds": [int(t) for t in pick.get("thirds", [])],
+                    "all_min_odds": min_odds,
+                })
 
         msg = _build_message(pick_with_raceno, ri, odds_data)
         messages.append((rk, msg))
