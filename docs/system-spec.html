@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>競輪AI予想システム — 仕様書</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; color: #1a202c; background: #f7f8fa; }
+  .page { max-width: 960px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 22px; font-weight: 800; color: #1a202c; margin-bottom: 4px; }
+  h2 { font-size: 16px; font-weight: 700; color: #2d3748; margin: 32px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #e2e8f0; }
+  h3 { font-size: 13px; font-weight: 700; color: #4a5568; margin: 18px 0 6px; }
+  p { margin: 6px 0; color: #4a5568; }
+  .meta { font-size: 12px; color: #718096; margin-bottom: 24px; }
+  /* Flow */
+  .flow { display: flex; flex-wrap: wrap; gap: 0; margin: 16px 0; }
+  .step { flex: 1; min-width: 140px; background: #fff; border: 1px solid #e2e8f0; padding: 12px; position: relative; }
+  .step:not(:last-child)::after { content: "→"; position: absolute; right: -12px; top: 50%; transform: translateY(-50%); font-size: 16px; color: #a0aec0; z-index: 1; }
+  .step-num { font-size: 10px; font-weight: 700; color: #a0aec0; text-transform: uppercase; letter-spacing: 0.5px; }
+  .step-title { font-size: 13px; font-weight: 700; color: #2d3748; margin: 2px 0; }
+  .step-sub { font-size: 11px; color: #718096; }
+  .step.keirin { border-top: 3px solid #3182ce; }
+  .step.kiseki { border-top: 3px solid #805ad5; }
+  .step.both { border-top: 3px solid #38a169; }
+  /* Table */
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+  th { background: #edf2f7; text-align: left; padding: 8px 10px; font-weight: 600; color: #4a5568; border: 1px solid #e2e8f0; }
+  td { padding: 7px 10px; border: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #f7f8fa; }
+  /* Status badges */
+  .ok  { display: inline-block; background: #c6f6d5; color: #276749; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .ng  { display: inline-block; background: #fed7d7; color: #9b2c2c; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .warn { display: inline-block; background: #fefcbf; color: #744210; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .note { background: #ebf8ff; border-left: 3px solid #3182ce; padding: 10px 14px; margin: 10px 0; font-size: 13px; color: #2c5282; border-radius: 0 4px 4px 0; }
+  .warn-note { background: #fffaf0; border-left: 3px solid #dd6b20; padding: 10px 14px; margin: 10px 0; font-size: 13px; color: #744210; border-radius: 0 4px 4px 0; }
+  .section-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; }
+  .card h3 { margin-top: 0; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; margin-right: 4px; }
+  .keirin-badge { background: #bee3f8; color: #2b6cb0; }
+  .kiseki-badge { background: #e9d8fd; color: #553c9a; }
+  code { background: #edf2f7; padding: 1px 5px; border-radius: 3px; font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; }
+  ul { list-style: disc; padding-left: 18px; margin: 6px 0; }
+  ul li { margin: 3px 0; }
+  .timeline { margin: 10px 0; }
+  .tl-item { display: flex; gap: 12px; margin-bottom: 8px; align-items: flex-start; }
+  .tl-time { font-size: 12px; font-weight: 700; color: #3182ce; white-space: nowrap; min-width: 76px; padding-top: 1px; }
+  .tl-body { flex: 1; }
+  .tl-title { font-size: 13px; font-weight: 600; color: #2d3748; }
+  .tl-desc { font-size: 12px; color: #718096; }
+  .gap { margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>競輪AI予想システム — 仕様書</h1>
+<p class="meta">最終更新: 2026-07-08 ｜ <span class="keirin-badge badge">keirin</span> VPS（バッチ・モデル） ｜ <span class="kiseki-badge badge">kiseki</span> VPS（DB・Web）</p>
+
+<div class="note">
+<strong>2026-06-19版からの主な変更:</strong> keirinバッチのVPS移行（Mac常時稼働の解消）／Aランク廃止（SS/S 2ランク）／ガミ閾値 5.0→<strong>7.0</strong>／合成オッズ≥8・gap23≥1ptフィルタ新設／<strong>7車立て限定</strong>／発走15分前判定の正本化（<code>prerace_decisions_{date}.json</code>）／当日結果の毎時反映（intraday）／Web手動トリガー（webhook:8010）／サマリー集計を <code>bet_amount&gt;0</code> 基準に統一
+</div>
+
+<!-- ===== 1. 全体概要 ===== -->
+<h2>1. プロジェクト役割分担</h2>
+<div class="section-row">
+  <div class="card">
+    <h3><span class="keirin-badge badge">keirin</span> VPS <code>/home/ysuzuki/keirin</code></h3>
+    <ul>
+      <li>Winticket スクレイパー（レース・オッズ収集）</li>
+      <li>LightGBM 予想モデル <code>lgbm_wt</code>（40特徴・週次再学習・Holdout AUC 0.7712）</li>
+      <li>発走15分前判定（ガミ・合成オッズ・gap23）と Discord 通知</li>
+      <li>SQLite DB（一次保存）→ 同ホスト PostgreSQL へ upsert 同期</li>
+      <li>webhook trigger server（<code>keirin-webhook.service</code> :8010）</li>
+      <li>※ Mac はリポジトリ master・開発／バックテスト用（cron 稼働なし）</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="kiseki-badge badge">kiseki</span> VPS</h3>
+    <ul>
+      <li>PostgreSQL DB（<code>keirin</code> スキーマ）</li>
+      <li>FastAPI バックエンド（<code>/api/keirin/picks</code> / <code>summary</code> / <code>refresh</code> / <code>fetch-results</code> / <code>fetch-odds</code>）</li>
+      <li>Next.js フロントエンド（<code>/keirin</code> ページ）</li>
+      <li>ピック一覧・オッズ状況・SS/Sランク別成績サマリー表示</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== 2. 想定フロー ===== -->
+<h2>2. 1日のフロー（VPS crontab・JST）</h2>
+
+<div class="timeline">
+  <div class="tl-item">
+    <div class="tl-time">08:00</div>
+    <div class="tl-body">
+      <div class="tl-title">朝バッチ（daily_picks_wt.sh）</div>
+      <div class="tl-desc">前日結果収集・採点通知 → 当日データ収集 → 朝オッズ退避（snapshot morning） → 予想生成（wave-picks-wt: 7車・gap12≥0.07 を候補化） → Discord通知（全レース指数PDF付き） → 候補書き込み（#CAND） → PG同期</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">08:XX〜</div>
+    <div class="tl-body">
+      <div class="tl-title">kiseki Web: 当日候補一覧を表示</div>
+      <div class="tl-desc"><code>#CAND</code> サフィックスで候補が picks_history に入り /keirin ページに表示。朝オッズの合成オッズを参考表示。miwokuri=FALSE・bet_amount=0。</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">毎分 8-23時</div>
+    <div class="tl-body">
+      <div class="tl-title">発走15分前判定（notify_prerace_wt.py）＝ 購入判定の正本</div>
+      <div class="tl-desc"><strong>発走15分前の1分間</strong>にリアルタイムオッズを取得し、購入フィルタ3条件（§5）で SS / S / 見送り を確定。<br>
+      ① 判定結果（rank・ガミカット後の買い目・レグ別オッズ・score_sd/gap2r・pred_sd/pred_top2sum）を <code>data/prerace_decisions_{date}.json</code> に<strong>永続化（アトミック書込・flock）</strong><br>
+      ② <code>prerace_gami</code>・<code>gap23</code>・確定買い目を SQLite + VPS PG に即時書き込み（kiseki に即反映）<br>
+      ③ 購入成立レースのみ Discord に1通で通知（レグ別オッズ・SO・gap23付き）<br>
+      <strong>この判定は事後変更しない。</strong>締切後のオッズ変動での復活買い・見送り変更は行わない（検証で全変種ROI&lt;1）。</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">毎時 10-23時<br>+ 00:00</div>
+    <div class="tl-body">
+      <div class="tl-title">日中結果反映（intraday_results_wt.sh）</div>
+      <div class="tl-desc">当日の確定レースを逐次収集・採点し PG 同期。<strong>的中・払戻は当日中に kiseki Web に反映される</strong>（旧「翌朝まで反映されない」制限は解消）。00:00 実行は23時台発走分の取りこぼし回収。</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">10/12/14/18/20時</div>
+    <div class="tl-body">
+      <div class="tl-title">日中オッズスナップショット（snapshot_intraday_odds_wt.py）</div>
+      <div class="tl-desc">時点別オッズを <code>wt_odds_snapshot</code> に退避（オッズドリフト分析用）。</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">16:00</div>
+    <div class="tl-body">
+      <div class="tl-title">夕方バッチ（evening_picks_wt.sh）</div>
+      <div class="tl-desc">再収集（夜レースのライン確定） → 夕方オッズ退避 → 夜レース予想生成・通知 → 候補追加 → PG同期</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">随時（手動）</div>
+    <div class="tl-body">
+      <div class="tl-title">Web手動トリガー（keirin-webhook.service :8010）</div>
+      <div class="tl-desc">kiseki Web の「結果取得」「オッズ取得」ボタン → <code>POST /api/keirin/fetch-results|fetch-odds</code> → VPSホストの webhook サーバーが <code>intraday_results_wt.sh</code> / <code>notify_prerace_wt.py</code> をバックグラウンド起動。</div>
+    </div>
+  </div>
+  <div class="tl-item">
+    <div class="tl-time">翌08:00</div>
+    <div class="tl-body">
+      <div class="tl-title">前日成績確定（notify_results_wt.py）</div>
+      <div class="tl-desc">確定結果で採点。<strong><code>prerace_decisions_{date}.json</code> を最優先の正本として採点</strong>（判定記録がないレースは見送り側に倒す＝幻の購入防止）。miwokuri 確定 → Discord成績通知 → PG同期。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 3. データフロー ===== -->
+<h2>3. データフロー詳細</h2>
+
+<h3>3-1. 予想生成とオッズの関係</h3>
+<table>
+  <tr><th>フェーズ</th><th>オッズ</th><th>判定条件</th><th>格納先</th></tr>
+  <tr>
+    <td>朝予想生成</td>
+    <td>収集時点のオッズを <code>wt_odds_snapshot (morning)</code> に退避</td>
+    <td>gap12≥0.07 + <strong>7車立てのみ</strong>（オッズはモデル入力に使わない）</td>
+    <td><code>picks_history</code> に <code>#CAND</code> で書き込み</td>
+  </tr>
+  <tr>
+    <td>kiseki Web表示</td>
+    <td>morning スナップショットから合成オッズを計算して表示</td>
+    <td>参考値（購入判断には使わない）</td>
+    <td>—（API計算）</td>
+  </tr>
+  <tr>
+    <td><strong>発走15分前（正本）</strong></td>
+    <td>Winticket からリアルタイム取得</td>
+    <td>全購入目≥7.0倍 ∧ 合成オッズ≥8.0 ∧ gap23≥1.0pt → SS/S 確定</td>
+    <td><code>prerace_decisions_{date}.json</code>（正本）＋ <code>picks_history.prerace_gami/gap23</code> を SQLite+VPS に即書き込み</td>
+  </tr>
+  <tr>
+    <td>日中採点（毎時）／翌朝確定</td>
+    <td>確定オッズ（三連複）</td>
+    <td>prerace_decisions の判定どおりに採点（事後変更なし）</td>
+    <td><code>picks_history</code> を上書き更新 → PG同期</td>
+  </tr>
+</table>
+
+<h3>3-2. picks_history レコードの状態遷移</h3>
+<table>
+  <tr><th>状態</th><th>race_key サフィックス</th><th>miwokuri</th><th>bet_amount</th><th>prerace_gami</th><th>hit/payout</th></tr>
+  <tr>
+    <td>朝候補（表示用）</td>
+    <td><code>#CAND</code></td>
+    <td>FALSE</td>
+    <td>0</td>
+    <td>NULL</td>
+    <td>0/0</td>
+  </tr>
+  <tr>
+    <td>発走15分前・購入確定</td>
+    <td><code>#7SS</code> / <code>#7S</code></td>
+    <td>FALSE</td>
+    <td>点数×100円</td>
+    <td>購入目の最安値（≥7.0）</td>
+    <td>採点待ち→確定</td>
+  </tr>
+  <tr>
+    <td>発走15分前・条件不成立</td>
+    <td><code>#CAND</code></td>
+    <td>TRUE（採点時確定）</td>
+    <td>0</td>
+    <td>実測値（&lt;7.0 等）</td>
+    <td>hit=0/trio_payout=参考</td>
+  </tr>
+  <tr>
+    <td>候補のまま発走（判定記録なし）</td>
+    <td><code>#CAND</code></td>
+    <td>TRUE（見送り側に倒す）</td>
+    <td>0</td>
+    <td>NULL</td>
+    <td>hit=0/trio_payout=参考</td>
+  </tr>
+</table>
+<div class="note">
+  <strong>SSランクの prerace_gami:</strong> ガミ目カット後の購入目（全目≥7.0倍）の最安値で上書きされるため、SSは <code>prerace_gami≥7.0</code> でも元候補にガミ目を含むことがある（カットして買うのが仕様）。gami による見送り判定（<code>is_gami_skip</code>）は S ランクのみに適用。
+</div>
+
+<h3>3-3. DB書き込み方式（2026-06-20 VPS移行後）</h3>
+<div class="note">
+  <strong>原則:</strong> VPS では全スクリプトが <code>KEIRIN_DB_URL</code>（crontab で常設）により <strong>PostgreSQL へ直接書き込む</strong>（<code>get_connection()</code> が PG モードになる）。SQLite一次＋同期は旧 Mac 運用の方式で、VPS では使われない。
+</div>
+<table>
+  <tr><th>書き込み元</th><th>方式</th><th>対象</th></tr>
+  <tr>
+    <td>収集・候補・採点（全バッチ）</td>
+    <td><code>get_connection()</code> → PG 直接 upsert</td>
+    <td>wt_races, wt_entries, wt_odds, picks_history 等</td>
+  </tr>
+  <tr>
+    <td>発走15分前</td>
+    <td><code>notify_prerace_wt.py</code> 直接更新 + decisions JSON 永続化</td>
+    <td><code>picks_history.prerace_gami / gap23 / pred_combo</code></td>
+  </tr>
+  <tr>
+    <td>（旧）SQLite→PG 同期</td>
+    <td><code>migrate_sqlite_to_pg.py</code> — VPS上の SQLite は 2026-06-20 で停止した遺物のため、<strong>stale ガード</strong>（SQLite が PG より2日以上古ければ skip・exit 0）でスキップされる（b685a31）。意図的な再同期は <code>--force</code></td>
+    <td>—</td>
+  </tr>
+</table>
+
+<!-- ===== 4. kiseki Web仕様 ===== -->
+<h2>4. kiseki Web（/keirin）表示仕様</h2>
+
+<h3>4-1. ピックカードの表示ロジック</h3>
+<table>
+  <tr><th>表示</th><th>条件</th><th>badge</th></tr>
+  <tr>
+    <td>通常候補（判定前）</td>
+    <td>miwokuri=FALSE, bet_amount=0, prerace_gami IS NULL</td>
+    <td>7SS/7S/CAND バッジ</td>
+  </tr>
+  <tr>
+    <td>ガミ見送り</td>
+    <td>rank≠7PLUS_SS ∧ prerace_gami &lt; <strong>7.0</strong></td>
+    <td>「ガミ見送り」（橙色）・opacity低下</td>
+  </tr>
+  <tr>
+    <td>見送り</td>
+    <td>miwokuri=TRUE</td>
+    <td>「見送り」バッジ（グレー・半透明）・合成オッズ非表示</td>
+  </tr>
+  <tr>
+    <td>購入済み（未確定）</td>
+    <td>miwokuri=FALSE, bet_amount&gt;0, status&lt;3</td>
+    <td>未確定表示</td>
+  </tr>
+  <tr>
+    <td>購入済み（的中）</td>
+    <td>miwokuri=FALSE, hit=1, bet_amount&gt;0</td>
+    <td>✓ 的中（緑）— 日中の intraday 採点で当日中に反映</td>
+  </tr>
+  <tr>
+    <td>購入済み（不的中）</td>
+    <td>miwokuri=FALSE, hit=0, bet_amount&gt;0, 確定済み</td>
+    <td>✗ 不的中（赤）</td>
+  </tr>
+</table>
+
+<h3>4-2. 合成オッズ・gap23（API計算/表示）</h3>
+<p>kiseki APIは <code>wt_odds_snapshot (morning)</code> から <strong>合成オッズ = 1 / Σ(1/各目オッズ)</strong> を計算して返す。発走前実測（<code>prerace_gami</code>）・<code>gap23</code>（モデル2位-3位確率差）と並べて表示: <code>合成 8.2倍</code> / <code>直前 7.8倍✓</code> / <code>g23 1.4pt</code></p>
+
+<h3>4-3. サマリー集計条件（2026-07-07 変更）</h3>
+<p>集計は<strong>採点結果基準</strong>に統一。以下をすべて満たすものだけ集計:</p>
+<ul>
+  <li><code>NOT miwokuri</code></li>
+  <li><code>bet_amount &gt; 0</code>（＝発走15分前判定で購入が確定したもの）</li>
+  <li><code>rank IN ('7PLUS_SS', '7PLUS_S')</code></li>
+</ul>
+<div class="note">旧仕様の「prerace_gami≥閾値で再フィルタ」は撤廃。ガミ判定は採点時に bet_amount/miwokuri へ反映済みのため、二重フィルタが SS（カット買い）を誤って除外する問題があった。SS/S ランク別内訳は <code>model_evaluation</code>（HOLD精度）と実運用集計の両方を表示。</div>
+
+<!-- ===== 5. ランク体系 ===== -->
+<h2>5. ランク体系と購入条件（2026-07-03〜現行）</h2>
+
+<h3>5-1. 対象と候補化（朝）</h3>
+<ul>
+  <li><strong>7車立てレースのみ</strong>（2026-07-03〜。9車はS束ROI 94.8%・12ヶ月中6ヶ月赤字で除外。7車はROI 149.1%）</li>
+  <li>gap12（モデル予測確率の1位-2位差）≥ 0.07 を候補化（#CAND）。買い目は 2軸（pivot1,2）× 3着候補の三連複。</li>
+</ul>
+
+<h3>5-2. 発走15分前の確定判定（購入フィルタ3条件 → ランク）</h3>
+<table>
+  <tr><th>順序</th><th>フィルタ / ランク</th><th>条件</th><th>根拠（最終オッズ上限値）</th></tr>
+  <tr>
+    <td>①</td>
+    <td>ガミ回避</td>
+    <td>三連複オッズ &lt; <strong>7.0倍</strong> の目を除外。有効目ゼロなら見送り</td>
+    <td>min≥7帯 ROI 2.18 [CI 1.85-2.51]・見送り帯[3,7)は ROI 0.80 で回収不能（14,892R）</td>
+  </tr>
+  <tr>
+    <td>②</td>
+    <td>合成オッズ</td>
+    <td>有効目の合成オッズ &lt; <strong>8.0</strong> なら見送り</td>
+    <td rowspan="2">②③で 6月バックテスト ROI 130.2%→141.8%（対象-13%・除外分は63.3%）</td>
+  </tr>
+  <tr>
+    <td>③</td>
+    <td>gap23</td>
+    <td>モデル2位-3位の確率差 &lt; <strong>1.0pt</strong> なら見送り</td>
+  </tr>
+  <tr>
+    <td>④</td>
+    <td><strong>7PLUS_SS</strong></td>
+    <td>ガミカット後の有効目が <strong>1〜3目</strong> → その目のみ購入（各100円）</td>
+    <td>点数集中・高効率</td>
+  </tr>
+  <tr>
+    <td>⑤</td>
+    <td><strong>7PLUS_S</strong></td>
+    <td>有効目4目以上 ∧ gap12 ≥ <strong>0.10</strong> → 有効目全点購入（ガミ目除外）</td>
+    <td>確信度高・面で回収</td>
+  </tr>
+</table>
+<div class="warn-note">
+  <strong>Aランクは廃止（2026-06-28）:</strong> gap12[0.07,0.10) の低確信帯は購入対象外。歴史バックテスト全期間 ROI 137.2%（2025-07〜2026-06前半・全12ヶ月黒字・n=10,755）は最終オッズによる上限値であり、実運用ROIは 2026-08 に2ヶ月分の実測で本評価予定。
+</div>
+
+<h3>5-3. 発走前判定に記録する統計（2026-07-08〜・採用判断のためのデータ蓄積）</h3>
+<ul>
+  <li><code>score_sd / score_gap2r / score_mean</code> — 競走得点統計。SD大＝軸堅い（歴史: 買いレースで sd≥Q1 残しは ROI 2.87→3.0-3.6）</li>
+  <li><code>pred_sd / pred_top2sum</code> — 指数（モデル予測）統計。配当予測は得点統計より強い（低配当AUC 0.637）</li>
+  <li>いずれも<strong>現時点ではフィルタに未使用</strong>。live実測の蓄積後に採用判断。</li>
+</ul>
+
+<!-- ===== 6. 実装状況 ===== -->
+<h2>6. 現在の実装状況チェック</h2>
+
+<table>
+  <tr><th>機能</th><th>状態</th><th>備考</th></tr>
+  <tr>
+    <td>レース情報収集（collect-wt）</td>
+    <td><span class="ok">OK</span></td>
+    <td>全会場スキャン・結果確定済みはスキップ</td>
+  </tr>
+  <tr>
+    <td>予想生成（wave-picks-wt）</td>
+    <td><span class="ok">OK</span></td>
+    <td>7車・gap12≥0.07・SS/S 2ランク体制（2026-06-28〜）</td>
+  </tr>
+  <tr>
+    <td>週次再学習（train_wt）</td>
+    <td><span class="ok">OK</span></td>
+    <td>lgbm_wt 40特徴・学習2023-07〜・Holdout AUC 0.7712（最終再学習 2026-07-05）</td>
+  </tr>
+  <tr>
+    <td>朝/夕/日中オッズ退避（snapshot）</td>
+    <td><span class="ok">OK</span></td>
+    <td>morning/evening + 日中5回。合成オッズ計算・ドリフト分析に使用</td>
+  </tr>
+  <tr>
+    <td>候補書き込み（write_candidates_wt.py）</td>
+    <td><span class="ok">OK</span></td>
+    <td>#CAND。発走15分前以降はガミ再判定をスキップ（見送り上書き防止・822e26e）</td>
+  </tr>
+  <tr>
+    <td>発走前判定（notify_prerace_wt.py）</td>
+    <td><span class="ok">OK</span></td>
+    <td>毎分cron（8-23時）。判定を prerace_decisions_{date}.json にアトミック永続化＝正本</td>
+  </tr>
+  <tr>
+    <td>当日中の的中・払戻反映</td>
+    <td><span class="ok">OK</span></td>
+    <td>intraday_results_wt.sh が毎時採点・PG同期（2026-06〜）。旧「翌朝まで反映しない」制限は解消</td>
+  </tr>
+  <tr>
+    <td>Web手動トリガー（結果取得/オッズ取得）</td>
+    <td><span class="ok">OK</span></td>
+    <td>keirin-webhook.service（VPS:8010・リポジトリ管理下 scripts/keirin_webhook.py）</td>
+  </tr>
+  <tr>
+    <td>成績採点（notify_results_wt.py）</td>
+    <td><span class="ok">OK</span></td>
+    <td>prerace_decisions を最優先で採点。判定記録なし→見送り側（幻の購入防止・822e26e）</td>
+  </tr>
+  <tr>
+    <td>サマリー集計（kiseki /api/keirin/summary）</td>
+    <td><span class="ok">OK</span></td>
+    <td>NOT miwokuri ∧ bet_amount&gt;0 基準（2026-07-07〜）・SS/Sランク別内訳付き</td>
+  </tr>
+  <tr>
+    <td>VPS同期（migrate_sqlite_to_pg.py）</td>
+    <td><span class="warn">遺物</span></td>
+    <td>PG直接書き込み運用のため不要。stale ガードで自動スキップ（§3-3）</td>
+  </tr>
+</table>
+
+<!-- ===== 7. 既知の問題と対応状況 ===== -->
+<h2>7. 既知の問題と対応状況</h2>
+
+<table>
+  <tr><th>問題</th><th>状態</th><th>内容</th></tr>
+  <tr>
+    <td>SS/S昇格が採点で消える（通知240R中139Rが見送り誤記）</td>
+    <td><span class="ok">修正済 2026-07-07</span></td>
+    <td>採点が朝のwave txtから再判定し15分前昇格を上書きしていた。prerace_decisions 永続化＋採点の正本化（7eea4b1/321d818）で根本解消。6/27〜7/7分はバックフィル済み</td>
+  </tr>
+  <tr>
+    <td>採点フォールバックによる「幻の購入」（判定不成立レースが購入計上）</td>
+    <td><span class="ok">修正済 2026-07-08</span></td>
+    <td>decisions に記録がないレースは見送り側に倒す（822e26e）。候補復元による確定後オッズでの miwokuri 上書きも修正</td>
+  </tr>
+  <tr>
+    <td>prerace_decisions ファイルの消失（非アトミック書込）</td>
+    <td><span class="ok">修正済 2026-07-08</span></td>
+    <td>flock + tmp→os.replace のアトミック化・.bak フォールバック・読込失敗時に空で初期化しない（822e26e）</td>
+  </tr>
+  <tr>
+    <td>prerace_*.json が外部要因で削除される事象（7/8に3回）</td>
+    <td><span class="warn">監視中</span></td>
+    <td>破損でなく削除。リポジトリ・cron・git hook に該当コードなし。VPS に監視スクリプト常駐（/tmp/prerace_watch.py）で犯人特定待ち。.bak フォールバックで実害は緩和済み</td>
+  </tr>
+  <tr>
+    <td>kiseki /refresh の #CAND→購入変換の同型リスク</td>
+    <td><span class="warn">残リスク</span></td>
+    <td>VPS側修正（write_candidates のスキップ）で実質緩和。API側の恒久修正は未実施</td>
+  </tr>
+  <tr>
+    <td>migrate_sqlite_to_pg.py が毎時クラッシュ（wt_entries id 衝突）</td>
+    <td><span class="ok">修正済 2026-07-08</span></td>
+    <td>VPS移行時に残った stale SQLite（6/20時点）を同期しようとして毎時失敗。成功すると逆に古いデータでPGを上書きする事故のため、stale ガードで skip する仕様に変更（b685a31）。VPSの <code>data/keirin.db</code> は移行時スナップショットとして残置</td>
+  </tr>
+  <tr>
+    <td>gap12&lt;0.10 候補が確定後も miwokuri=FALSE のまま一覧で推奨風に表示</td>
+    <td><span class="ok">修正済 2026-07-08</span></td>
+    <td>_write_miwokuri の Aランク廃止 continue が原因（大垣5R/取手6R）。gap12&lt;0.10 も見送り確定対象に変更（f99d235）・当日分再採点済み</td>
+  </tr>
+  <tr>
+    <td>webhook サービスの git 管理外ファイル消失（503）</td>
+    <td><span class="ok">修正済 2026-07-08</span></td>
+    <td>6/20のリポジトリ再作成で消失→再作成し keirin リポジトリにコミット（e8c631d）。復旧手順もメモ化</td>
+  </tr>
+  <tr>
+    <td>OOS評価の学習境界汚染（自動80/20分割で2025-07〜10がインサンプル）</td>
+    <td><span class="ok">修正済 2026-06-27</span></td>
+    <td>--test-from 明示のクリーン分割モデル（lgbm_wt_june_eval・AUC 0.7710）で再評価。2026-06 真OOS ROI 143.3% ≒ 本番142.1% → 本番モデル維持</td>
+  </tr>
+  <tr>
+    <td>発走前通知が全レース「条件不成立」（294件通知ゼロ）</td>
+    <td><span class="ok">修正済 2026-06-27</span></td>
+    <td>winticket APIのkey list化・判定論理ギャップ・rowcount欠如・LIKEエスケープの4バグ（216fb05〜93679a1）</td>
+  </tr>
+  <tr>
+    <td>Aランク廃止への通知スクリプト追随漏れ（朝通知2日間停止）</td>
+    <td><span class="ok">修正済 2026-07-01</span></td>
+    <td>notify_picks.py の KeyError/NameError（4f828a1/e3c01fd）。フロントの gami 閾値追随漏れも修正（152d775）</td>
+  </tr>
+</table>
+
+<!-- ===== 8. DBスキーマ概要 ===== -->
+<h2>8. DBスキーマ概要（keirin スキーマ）</h2>
+<table>
+  <tr><th>テーブル / ファイル</th><th>用途</th><th>主キー</th></tr>
+  <tr>
+    <td><code>wt_races</code></td>
+    <td>レースマスタ（会場・グレード・発走時刻・ステータス）</td>
+    <td>race_key (YYYYMMDD_VID_RNO)</td>
+  </tr>
+  <tr>
+    <td><code>wt_entries</code></td>
+    <td>出走表（選手情報・競走得点 race_point・着順）</td>
+    <td>race_key + frame_no</td>
+  </tr>
+  <tr>
+    <td><code>wt_odds</code></td>
+    <td>最終オッズ（三連複・三連単・ワイド等）</td>
+    <td>race_key + bet_type + combination</td>
+  </tr>
+  <tr>
+    <td><code>wt_odds_snapshot</code></td>
+    <td>時点別オッズ保全（morning/evening/intraday）。合成オッズ計算・ドリフト分析</td>
+    <td>race_key + bet_type + combination + snapshot_type</td>
+  </tr>
+  <tr>
+    <td><code>picks_history</code></td>
+    <td>AI予想履歴・採点（miwokuri・prerace_gami・<strong>gap23</strong>・hit・payout）</td>
+    <td>race_key（サフィックス含む）</td>
+  </tr>
+  <tr>
+    <td><code>model_evaluation</code></td>
+    <td>バックテスト結果（VAL/HOLD期間）。kiseki サマリーの「HOLD精度」行に使用</td>
+    <td>id</td>
+  </tr>
+  <tr>
+    <td><code>venue_info</code></td>
+    <td>競輪場マスタ（場コード・名称）</td>
+    <td>venue_code</td>
+  </tr>
+  <tr>
+    <td><code>data/prerace_decisions_{date}.json</code>（ファイル）</td>
+    <td><strong>発走15分前判定の正本</strong>（buy/skip・rank・カット後買い目・レグ別オッズ・score/pred統計）。採点・表示・通知が参照</td>
+    <td>race_key</td>
+  </tr>
+</table>
+
+<!-- ===== 9. ファイル構成 ===== -->
+<h2>9. ファイル構成（主要）</h2>
+<table>
+  <tr><th>ファイル</th><th>役割</th><th>実行タイミング（VPS cron）</th></tr>
+  <tr>
+    <td><code>scripts/daily_picks_wt.sh</code></td>
+    <td>朝バッチ全体オーケストレーション</td>
+    <td>08:00</td>
+  </tr>
+  <tr>
+    <td><code>scripts/evening_picks_wt.sh</code></td>
+    <td>夕方バッチ（夜レース追加）</td>
+    <td>16:00</td>
+  </tr>
+  <tr>
+    <td><code>scripts/notify_prerace_wt.py</code></td>
+    <td>発走15分前判定（フィルタ3条件・ランク確定・decisions永続化・Discord通知）</td>
+    <td>毎分（8-23時）</td>
+  </tr>
+  <tr>
+    <td><code>scripts/intraday_results_wt.sh</code></td>
+    <td>当日結果の逐次収集・採点・PG同期</td>
+    <td>毎時（10-23時）+ 00:00</td>
+  </tr>
+  <tr>
+    <td><code>scripts/notify_results_wt.py</code></td>
+    <td>成績採点（prerace_decisions正本）・miwokuri確定・Discord通知・VPS同期</td>
+    <td>朝バッチ・intraday から呼び出し</td>
+  </tr>
+  <tr>
+    <td><code>scripts/write_candidates_wt.py</code></td>
+    <td>候補レースをpicks_historyに書き込み（kiseki表示用）</td>
+    <td>朝・夕バッチから呼び出し</td>
+  </tr>
+  <tr>
+    <td><code>scripts/snapshot_morning_odds_wt.py</code> / <code>snapshot_intraday_odds_wt.py</code></td>
+    <td>時点別オッズをwt_odds_snapshotに退避</td>
+    <td>朝・夕バッチ / 10,12,14,18,20時</td>
+  </tr>
+  <tr>
+    <td><code>scripts/keirin_webhook.py</code></td>
+    <td>Web手動トリガー用HTTPサーバー（systemd: keirin-webhook.service :8010）</td>
+    <td>常駐</td>
+  </tr>
+  <tr>
+    <td><code>scripts/migrate_sqlite_to_pg.py</code></td>
+    <td>SQLite→PG upsert同期（旧Mac運用向け・VPSでは stale ガードで自動スキップ）</td>
+    <td>各バッチ末尾（実質no-op）</td>
+  </tr>
+  <tr>
+    <td><code>scripts/backfill_picks_history_wt.py</code> / <code>backfill_prerace_decisions.py</code></td>
+    <td>過去期間のバックテスト再現・decisions復元（--eval-model でOOSモデル指定可）</td>
+    <td>手動</td>
+  </tr>
+  <tr>
+    <td><code>src/cli/main.py</code></td>
+    <td>CLIエントリポイント（collect-wt / wave-picks-wt / train_wt 等）</td>
+    <td>各バッチから呼び出し</td>
+  </tr>
+  <tr>
+    <td><code>kiseki/backend/src/api/keirin_router.py</code></td>
+    <td>kiseki API（picks / summary / refresh / fetch-results / fetch-odds）</td>
+    <td>VPSで常時稼働</td>
+  </tr>
+  <tr>
+    <td><code>kiseki/frontend/src/app/keirin/page.tsx</code></td>
+    <td>kiseki フロントエンド（/keirin）</td>
+    <td>VPSで常時稼働</td>
+  </tr>
+</table>
+
+<!-- ===== 10. 今後の課題 ===== -->
+<h2>10. 今後の課題・評価計画</h2>
+
+<div class="warn-note">
+<strong>実運用ROIの本評価（2026-08予定）:</strong><br>
+現行フィルタ体系（gami7.0・SO≥8・gap23≥1pt・7車限定）は2026-07頭に確定。live初期実測はROI 51%（n=49・小標本）で歴史137%と乖離しており、利益源がfat tail（少数の高配当）である以上、月300R規模×2ヶ月の蓄積後にDBベースで本評価する。prerace_gami は2026-06-15以降・gap23 は2026-06-30以降のみ保存されている点に注意。
+</div>
+
+<table>
+  <tr><th>項目</th><th>現状</th><th>次のアクション</th></tr>
+  <tr>
+    <td>フィルタ体系のlive評価</td>
+    <td>判定ログ蓄積中（6/27〜本格稼働）</td>
+    <td>2026-08 に prerace オッズベースで ROI 本評価・継続/調整判断</td>
+  </tr>
+  <tr>
+    <td>score_sd（軸信頼度）による絞り込み</td>
+    <td>decisions に記録中・フィルタ未使用（歴史 ROI 2.87→3.0-3.6）</td>
+    <td>live 蓄積後に除外昇格を判断</td>
+  </tr>
+  <tr>
+    <td>min≥7内の合成オッズ強化（syn≥3.0で歴史ROI 3.14）</td>
+    <td>prerace SO は現状DB未保存（通知ログのみ）</td>
+    <td>SO の DB 保存開始 → live 検証</td>
+  </tr>
+  <tr>
+    <td>prerace_*.json 削除事象の犯人特定</td>
+    <td>監視スクリプト常駐中</td>
+    <td>再発時の ps ログで特定・恒久対策</td>
+  </tr>
+  <tr>
+    <td>低配当除外の専用モデル / 配当予測モデル</td>
+    <td>検証済み・<strong>不採用</strong>（3seed誤差内・買いセット内で関係反転）</td>
+    <td>再挑戦しない（検証記録あり）</td>
+  </tr>
+</table>
+
+</div>
+</body>
+</html>

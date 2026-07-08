@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>競輪AI予想システム — モデル説明資料（winticket版 2026-07-08）</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #1a1d27;
+    --bg3: #242837;
+    --accent: #5b8dee;
+    --accent2: #f5a623;
+    --accent3: #50c878;
+    --danger: #e05c5c;
+    --text: #e8eaf0;
+    --text2: #9aa0b8;
+    --border: #2e3350;
+    --ss: #f5a623;
+    --s:  #5b8dee;
+    --a:  #50c878;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Helvetica Neue', 'Hiragino Kaku Gothic Pro', 'Meiryo', sans-serif;
+    color: var(--text);
+    overflow: hidden;
+  }
+
+  /* ── Slide container ── */
+  #deck {
+    width: 100vw;
+    height: 56.25vw; /* 16:9 */
+    max-height: 100vh;
+    max-width: 177.78vh;
+    position: relative;
+    overflow: hidden;
+  }
+  .slide {
+    position: absolute; inset: 0;
+    background: var(--bg);
+    display: none;
+    flex-direction: column;
+    padding: 4% 6%;
+  }
+  .slide.active { display: flex; }
+
+  /* ── Navigation ── */
+  #nav {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 12px; align-items: center; z-index: 100;
+  }
+  .nav-btn {
+    background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+    color: #fff; padding: 8px 22px; border-radius: 20px; cursor: pointer;
+    font-size: 14px; transition: background 0.2s;
+  }
+  .nav-btn:hover { background: rgba(255,255,255,0.25); }
+  #counter { color: var(--text2); font-size: 13px; min-width: 60px; text-align: center; }
+
+  /* ── Typography ── */
+  .slide-title {
+    font-size: 2em; font-weight: 700; color: var(--accent);
+    border-left: 4px solid var(--accent); padding-left: 0.6em;
+    margin-bottom: 0.6em; line-height: 1.2;
+  }
+  .slide-subtitle { font-size: 1.1em; color: var(--text2); margin-bottom: 1.2em; }
+  h3 { font-size: 1em; color: var(--text2); font-weight: 600; margin-bottom: 0.4em; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* ── Layout helpers ── */
+  .cols { display: flex; gap: 3%; flex: 1; }
+  .col { flex: 1; display: flex; flex-direction: column; gap: 0.8em; }
+  .col-40 { flex: 0 0 40%; }
+  .col-55 { flex: 0 0 55%; }
+  .col-60 { flex: 0 0 60%; }
+  .spacer { flex: 1; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1em 1.2em;
+  }
+  .card-title {
+    font-size: 0.78em; color: var(--text2); text-transform: uppercase;
+    letter-spacing: 0.06em; margin-bottom: 0.5em;
+  }
+  .card-value { font-size: 1.9em; font-weight: 700; color: var(--text); line-height: 1; }
+  .card-sub { font-size: 0.78em; color: var(--text2); margin-top: 0.3em; }
+  .card.accent-ss { border-color: var(--ss); }
+  .card.accent-s  { border-color: var(--s);  }
+  .card.accent-all{ border-color: var(--accent); }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+  th { background: var(--bg3); color: var(--text2); font-weight: 600;
+       padding: 0.5em 0.8em; text-align: left; font-size: 0.9em; }
+  td { padding: 0.45em 0.8em; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .tr-ss td:first-child { color: var(--ss); font-weight: 700; }
+  .tr-s  td:first-child { color: var(--s);  font-weight: 700; }
+  .tr-a  td:first-child { color: var(--a);  font-weight: 700; }
+  .tr-total { background: var(--bg3); font-weight: 700; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .roi-high { color: var(--accent3); font-weight: 700; }
+  .roi-mid  { color: var(--accent);  font-weight: 700; }
+  .roi-low  { color: var(--danger);  }
+
+  /* ── Feature grid ── */
+  .feat-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em; flex: 1;
+  }
+  .feat-item {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.5em 0.7em; font-size: 0.72em;
+  }
+  .feat-item .feat-name { font-family: monospace; color: var(--accent); font-size: 0.95em; }
+  .feat-item .feat-desc { color: var(--text2); margin-top: 2px; }
+  .feat-cat-label {
+    grid-column: 1 / -1; font-size: 0.72em; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.06em; padding: 0.2em 0;
+    border-bottom: 1px solid var(--border); margin-bottom: 0.1em;
+  }
+
+  /* ── Title slide ── */
+  .title-slide { justify-content: center; align-items: flex-start; }
+  .title-main {
+    font-size: 3.2em; font-weight: 800; line-height: 1.15;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .title-sub { font-size: 1.3em; color: var(--text2); margin: 0.8em 0 2em; }
+  .title-meta { display: flex; gap: 2em; }
+  .meta-item { font-size: 0.82em; color: var(--text2); }
+  .meta-item strong { color: var(--text); display: block; font-size: 1.1em; margin-bottom: 2px; }
+
+  /* ── Monthly grid ── */
+  .month-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6em; flex: 1;
+    align-content: start;
+  }
+  .month-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.55em 0.8em;
+  }
+  .month-card .m-name { font-size: 0.72em; color: var(--text2); margin-bottom: 0.15em; }
+  .month-card .m-roi  { font-size: 1.35em; font-weight: 700; }
+
+  /* ── Pill badges ── */
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 12px;
+    font-size: 0.75em; font-weight: 700;
+  }
+  .badge-ss  { background: rgba(245,166,35,0.2); color: var(--ss); border: 1px solid var(--ss); }
+  .badge-s   { background: rgba(91,141,238,0.2); color: var(--s);  border: 1px solid var(--s); }
+
+  /* ── Flow diagram ── */
+  .flow { display: flex; align-items: center; gap: 0; justify-content: center; flex: 1; }
+  .flow-box {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1em 1.2em; text-align: center; min-width: 110px;
+  }
+  .flow-box .fb-icon { font-size: 1.8em; }
+  .flow-box .fb-title { font-size: 0.8em; font-weight: 700; margin: 0.3em 0 0.2em; }
+  .flow-box .fb-sub { font-size: 0.7em; color: var(--text2); line-height: 1.4; }
+  .flow-arrow { font-size: 1.4em; color: var(--text2); padding: 0 0.4em; }
+
+  .tag { display: inline-block; background: var(--bg3); border: 1px solid var(--border);
+         border-radius: 6px; padding: 2px 8px; font-size: 0.78em; color: var(--text2); }
+
+  .highlight { color: var(--accent2); font-weight: 700; }
+  .green { color: var(--accent3); }
+  .blue  { color: var(--accent);  }
+  .gold  { color: var(--ss);  }
+  .red   { color: var(--danger); }
+
+  ul.bullet { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5em; }
+  ul.bullet li { padding-left: 1.2em; position: relative; font-size: 0.85em; color: var(--text); line-height: 1.5; }
+  ul.bullet li::before { content: '▸'; position: absolute; left: 0; color: var(--accent); }
+
+  .note { font-size: 0.72em; color: var(--text2); margin-top: 0.4em; }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 0.6em 0; }
+</style>
+</head>
+<body>
+
+<div id="deck">
+
+  <!-- 1. Title -->
+  <div class="slide active title-slide">
+    <div class="title-main">穴車AI<br>競輪AI予想システム</div>
+    <div class="title-sub">モデル説明資料 — winticket 本番版（2026-06-08版を全面改訂）</div>
+    <div class="title-meta">
+      <div class="meta-item"><strong>97,000+ レース</strong>収録データ(2022-12〜)</div>
+      <div class="meta-item"><strong>40 特徴量</strong>LightGBM lgbm_wt（週次再学習）</div>
+      <div class="meta-item"><strong>Holdout AUC 0.7712</strong>クリーンOOS AUC 0.7710</div>
+      <div class="meta-item"><strong>2026-07-08</strong>更新</div>
+    </div>
+    <div class="card" style="margin-top:1.6em;border-color:var(--accent);max-width:80%;">
+      <div class="card-title" style="color:var(--accent);">前版（2026-06-08）からの主な変更</div>
+      <div style="font-size:0.8em;line-height:1.7;">Aランク廃止（SS/S 2ランク化）／ガミ閾値 5→<span class="highlight">7倍</span>／<span class="highlight">合成オッズ・gap23フィルタ</span>新設／<span class="highlight">7車立て限定</span>／発走15分前判定の<span class="highlight">正本化</span>（採点誤記の根本解消）／OOS評価の厳密化（学習境界汚染の発見と再検証）</div>
+    </div>
+    <div class="card" style="margin-top:0.8em;border-color:var(--danger);max-width:80%;">
+      <div class="card-title" style="color:var(--danger);">重要なリスク開示</div>
+      <div style="font-size:0.8em;line-height:1.6;">本資料のバックテストROIはすべて<span class="red">最終オッズによる上限値</span>です。実運用（発走前オッズ）は下振れし、<span class="red">将来の利益を保証しません</span>。実運用ROIは発走前判定ログで継続測定中です（P.9）。</div>
+    </div>
+  </div>
+
+  <!-- 2. システム概要 -->
+  <div class="slide">
+    <div class="slide-title">システム概要</div>
+    <div class="slide-subtitle">winticket スクレイピング → DB → LightGBM → 発走15分前判定 → 通知（VPSで全自動）</div>
+    <div class="flow">
+      <div class="flow-box"><div class="fb-icon">🌐</div><div class="fb-title">winticket</div><div class="fb-sub">出走表・ライン<br>全組合せオッズ</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-icon">🗄</div><div class="fb-title">DB</div><div class="fb-sub">97,000+R<br>2022-12〜</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-icon">🤖</div><div class="fb-title">LightGBM</div><div class="fb-sub">lgbm_wt<br>40特徴・3着内確率</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-icon">🎯</div><div class="fb-title">発走15分前判定</div><div class="fb-sub">ガミ・合成オッズ・gap23<br>ランク確定＝正本</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-icon">📣</div><div class="fb-title">配信</div><div class="fb-sub">Discord / Web<br>全車指数PDF</div></div>
+    </div>
+    <ul class="bullet" style="margin-top:1em;">
+      <li>朝バッチで候補生成・通知、<span class="highlight">発走15分前にリアルタイムオッズで購入/見送りを最終判定</span>。週次で自動再学習。</li>
+      <li>オッズは<span class="highlight">モデル入力に含めず</span>、予想後の購入判定（フィルタ3条件）にのみ使用。</li>
+      <li>15分前判定はJSONに永続化し<span class="highlight">事後変更しない</span>（2026-07-07〜）。通知・Web表示・採点が完全に一致。</li>
+    </ul>
+  </div>
+
+  <!-- 3. データと検証設計 -->
+  <div class="slide">
+    <div class="slide-title">データ期間と検証設計</div>
+    <div class="slide-subtitle">学習境界の汚染を排除した「真のOOS（学習外期間）」で評価</div>
+    <div class="cols">
+      <div class="col">
+        <div class="card"><div class="card-title">収録範囲</div><div class="card-value">2022-12 〜 現在</div><div class="card-sub">winticket 全期間・97,000+レース</div></div>
+        <div class="card"><div class="card-title">本番モデル lgbm_wt</div><div class="card-value" style="font-size:1.3em;">学習 2023-07〜 / 82,615R</div><div class="card-sub">週次再学習（最終 2026-07-05）・Holdout AUC 0.7712</div></div>
+        <div class="card accent-all"><div class="card-title">真のOOS検証（2026-06実施）</div><div style="font-size:0.82em;line-height:1.6;">学習〜2025-10 / テスト 2025-11〜2026-05 のクリーン分割モデル（AUC 0.7710）で2026年6月を評価 → <span class="green">ROI 143.3%</span>。本番モデル142.1%と一致し<span class="highlight">過学習の兆候なし</span>。</div></div>
+      </div>
+      <div class="col">
+        <div class="card" style="border-color:var(--accent2);"><div class="card-title" style="color:var(--accent2);">評価の汚染を自ら発見・修正</div><div style="font-size:0.82em;line-height:1.6;">旧評価用モデルは内部の自動80/20分割により<span class="highlight">2025-07〜10が学習データに混入</span>していた（＝当時のOOS評価の一部はインサンプル）。テスト開始日を明示指定したモデルを再作成し、評価をやり直した上で上記の結論を得ている。</div></div>
+        <div class="card"><div class="card-title">DNS（欠車）処理</div><div style="font-size:0.82em;line-height:1.6;">finish_order=0（欠車/失格）を着外として正しく除外。ラベル定義の修正で判別性能が大きく改善（2026-06確定）。</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 特徴量 -->
+  <div class="slide">
+    <div class="slide-title">特徴量（40項目）</div>
+    <div class="slide-subtitle">winticket 固有のライン情報・ローリング勝率を含む</div>
+    <div class="feat-grid">
+      <div class="feat-cat-label">コア指標</div>
+      <div class="feat-item"><div class="feat-name">race_point</div><div class="feat-desc">競走得点</div></div>
+      <div class="feat-item"><div class="feat-name">first/third_rate</div><div class="feat-desc">勝率・3着内率</div></div>
+      <div class="feat-item"><div class="feat-name">score_z / rank</div><div class="feat-desc">レース内相対</div></div>
+      <div class="feat-item"><div class="feat-name">gear_ratio</div><div class="feat-desc">ギヤ比</div></div>
+      <div class="feat-cat-label">ライン構成（winticket固有）</div>
+      <div class="feat-item"><div class="feat-name">line_size / pos</div><div class="feat-desc">ライン規模・位置</div></div>
+      <div class="feat-item"><div class="feat-name">is_line_leader</div><div class="feat-desc">先頭フラグ</div></div>
+      <div class="feat-item"><div class="feat-name">n_lines / isolated</div><div class="feat-desc">ライン数・単騎</div></div>
+      <div class="feat-item"><div class="feat-name">line_frac</div><div class="feat-desc">ライン規模比</div></div>
+      <div class="feat-cat-label">戦術・市場・ローリング</div>
+      <div class="feat-item"><div class="feat-name">s/h/b_count</div><div class="feat-desc">セクター回数</div></div>
+      <div class="feat-item"><div class="feat-name">ex_spurt/thrust</div><div class="feat-desc">上がり戦術率</div></div>
+      <div class="feat-item"><div class="feat-name">prediction_mark</div><div class="feat-desc">winticket AI印</div></div>
+      <div class="feat-item"><div class="feat-name">win/top3_3m,6m…</div><div class="feat-desc">ローリング勝率(9項目)</div></div>
+    </div>
+    <div class="tag" style="margin-top:0.8em;">※レース内の予測確率から gap12（1-2位差）・gap23（2-3位差）を導出し、確信度指標として購入判定に使用。</div>
+  </div>
+
+  <!-- 5. ランク体系 -->
+  <div class="slide">
+    <div class="slide-title">2段階ランクシステム（SS / S）</div>
+    <div class="slide-subtitle">対象は7車立てのみ・三連複。ランクは発走15分前のリアルタイムオッズで確定</div>
+    <table>
+      <tr><th>ランク</th><th>確定条件（発走15分前）</th><th>買い目</th><th>狙い</th></tr>
+      <tr class="tr-ss"><td>SS</td><td>ガミ目（&lt;7倍）カット後の有効目が <strong>1〜3目</strong></td><td>三連複 1〜3点（各100円）</td><td>点数集中・高効率</td></tr>
+      <tr class="tr-s"><td>S</td><td>有効目4目以上 ∧ gap12≥0.10</td><td>三連複 有効目全点（ガミ目除外）</td><td>確信度高・面で回収</td></tr>
+    </table>
+    <ul class="bullet" style="margin-top:1em;">
+      <li>朝は <span class="highlight">gap12≥0.07 の7車レース</span>を候補として通知し、15分前判定で SS/S/見送りが確定する2段構え。</li>
+      <li><span class="gold">Aランクは廃止</span>（2026-06-28）: 低確信帯 gap12[0.07,0.10) は期待値が薄く購入対象外に。</li>
+      <li><span class="highlight">7車立て限定</span>（2026-07-03）: 9車はS束ROI 94.8%（12ヶ月中6ヶ月赤字）で除外。7車はROI 149.1%。</li>
+    </ul>
+  </div>
+
+  <!-- 6. 購入フィルタ3条件 -->
+  <div class="slide">
+    <div class="slide-title">購入フィルタ（3条件・発走15分前に判定）</div>
+    <div class="slide-subtitle">「当てても損」「低配当構造」「軸の確信不足」を事前に除外</div>
+    <table>
+      <tr><th>フィルタ</th><th>条件</th><th>検証根拠（最終オッズ上限値）</th></tr>
+      <tr><td class="gold">① ガミ回避</td><td>全購入目 三連複 <strong>≥ 7.0倍</strong></td><td>min≥7帯がプロフィットエンジン: ROI 2.18 [CI 1.85-2.51]。見送り帯[3,7)は<span class="red">ROI 0.80</span>で回収不能（14,892R検証）</td></tr>
+      <tr><td class="blue">② 合成オッズ</td><td>有効目の合成オッズ <strong>≥ 8.0</strong></td><td>低配当構造レースの除外。6月検証でフィルタ全体のROI +11.6pt</td></tr>
+      <tr><td class="green">③ gap23</td><td>モデル2位-3位の確率差 <strong>≥ 1.0pt</strong></td><td>軸2頭の確信度担保。②と合わせ ROI 130.2%→<span class="green">141.8%</span>（対象-13%・除外分は63.3%）</td></tr>
+    </table>
+    <ul class="bullet" style="margin-top:1em;">
+      <li>ガミ閾値は検証を経て 5.0 → <span class="highlight">7.0</span> に引き上げ（2026-07-01）。閾値を下げるほどROIは単調悪化（≥6→1.75、≥5→1.40、≥3→1.05）。</li>
+      <li>不採用と結論した案: ガミ緩和（最低3倍∧合成10倍は数学的に空集合）／見送りレースのオッズ復活買い（全変種ROI&lt;1）。</li>
+    </ul>
+  </div>
+
+  <!-- 7. バックテスト実績 -->
+  <div class="slide">
+    <div class="slide-title">バックテスト実績（12ヶ月・月別ROI）</div>
+    <div class="slide-subtitle">2025-07〜2026-06前半・10,755レース・<span class="red">最終オッズ＝上限値</span>・フィルタ導入前の基準系</div>
+    <div class="month-grid">
+      <div class="month-card"><div class="m-name">2025年7月</div><div class="m-roi roi-high">159.5%</div></div>
+      <div class="month-card"><div class="m-name">2025年8月</div><div class="m-roi roi-high">159.9%</div></div>
+      <div class="month-card"><div class="m-name">2025年9月</div><div class="m-roi roi-mid">106.2%</div></div>
+      <div class="month-card"><div class="m-name">2025年10月</div><div class="m-roi roi-high">125.4%</div></div>
+      <div class="month-card"><div class="m-name">2025年11月</div><div class="m-roi roi-mid">110.2%</div></div>
+      <div class="month-card"><div class="m-name">2025年12月</div><div class="m-roi roi-high">175.8%</div></div>
+      <div class="month-card"><div class="m-name">2026年1月</div><div class="m-roi roi-high">145.7%</div></div>
+      <div class="month-card"><div class="m-name">2026年2月</div><div class="m-roi roi-high">134.2%</div></div>
+      <div class="month-card"><div class="m-name">2026年3月</div><div class="m-roi roi-mid">115.5%</div></div>
+      <div class="month-card"><div class="m-name">2026年4月</div><div class="m-roi roi-high">138.0%</div></div>
+      <div class="month-card"><div class="m-name">2026年5月</div><div class="m-roi roi-high">146.1%</div></div>
+      <div class="month-card"><div class="m-name">2026年6月前半</div><div class="m-roi roi-high">131.1%</div></div>
+    </div>
+    <div class="cols" style="flex:0;margin-top:0.6em;gap:1em;">
+      <div class="card accent-all" style="flex:1;"><div class="card-title">全期間合計</div><div class="card-value" style="font-size:1.5em;">ROI 137.2%</div><div class="card-sub">全12ヶ月黒字（単月赤字なし）</div></div>
+      <div class="card accent-s" style="flex:1;"><div class="card-title">SO・gap23フィルタ適用時（6月）</div><div class="card-value" style="font-size:1.5em;">ROI 141.8%</div><div class="card-sub">除外レースはROI 63.3%＝適切に切れている</div></div>
+      <div class="card accent-ss" style="flex:1;"><div class="card-title">真のOOS（2026年6月）</div><div class="card-value" style="font-size:1.5em;">ROI 143.3%</div><div class="card-sub">クリーン分割モデルによる学習外評価</div></div>
+    </div>
+  </div>
+
+  <!-- 8. 品質改善の歩み -->
+  <div class="slide">
+    <div class="slide-title">品質改善の歩み（2026-06〜07）</div>
+    <div class="slide-subtitle">不具合を自ら検出し、評価の正確性と運用の一貫性を確立</div>
+    <table>
+      <tr><th style="width:14%;">時期</th><th>改善内容</th></tr>
+      <tr><td>06-17</td><td><strong>見送り管理（miwokuri）導入</strong> — 朝候補・購入確定・見送りを分離管理し、集計は購入分のみに統一</td></tr>
+      <tr><td>06-27</td><td><strong>OOS評価の学習境界汚染を発見・再検証</strong> — クリーン分割モデルで再評価し、本番モデル維持を確認（P.3）</td></tr>
+      <tr><td>06-27</td><td><strong>発走前通知の4バグ修正</strong> — 判定ロジック・API処理の不具合で294レースが通知されていなかった問題を解消</td></tr>
+      <tr><td>06-28</td><td><strong>Aランク廃止</strong> — 低確信帯を購入対象から除外し SS/S 2ランク体制へ</td></tr>
+      <tr><td>06-30〜07-03</td><td><strong>合成オッズ≥8・gap23≥1pt フィルタ導入／ガミ閾値 7.0 へ／7車立て限定</strong></td></tr>
+      <tr><td>07-07</td><td><strong>発走15分前判定の正本化</strong> — 判定をJSONに永続化し採点・Web・通知を統一。旧採点で通知240R中139Rが「見送り」に誤記されていた不一致と「幻の購入」を根本解消・過去分もバックフィル済み</td></tr>
+    </table>
+    <div class="tag" style="margin-top:0.7em;">※07-07修正以降、Webサマリー・Discord通知・DB採点の数値は完全に一致（通知した実績＝表示される実績）。</div>
+  </div>
+
+  <!-- 9. 実運用の現状とリスク -->
+  <div class="slide">
+    <div class="slide-title">実運用の現状とリスク</div>
+    <div class="slide-subtitle">バックテスト（上限値）と実運用（発走前オッズ）のギャップを正直に開示</div>
+    <div class="cols">
+      <div class="col">
+        <div class="card" style="border-color:var(--danger);">
+          <div class="card-title" style="color:var(--danger);">実運用の初期実測</div>
+          <div class="card-value" style="font-size:1.5em;">ROI 51%<span style="font-size:0.5em;color:var(--text2);">（n=49・6/27〜7/7）</span></div>
+          <div style="font-size:0.78em;line-height:1.6;margin-top:0.4em;">歴史137%との乖離要因: ①<span class="red">小標本</span>（利益源が少数の高配当＝fat tailのため、月300R規模の蓄積が必要）②発走前→最終オッズのドリフト。<br>この期間は採点バグ（P.8）の影響下でもあった。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">評価計画</div>
+          <div style="font-size:0.82em;line-height:1.6;">現行フィルタ体系（gami7.0/SO/gap23）は7月頭に確定。<span class="highlight">2026年8月に2ヶ月分の実測でDBベースの本評価</span>を行い、継続/調整を判断する。</div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <div class="card-title">次の改善候補（検証データ蓄積中）</div>
+          <ul class="bullet" style="font-size:0.92em;">
+            <li>競走得点の分散（score_sd）が大きい＝軸が堅いレースへの絞り込み: 歴史検証でROI 2.87→3.0-3.6。7/8から発走前判定に記録開始、実測蓄積後に採用判断。</li>
+            <li>配当予測の専用モデル再学習は検証の結果<span class="red">不採用</span>（3seed検証で誤差内・新情報なし）。</li>
+          </ul>
+        </div>
+        <div class="card" style="border-color:var(--danger);">
+          <div class="card-title" style="color:var(--danger);">リスク開示（再掲）</div>
+          <ul class="bullet" style="font-size:0.92em;">
+            <li>本資料のROIは<span class="red">最終オッズによる上限値</span>。</li>
+            <li>実運用は購入額によるオッズ変動・締切直前の変動で下振れする。</li>
+            <li>過去の成績は<span class="red">将来の利益を保証しない</span>。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. 毎日のフロー + まとめ -->
+  <div class="slide">
+    <div class="slide-title">毎日の運用フロー & まとめ</div>
+    <div class="slide-subtitle">VPSで全自動・人手ゼロ</div>
+    <div class="flow" style="flex:0;margin-bottom:1em;">
+      <div class="flow-box"><div class="fb-title">①朝バッチ</div><div class="fb-sub">前日採点→収集<br>候補生成・通知</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-title">②夕方バッチ</div><div class="fb-sub">夜レース追加</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-title">③発走15分前</div><div class="fb-sub">フィルタ3条件判定<br>SS/S/見送り確定・通知</div></div>
+      <div class="flow-arrow">▶</div>
+      <div class="flow-box"><div class="fb-title">④翌朝採点</div><div class="fb-sub">15分前判定を正本に<br>成績確定・配信</div></div>
+    </div>
+    <table>
+      <tr><th>ポイント</th><th>内容</th></tr>
+      <tr><td>科学的根拠</td><td>LightGBM × 40特徴（ライン構成・ローリング勝率）/ 97,000+レース / 週次再学習</td></tr>
+      <tr><td>徹底した選別</td><td>7車立て限定 × SS/S 2ランク × フィルタ3条件（ガミ7倍・合成オッズ8・gap23）</td></tr>
+      <tr><td>検証の厳密さ</td><td>真のOOSで143.3%を確認・評価の汚染や採点バグは自ら検出して修正・上限値と実測を区別して開示</td></tr>
+      <tr><td class="red">リスク開示</td><td class="red">数値はバックテスト上限値。実運用ROIは2026年8月に本評価予定・利益保証なし</td></tr>
+    </table>
+  </div>
+
+</div><!-- /deck -->
+
+<!-- Navigation -->
+<div id="nav">
+  <button class="nav-btn" onclick="move(-1)">◀ 前へ</button>
+  <span id="counter">1 / 10</span>
+  <button class="nav-btn" onclick="move(1)">次へ ▶</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let cur = 0;
+  function move(d) {
+    slides[cur].classList.remove('active');
+    cur = (cur + d + slides.length) % slides.length;
+    slides[cur].classList.add('active');
+    document.getElementById('counter').textContent = (cur+1) + ' / ' + slides.length;
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') move(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   move(-1);
+  });
+</script>
+</body>
+</html>
