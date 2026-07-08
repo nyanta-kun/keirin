@@ -55,3 +55,8 @@ data/models/*.meta.json
 
 # 予想ファイル（日次生成・再生成可能）
 data/picks/
+
+# 発走前判定の正本（VPS実行時生成・CIデプロイの git stash -u に持ち去られないよう ignore 必須）
+# 2026-07-08 判明: push毎のCIデプロイ(stash -u, popなし)が本ファイルを削除していた
+data/prerace_decisions_*.json*
+data/prerace_notified_*.json*
