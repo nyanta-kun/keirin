@@ -214,9 +214,10 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
         ).fetchone()
         if not has_result:
             continue
-        gap12 = cand.get("gap12", 0.0)
-        if gap12 < 0.10:
-            continue  # Aランク廃止（2026-06-28）
+        # gap12 < 0.10（Aランク廃止帯）も見送り確定の対象に含める。
+        # write_candidates_wt.py が SS 追跡用に gap12>=0.07 を #CAND 登録するため、
+        # ここでスキップすると未購入のまま miwokuri=FALSE が残り、kiseki 一覧で
+        # 推奨のように表示される（2026-07-08 大垣5R/取手6R で発生）。
         rank = "7PLUS_S"
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")
