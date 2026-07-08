@@ -171,6 +171,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="実行せずに行数のみ表示")
     parser.add_argument("--full", action="store_true", help="wt_odds(34M) と wt_weather(1.3M) も移行")
     parser.add_argument("--skip", nargs="*", default=[], metavar="TABLE", help="スキップするテーブル名")
+    parser.add_argument("--force", action="store_true",
+                        help="SQLite が PG より古くても同期を強制実行する")
     args = parser.parse_args()
 
     db_url = os.environ.get("KEIRIN_DB_URL", "")
@@ -182,6 +184,34 @@ def main() -> None:
         # VPS上で直接PGに書き込む運用では SQLite が存在しない（スキップで正常）
         print(f"[skip] SQLite DB が見つかりません（VPS直接書き込み運用）: {SQLITE_PATH}")
         sys.exit(0)
+
+    # ── stale ガード ──────────────────────────────────────────────
+    # VPS 直接書き込み運用（KEIRIN_DB_URL 常設）へ移行後は SQLite が更新されない。
+    # 旧 Mac 時代の SQLite が残っていると、古いデータで PG を上書きしようとする
+    # （実際には wt_entries の id 衝突で毎時クラッシュしていた: 2026-07-08 判明）。
+    # SQLite の最新レース日が PG より 2 日以上古い場合は同期をスキップする。
+    if not args.force:
+        try:
+            _sq = get_sqlite(SQLITE_PATH)
+            _row = _sq.execute("SELECT MAX(substr(race_key, 1, 8)) FROM wt_races").fetchone()
+            sqlite_max = _row[0] if _row else None
+            _sq.close()
+            _pg = psycopg2.connect(db_url, connect_timeout=10)
+            with _pg.cursor() as _cur:
+                _cur.execute("SELECT MAX(substr(race_key, 1, 8)) FROM keirin.wt_races")
+                pg_max = _cur.fetchone()[0]
+            _pg.close()
+            if sqlite_max and pg_max and sqlite_max < pg_max:
+                from datetime import datetime
+                _days = (datetime.strptime(pg_max, "%Y%m%d")
+                         - datetime.strptime(sqlite_max, "%Y%m%d")).days
+                if _days >= 2:
+                    print(f"[skip] SQLite が stale です（SQLite最新 {sqlite_max} / PG最新 {pg_max}, "
+                          f"{_days}日差）。PG 直接書き込み運用では同期不要のためスキップします"
+                          "（--force で強制実行）。")
+                    sys.exit(0)
+        except Exception as e:  # noqa: BLE001 - ガード失敗は同期継続（従来動作）
+            print(f"[warn] stale チェック失敗（同期は継続）: {e}")
 
     tables = [t for t in TABLES_ESSENTIAL + (TABLES_LARGE if args.full else [])
               if t[0] not in args.skip]
