@@ -138,13 +138,14 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
     with get_connection() as conn:
         placeholders = ",".join("?" * len(race_keys))
         rows = conn.execute(
-            f"SELECT race_key, venue_id, cup_id, day_index, race_date, race_no"
+            f"SELECT race_key, venue_id, cup_id, day_index, race_date, race_no, start_at"
             f" FROM wt_races WHERE race_key IN ({placeholders})",
             race_keys,
         ).fetchall()
     race_info_map = {r["race_key"]: dict(r) for r in rows}
 
     scraper = WinticketScraper(request_interval=1.0)
+    now_unix = int(time.time())
 
     for cand in candidates:
         rk = cand.get("race_key")
@@ -154,6 +155,15 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
         if not ri:
             print(f"[write_candidates_wt] {rk}: wt_races にレース情報なし（スキップ）", flush=True)
             continue
+
+        # 発走15分前以降は notify_prerace_wt.py の15分前判定が正本。
+        # 締切後・確定後のオッズ（跳ね上がる）で再判定すると、見送り済み(miwokuri=True)の
+        # #CAND が「OK」に上書きされて一覧に有効推奨風に表示される（2026-07-08 広島1R/5R）。
+        try:
+            if ri.get("start_at") and now_unix >= int(ri["start_at"]) - 900:
+                continue
+        except (TypeError, ValueError):
+            pass
 
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")

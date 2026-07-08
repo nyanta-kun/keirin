@@ -403,11 +403,16 @@ def _main_inner(date, _db_url):
     # 事後のオッズや txt のランクで上書きしない。
     decisions: dict[str, dict] = {}
     _dec_path = Path(__file__).parent.parent / "data" / f"prerace_decisions_{target_date}.json"
-    if _dec_path.exists():
+    # 判定永続化の運用日かどうか（.bak しか残っていない場合も運用日とみなす）
+    decisions_mode = _dec_path.exists() or _dec_path.with_name(_dec_path.name + ".bak").exists()
+    for _cand_path in (_dec_path, _dec_path.with_name(_dec_path.name + ".bak")):
+        if not _cand_path.exists():
+            continue
         try:
-            decisions = json.loads(_dec_path.read_text(encoding="utf-8"))
+            decisions = json.loads(_cand_path.read_text(encoding="utf-8"))
+            break
         except Exception as _e:
-            print(f"[notify_results_wt] prerace_decisions 読み込み失敗: {_e}", flush=True)
+            print(f"[notify_results_wt] prerace_decisions 読み込み失敗 {_cand_path.name}: {_e}", flush=True)
     has_buy_decisions = any(d.get("decision") == "buy" for d in decisions.values())
 
     picks = _parse_picks_full(target_date)
@@ -552,8 +557,15 @@ def _main_inner(date, _db_url):
                                if _leg_odds.get(str(_t))]
                     if _buy_ov:
                         pg = round(min(_buy_ov), 2)
+            elif decisions_mode:
+                # 判定永続化の運用日なのに記録がないレースは購入扱いにしない＝見送り側に倒す。
+                # 記録消失時に旧フォールバック（SS無条件購入）が働くと、15分前判定で
+                # 見送ったレースの的中が「幻の購入」としてサマリー計上される
+                # （2026-07-08 広島4R で発生）。
+                is_gami_skip = True
+                print(f"[notify_results_wt] 判定記録なし {rk}: 見送り扱い（幻の購入防止）", flush=True)
             else:
-                # 判定記録なし（未チェックレース）: 従来のprerace_gamiフォールバック
+                # 判定永続化の導入前の過去日: 従来のprerace_gamiフォールバック
                 # SSはガミ目カット済み（定義上ガミ目なし）→ gami判定不適用。Sのみ対象。
                 is_gami_skip = (rank != "7PLUS_SS") and (pg is not None and pg < 7.0)
             mark = f"◎ ¥{pay:,}" if hit else "×"

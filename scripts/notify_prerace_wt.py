@@ -21,12 +21,15 @@ cron 設定（crontab -e に追加）:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import logging
+from contextlib import contextmanager
 from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 
@@ -69,6 +72,50 @@ def _now_unix() -> int:
     return int(time.time())
 
 
+# ── 状態ファイル共通ヘルパー ──────────────────────────────────────────────────
+# 毎分cronの並行実行で read-modify-write が交錯すると当日の全記録が消える
+# （2026-07-08 に prerace_decisions/notified が同時消失し、採点フォールバックが
+# 「幻の購入」を復活させる事故が発生）。flock 排他 + tmp→os.replace の
+# アトミック書き込み + .bak フォールバックで構造的に防ぐ。
+
+@contextmanager
+def _file_lock(p: Path):
+    lock_path = p.with_name(p.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _read_json_state(p: Path, default):
+    """本体 → .bak の順に読む。両方読めない場合のみ default を返す。"""
+    for cand in (p, p.with_name(p.name + ".bak")):
+        if cand.exists():
+            try:
+                return json.loads(cand.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.error("状態ファイル読み込み失敗 %s: %s", cand, e)
+    return default
+
+
+def _write_json_atomic(p: Path, obj) -> None:
+    """tmp に書いて os.replace。現行本体が正常JSONなら .bak に退避してから置換する。"""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    if p.exists():
+        try:
+            json.loads(p.read_text(encoding="utf-8"))
+            shutil.copy2(p, p.with_name(p.name + ".bak"))
+        except Exception:
+            # 破損した本体は .bak を汚さず forensic 用に退避
+            shutil.copy2(p, p.with_name(p.name + ".corrupt"))
+    os.replace(tmp, p)
+
+
 # ── 状態ファイル（通知済みレースを記録） ───────────────────────────────────────
 
 def _state_path(today: str) -> Path:
@@ -76,19 +123,15 @@ def _state_path(today: str) -> Path:
 
 
 def _load_notified(today: str) -> set[str]:
-    p = _state_path(today)
-    if p.exists():
-        try:
-            return set(json.loads(p.read_text(encoding="utf-8")))
-        except Exception:
-            return set()
-    return set()
+    return set(_read_json_state(_state_path(today), []))
 
 
 def _save_notified(today: str, notified: set[str]) -> None:
     p = _state_path(today)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(sorted(notified), ensure_ascii=False, indent=2), encoding="utf-8")
+    with _file_lock(p):
+        # 並行実行の追記を失わないよう保存時に現ファイルとマージする（追記専用集合）
+        merged = set(_read_json_state(p, [])) | set(notified)
+        _write_json_atomic(p, sorted(merged))
 
 
 # ── 発走前判定の永続化 ─────────────────────────────────────────────────────────
@@ -100,13 +143,7 @@ def _decisions_path(today: str) -> Path:
 
 
 def _load_decisions(today: str) -> dict:
-    p = _decisions_path(today)
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
+    return _read_json_state(_decisions_path(today), {})
 
 
 def _score_stats(pick: dict) -> dict:
@@ -143,12 +180,12 @@ def _score_stats(pick: dict) -> dict:
 
 
 def _save_decision(today: str, race_key: str, record: dict) -> None:
-    decisions = _load_decisions(today)
-    record["decided_at"] = _jst_now().strftime("%H:%M:%S")
-    decisions[race_key] = record
     p = _decisions_path(today)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(decisions, ensure_ascii=False, indent=2), encoding="utf-8")
+    with _file_lock(p):
+        decisions = _read_json_state(p, {})
+        record["decided_at"] = _jst_now().strftime("%H:%M:%S")
+        decisions[race_key] = record
+        _write_json_atomic(p, decisions)
 
 
 # ── picks の読み込み ─────────────────────────────────────────────────────────
