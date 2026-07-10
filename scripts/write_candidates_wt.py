@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 
-GAMI_THRESHOLD = 7.0
+GAMI_THRESHOLD = 7.0  # レース単位ガミ閾値（min全目。main.py / notify_prerace_wt.py と揃える）
 
 
 def _insert_candidates_sqlite(
@@ -211,14 +211,9 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
             time.sleep(0.5)
             continue
 
-        # SS判定: GAMI_THRESHOLD以上の目が1-3点の場合はSS固有gamiを使用。
-        # SS戦略は低オッズ目を切り捨て高オッズ目のみ買うため、
-        # 全目最安値ではなくSS固有目(>=閾値)の最安値をgamiとして記録する。
-        ss_odds = [o for o in valid_odds if o >= GAMI_THRESHOLD]
-        if 1 <= len(ss_odds) <= 3:
-            min_odds = min(ss_odds)  # SSピック: SS固有目の最安値（>= GAMI_THRESHOLD）
-        else:
-            min_odds = min(valid_odds)  # Sピック or gami判定不能: 全目の最安値
+        # レース単位判定（doc52・2026-07-10 SS/S置き換え）: min(全目) < 閾値 → 見送り初期値。
+        # 最終判定は発走15分前の notify_prerace_wt.py が行う（ここは朝時点の目安）。
+        min_odds = min(valid_odds)
         miwokuri = min_odds < GAMI_THRESHOLD
         _save_initial_gami(rk, ri["race_date"], min_odds, miwokuri)
         status = "⚠️見送り" if miwokuri else "✅OK"

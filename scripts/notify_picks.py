@@ -3,7 +3,7 @@
 wave-picks の結果を Discord へ通知する（7+車専用版）。
 daily_picks_wt.sh から呼び出す。
 
-朝の通知: 全候補レース（gap12≥0.10）をガミ判定付きで一覧表示 + 推奨ランク詳細 + 全指数PDF
+朝の通知: 全候補レース（gap12≥0.07）をガミ判定付きで一覧表示 + 推奨ランク詳細 + 全指数PDF
 夜の通知: 夜の部候補レース同様
 """
 import json
@@ -39,8 +39,9 @@ def _parse_7plus_ranked(text: str) -> dict[str, list[dict]]:
             continue
 
         # "  HH:MM  会場   NR  [N車]  3連複: A-B-C,D,E  (N点/M円)  [X.X倍]"
+        # Sランクは "3連単F: 1→2,3→全  (10点/1,000円)  [minX.X倍]" 形式（2026-07-10〜）
         m = re.match(
-            r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[(\d+)車\]\s+3連複:\s+(\S+)\s+\((\d+)点/(\d+)円\)(?:\s+\[(.+?)\])?",
+            r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[(\d+)車\]\s+(?:3連複|3連単F):\s+(\S+)\s+\((\d+)点/([\d,]+)円\)(?:\s+\[(.+?)\])?",
             line
         )
         if m:
@@ -160,6 +161,7 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150)
     plt.rcParams["axes.unicode_minus"] = False
 
     rank_colors = {
+        "7PLUS_R": "#FFD700", "7PLUS_ST": "#AED6F1", "7PLUS_STP": "#C5CAE9",
         "7PLUS_S": "#AED6F1",
         "SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1",
     }
@@ -275,7 +277,7 @@ def main():
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
 
     m_cost = re.search(r"推奨合計投資額:\s*([\d,]+)円", text) if text else None
-    total_cost = m_cost.group(1) if m_cost else f"{total * 300:,}"
+    total_cost = m_cost.group(1) if m_cost else "—"
 
     n_cands = len(cands)
 
@@ -297,16 +299,16 @@ def main():
 
     # ── ヘッダー送信 ──────────────────────────────────────────────────────────
     if total == 0:
-        gami_skip = n_cands  # 全候補がガミ不足 or 候補なし
+        gami_skip = n_cands  # 全候補が条件不成立 or 候補なし
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
-            f"推奨なし（ガミ不足）　候補{gami_skip}件（gap12≥0.10）"
+            f"推奨なし（SS/S条件不成立）　候補{gami_skip}件（gap12≥0.07）"
         )
     else:
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
             f"SS:{ss_n} / S:{s_n} = {total}件　投資:{total_cost}円\n"
-            f"候補{n_cands}件（gap12≥0.10）"
+            f"候補{n_cands}件（gap12≥0.07）"
         )
     send(header)
 
@@ -324,9 +326,9 @@ def main():
     if total > 0:
         sections = []
         if picks_by_rank.get("SS"):
-            sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "ガミ目カット後≤3目  HOLD ~268%"))
+            sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "全目min≥7倍+gap12≥0.10+gap23≥1pt  的中29%/ROI148%(2025)"))
         if picks_by_rank.get("S"):
-            sections.append(_fmt_rank_block("S",  picks_by_rank["S"],  "gami≥7倍+gap12≥0.10  HOLD ~268%"))
+            sections.append(_fmt_rank_block("S",  picks_by_rank["S"],  "三連単F 1位→2,3位→全  全目min≥10倍+gap12≥0.15"))
         for section in sections:
             msg = f"```\n{section}\n```"
             if len(msg) > 1900:

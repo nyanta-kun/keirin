@@ -33,6 +33,7 @@ from src.database import get_connection
 LOG_PATH = Path(__file__).parent.parent / "data" / "logs" / "prerace.log"
 PICKS_DIR = Path(__file__).parent.parent / "data" / "picks"
 DATA_DIR = Path(__file__).parent.parent / "data"
+# 過去日（判定永続化導入前=2026-07-08以前）の再現専用スクリプトのため、当時の運用閾値 7.0 を維持する。
 GAMI_THRESHOLD = 7.0
 
 _LINE_RE = re.compile(

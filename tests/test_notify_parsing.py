@@ -106,9 +106,9 @@ def fixture_picks_file():
 
 def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
     picks = nr._parse_picks_full(_FIXTURE_DATE)
-    # 7+車 Sランクを採点対象。slot は "7plus_s"。
-    assert ("京王閣", 3, "7plus_s") in picks
-    assert picks[("京王閣", 3, "7plus_s")][0] == "7PLUS_S"
+    # 7+車 Sランク（2026-07-10〜は三連単 7PLUS_ST）を採点対象。slot は "7plus_st"。
+    assert ("京王閣", 3, "7plus_st") in picks
+    assert picks[("京王閣", 3, "7plus_st")][0] == "7PLUS_ST"
     assert len(picks) == 1
 
 
@@ -128,7 +128,7 @@ _WIDE_FIXTURE = """\
 
 
 def test_parse_picks_full_wide_coexists_with_main():
-    """SS と S が別エントリとして並立し、廃止済みのAランクは無視される。"""
+    """新日付(2026-07-10〜)のSSランクは 7PLUS_R、Sは並立、廃止済みAランクは無視。"""
     path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_WIDE_DATE}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_WIDE_FIXTURE, encoding="utf-8")
@@ -136,12 +136,26 @@ def test_parse_picks_full_wide_coexists_with_main():
         picks = nr._parse_picks_full(_WIDE_DATE)
     finally:
         path.unlink(missing_ok=True)
-    assert ("京王閣", 3, "7plus_ss") in picks
-    assert ("京王閣", 5, "7plus_s") in picks
+    assert ("京王閣", 3, "7plus_r") in picks
+    assert ("京王閣", 5, "7plus_st") in picks
     assert ("京王閣", 7, "7plus_a") not in picks  # Aランク廃止 → 無視
+    assert picks[("京王閣", 3, "7plus_r")][0] == "7PLUS_R"
+    assert picks[("京王閣", 5, "7plus_st")][0] == "7PLUS_ST"
+    assert len(picks) == 2, "7plus_r と 7plus_st のみ2エントリ"
+
+
+def test_parse_picks_full_old_date_ss_is_legacy():
+    """旧日付(2026-07-10 より前)のSSランクは旧カット方式 7PLUS_SS として互換維持。"""
+    old_date = "2026-07-01"
+    path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{old_date}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_WIDE_FIXTURE.replace(_WIDE_DATE, old_date), encoding="utf-8")
+    try:
+        picks = nr._parse_picks_full(old_date)
+    finally:
+        path.unlink(missing_ok=True)
+    assert ("京王閣", 3, "7plus_ss") in picks
     assert picks[("京王閣", 3, "7plus_ss")][0] == "7PLUS_SS"
-    assert picks[("京王閣", 5, "7plus_s")][0] == "7PLUS_S"
-    assert len(picks) == 2, "7plus_ss と 7plus_s のみ2エントリ"
 
 
 # ── notify_results_wt.main: Bランクのみ(推奨0件)を「ファイル無し」と誤通知しない ──

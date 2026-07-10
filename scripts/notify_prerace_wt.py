@@ -11,12 +11,10 @@ cron 設定（crontab -e に追加）:
 通知ウィンドウ: start_at - 900秒 ≤ now < start_at - 840秒（1分間）
   競輪の購入締切は発走 5 分前 → 締切 10 分前 = 発走 15 分前（900秒前）に通知
 
-通知内容:
-  - 発走時刻・会場・レース番号・車数
-  - 推奨ランク（SS/S/A/7+）と買い目
-  - 現在の各組み合わせオッズ（三連複 or 三連単）
-  - 最安目オッズ → ガミ(≥5倍)の充足確認
-  - gap12 / ratio（朝時点の予想強度の参考値）
+通知内容（ランク体系 2026-07-10〜）:
+  - SS（三連複・レース単位 min(全目)≥7倍 ∧ gap12≥0.10 ∧ gap23≥1pt・全目購入）
+  - S/S+（三連単 1着固定F: 1位→2,3位→全・全目min≥10倍 ∧ gap12≥0.15・S+は200円/点増額）
+  - 発走時刻・会場・レース番号・車数・買い目・各目の現在オッズ・ガミ充足確認
 """
 
 from __future__ import annotations
@@ -48,20 +46,31 @@ _JST = timezone(timedelta(hours=9))
 NOTIFY_BEFORE_START_SEC = 15 * 60   # 15分前 = 締切（5分前）の10分前
 NOTIFY_WINDOW_SEC       = 70        # 通知ウィンドウ幅（cron の遅延を吸収）
 
-# ガミ足切り閾値
+# ガミ閾値（レース単位: min(全目) < この値 → レース見送り。doc52）
+# 2026-07-10 に買い目カット方式(SS/S)を廃止し doc48 のレース単位セマンティクスへ回帰。
+# main.py / write_candidates_wt.py の GAMI_THRESHOLD と揃えること。
 GAMI_THRESHOLD = 7.0
 
-# 三連単を通知に含めるランク
+# 三連単を通知に含めるランク（SS廃止済み・現在該当なし）
 TRIFECTA_RANKS = {"SS"}
 
-# 7+車 gap12閾値（Sランク境界）
+# 7+車 gap12閾値（SS=旧Rランク成立条件）
 SEVEN_PLUS_S_GAP12 = 0.10
-
-# 合成オッズ下限（SO < この値は通知しない）
-SYNTH_ODDS_MIN = 8.0
 
 # gap23 下限・%ポイント（2位-3位予測確率差 < この値は通知しない）
 GAP23_MIN = 1.0
+
+# ── Sランク（三連単 1着固定フォーメーション・doc52追記 2026-07-10）──
+# 買い目: 1着=指数1位固定 / 2着=指数2,3位 / 3着=全通り（2×(n-2)点）
+# S:  gap12>=0.15 ∧ 購入全目の三連単オッズ min>=10 → 100円/点
+# S+: さらに gap12>=0.25 ∧ gap34>=0.04 → 200円/点（増額）
+# 検証: 真OOSプール(2025-11〜12+2026-06) S=10.2R/日 的中19.5% ROI115% / S+帯 ROI150%
+ST_GAP12 = 0.15
+ST_GAMI = 10.0
+STP_GAP12 = 0.25
+STP_GAP34 = 0.04
+ST_STAKE = 100
+STP_STAKE = 200
 
 
 def _jst_now() -> datetime:
@@ -281,10 +290,18 @@ def _build_odds_lookup(odds_data: dict, bet_type: str) -> dict:
 # ── 候補レースのリアルタイムランク判定 ─────────────────────────────────────────
 
 def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list, dict]:
-    """7PLUS_CANDレースの現在オッズでSS/S/A を判定する。
+    """7PLUS_CANDレースの現在オッズで R を判定する（doc52・2026-07-10 SS/S置き換え）。
+
+    Rランク = レース単位セマンティクス:
+      min(全目オッズ) >= GAMI_THRESHOLD ∧ gap12 >= 0.10 ∧ gap23 >= 1pt → 全目購入。
+    買い目カット・SOフィルタは廃止（SOは全目合成だと構造的に8を超えないため）。
+    的中条件は「軸2車が3着内」で、的中率はオッズに依存しない（モデル起因）。
+    検証: 2025通年 的中率29.3%・ROI147.6%（真OOS 11月120%/12月140%/2026-06 299%）
+
     returns (live_rank, valid_thirds, combo_odds)
-      - "7PLUS_SS" / "7PLUS_S": 条件成立
-      - "なし": 購入条件不成立（全目ガミ or S/A gami全不通過 and SS残り0 or >3）
+      - "7PLUS_R": 条件成立（全目購入）
+      - "なし": 購入条件不成立
+      - "不明": オッズ取得失敗
       combo_odds は {third: 現在オッズ}（判定に使った値・記録用）
     """
     p1 = pick.get("pivot1")
@@ -305,30 +322,74 @@ def _determine_live_rank(pick: dict, odds_data: dict | None) -> tuple[str, list,
         if ov and float(ov) > 0:
             combo_odds[t] = float(ov)
 
-    valid_ge5 = [t for t in thirds if combo_odds.get(t, 0.0) >= GAMI_THRESHOLD]
-
-    if not valid_ge5:
-        return "なし", [], combo_odds  # 全目ガミ → 購入不可
-
-    # SOフィルタ: gami通過目の合成オッズ < SYNTH_ODDS_MIN なら不成立
-    _valid_ov = [combo_odds[t] for t in valid_ge5]
-    _synth = 1.0 / sum(1.0 / ov for ov in _valid_ov)
-    if _synth < SYNTH_ODDS_MIN:
+    if not combo_odds:
         return "なし", [], combo_odds
-
-    # gap23フィルタ: モデル予測確率 2位-3位差 < GAP23_MIN なら不成立
+    if min(combo_odds.values()) < GAMI_THRESHOLD:
+        return "なし", [], combo_odds
+    if gap12 < SEVEN_PLUS_S_GAP12:
+        return "なし", [], combo_odds
     _gap23 = _calc_gap23(pick)
     if _gap23 is not None and _gap23 < GAP23_MIN:
         return "なし", [], combo_odds
 
-    # SSランク: ガミカット後の有効目が1〜3目
-    if len(valid_ge5) <= 3:
-        return "7PLUS_SS", valid_ge5, combo_odds
+    return "7PLUS_R", [t for t in thirds if t in combo_odds], combo_odds
 
-    # Sランク: 有効目が4目以上（ガミ目は除外して買う）。Aランク廃止（2026-06-28）
-    if gap12 < SEVEN_PLUS_S_GAP12:
-        return "なし", [], combo_odds
-    return "7PLUS_S", valid_ge5, combo_odds
+
+def _calc_gap34(pick: dict) -> float | None:
+    """指数3位と4位の予測確率差（0-1スケール）。4人未満は None。"""
+    riders = sorted(pick.get("riders", []), key=lambda r: r.get("ai_rank", 99))
+    if len(riders) < 4:
+        return None
+    try:
+        return (riders[2]["pred_prob_pct"] - riders[3]["pred_prob_pct"]) / 100.0
+    except (KeyError, TypeError):
+        return None
+
+
+def _determine_st_rank(pick: dict, odds_data: dict | None) -> tuple[str, list, dict, int]:
+    """三連単Sランク判定（1着=指数1位固定 / 2着=指数2,3位 / 3着=全通り）。
+
+    returns (rank, combos, leg_odds, stake_per_pt)
+      - rank: "7PLUS_ST"(S) / "7PLUS_STP"(S+増額) / "なし" / "不明"
+      - combos: [(1着, 2着, 3着), ...] 購入目
+      - leg_odds: {"a-b-c": odds} 判定に使った三連単オッズ（記録用）
+    """
+    p1 = pick.get("pivot1")
+    p2 = pick.get("pivot2")
+    thirds = pick.get("thirds", [])
+    gap12 = pick.get("gap12", 0.0)
+
+    if gap12 < ST_GAP12 or len(thirds) < 1:
+        return "なし", [], {}, 0
+    if odds_data is None:
+        return "不明", [], {}, 0
+
+    r3 = thirds[0]  # 指数3位（thirds は指数順）
+    frames = [int(p1), int(p2)] + [int(t) for t in thirds]
+
+    lookup = _build_odds_lookup(odds_data, "trifecta")
+    combos: list[tuple[int, int, int]] = []
+    leg_odds: dict[str, float] = {}
+    for s in (int(p2), int(r3)):
+        for t in frames:
+            if t in (int(p1), s):
+                continue
+            key = (int(p1), s, t)
+            ov = lookup.get(key)
+            if ov and float(ov) > 0:
+                combos.append(key)
+                leg_odds[f"{key[0]}-{key[1]}-{key[2]}"] = float(ov)
+
+    if not combos:
+        return "不明", [], {}, 0
+    # レース単位ガミ条件: 購入全目の三連単オッズ min >= ST_GAMI
+    if min(leg_odds.values()) < ST_GAMI:
+        return "なし", [], leg_odds, 0
+
+    gap34 = _calc_gap34(pick)
+    if gap12 >= STP_GAP12 and gap34 is not None and gap34 >= STP_GAP34:
+        return "7PLUS_STP", combos, leg_odds, STP_STAKE
+    return "7PLUS_ST", combos, leg_odds, ST_STAKE
 
 
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
@@ -360,8 +421,8 @@ def _save_picks_history_state(
 ) -> None:
     """picks_history の miwokuri / rank / 買い目 を即時更新する（SQLite + VPS PG）。
 
-    ガミ落ち確定（miwokuri=True）とランク昇格（new_rank='7PLUS_SS'/'7PLUS_S'）を
-    当日中にkisekiへ反映させるために呼ぶ。new_pred（ガミ目カット後の買い目）を
+    ガミ落ち確定（miwokuri=True）とランク昇格（new_rank='7PLUS_R'）を
+    当日中にkisekiへ反映させるために呼ぶ。new_pred（購入買い目）を
     渡すと pred_combo / n_combos も更新し、Webページに購入買い目が正しく出る。
     翌朝の notify_results_wt.py が prerace_decisions_*.json に基づき最終確定する。
     """
@@ -413,6 +474,80 @@ def _save_picks_history_state(
                         )
         except Exception as e:
             logger.warning("picks_history VPS 更新失敗 %s: %s", race_key, e)
+
+
+def _st_combo_str(pick: dict) -> str:
+    """三連単フォーメーションの表示文字列（例: 3連単F: 1→2,3→全）。"""
+    p1 = pick.get("pivot1")
+    p2 = pick.get("pivot2")
+    thirds = pick.get("thirds", [])
+    r3 = thirds[0] if thirds else "?"
+    return f"3連単F: {p1}→{p2},{r3}→全"
+
+
+def _insert_st_pick(race_key: str, race_date: str, st_rank: str,
+                    pick: dict, combos: list, stake: int) -> None:
+    """三連単Sランクの購入行 {base}#7ST を picks_history に即時反映する（SQLite + VPS）。
+
+    翌朝の notify_results_wt.py が decisions（{rk}#ST）に基づき最終確定する。
+    """
+    store_key = race_key + "#7ST"
+    combo_str = _st_combo_str(pick)
+    n_pts = len(combos)
+    bet = n_pts * stake
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, st_rank, combo_str, n_pts, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("ST pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, st_rank, combo_str, n_pts, bet),
+                    )
+        except Exception as e:
+            logger.warning("ST pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_st_message(pick: dict, race_info: dict, st_rank: str,
+                      combos: list, leg_odds: dict, stake: int) -> str:
+    """三連単Sランクの15分前通知メッセージ。"""
+    venue = pick.get("venue_name", "?")
+    race_no = pick.get("race_no") or race_info.get("race_no", "?")
+    start = pick.get("start_time", "--:--")
+    n = race_info.get("n_entries", pick.get("n_riders", "?"))
+    gap12 = pick.get("gap12", 0.0)
+    n_pts = len(combos)
+    investment = n_pts * stake
+    min_odds = min(leg_odds.values()) if leg_odds else 0.0
+    is_plus = st_rank == "7PLUS_STP"
+    disp = "7+ S+" if is_plus else "7+ S"
+    icon = "🚲💎" if is_plus else "🚲🔷"
+    plus_note = f"  ※増額 {stake}円/点（gap12≥{STP_GAP12:.2f}∧gap34≥{STP_GAP34:.2f}）\n" if is_plus else ""
+    return (
+        f"{icon} **[{disp}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
+        f"  {_st_combo_str(pick)}（{n_pts}点 / {investment:,}円）\n"
+        f"  **全目min {min_odds:.1f}倍**  gap12={gap12:.3f}\n"
+        f"{plus_note}"
+        f"  的中条件: 1着=指数1位 ∧ 2着=指数2,3位（3着は全通り）"
+    )
 
 
 def _save_prerace_gami(race_key: str, min_odds: float) -> None:
@@ -535,11 +670,14 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
     p2       = pick.get("pivot2", pick.get("pred2"))
     thirds   = pick.get("thirds", [])
 
-    # ランク表示
+    # ランク表示（7PLUS_R = 新SS。内部rankは旧SSとの実績分離のため 7PLUS_R のまま）
     rank_icon = {
-        "7PLUS_SS": "🚲⭐", "7PLUS_S": "🚲🔵",
+        "7PLUS_SS": "🚲⭐", "7PLUS_S": "🚲🔵", "7PLUS_R": "🚲⭐",
         "7PLUS": "🚲", "SS": "⭐", "S": "🔵", "A": "🟢",
     }.get(rank, "▪️")
+    rank_disp = {"7PLUS_R": "7+ SS", "7PLUS_SS": "7+ 旧SS", "7PLUS_S": "7+ 旧S"}.get(rank, rank)
+    # ガミ表示閾値（レース単位: min全目 >= GAMI_THRESHOLD）
+    gami_thr = GAMI_THRESHOLD
     is_trifecta = rank in TRIFECTA_RANKS
 
     # 買い目文字列（全目）
@@ -576,7 +714,7 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
             if ov is None:
                 lines.append(f"    {p1}{sep}{p2}{sep}{t}:  取得不可")
             else:
-                gami_ng = " ⚠️" if ov < GAMI_THRESHOLD else ""
+                gami_ng = " ⚠️" if ov < gami_thr else ""
                 lines.append(f"    {p1}{sep}{p2}{sep}{t}:  {ov:.1f}倍{gami_ng}")
 
         valid_odds = [ov for _, ov in odds_per_bet if ov is not None]
@@ -585,19 +723,12 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
             # 合成オッズ = 1 / Σ(1/odds_i)  ← 全有効目の逆数和の逆数
             synth_odds = 1.0 / sum(1.0 / ov for ov in valid_odds)
             investment = n_pts * 100
-            if min_odds >= GAMI_THRESHOLD:
-                gami_mark = f"✅ ガミOK（全{n_pts}目 最安 {min_odds:.1f}倍）"
+            if min_odds >= gami_thr:
+                gami_mark = f"✅ ガミOK（全{n_pts}目 最安 {min_odds:.1f}倍 ≥ {gami_thr:.0f}倍）"
             else:
-                if is_7plus:
-                    surviving = [t for t, ov in odds_per_bet if ov is not None and ov >= GAMI_THRESHOLD]
-                    if surviving:
-                        gami_mark = (f"⚠️ ガミ注意（最安 {min_odds:.1f}倍）"
-                                     f" → 5倍以上は{len(surviving)}目: {','.join(str(t) for t in surviving)}")
-                    else:
-                        gami_mark = f"❌ 全目ガミ（最安 {min_odds:.1f}倍）— 購入非推奨"
-                        synth_odds = 0.0
-                else:
-                    gami_mark = f"⚠️ ガミ注意（最安 {min_odds:.1f}倍 < {GAMI_THRESHOLD}倍）"
+                # レース単位セマンティクス（doc52）: min<閾値はレースごと見送り対象
+                gami_mark = f"⚠️ ガミ条件割れ（最安 {min_odds:.1f}倍 < {gami_thr:.0f}倍）— レース見送り対象"
+                synth_odds = 0.0
         else:
             synth_odds = 0.0
             investment = n_pts * 100
@@ -616,11 +747,14 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
         odds_block = "\n".join(lines)
 
     synth_str = f"{synth_odds:.2f}倍" if synth_odds > 0 else "—"
+    _g23 = _calc_gap23(pick)
+    g23_str = f"{_g23:.1f}pt" if _g23 is not None else "—"
 
     msg = (
-        f"{rank_icon} **[{rank}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
+        f"{rank_icon} **[{rank_disp}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
         f"  {bet_label}({n_pts}点 / {investment}円): `{combo_str}`\n"
-        f"  **合成オッズ: {synth_str}**  gap12={gap12:.3f}\n"
+        f"  **条件: gap12={gap12:.3f}(≥{SEVEN_PLUS_S_GAP12:.2f}) gap23={g23_str}(≥{GAP23_MIN:.0f}pt)**"
+        f"  参考SO:{synth_str}\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
         f"{odds_block}\n"
@@ -708,8 +842,38 @@ def main():
         # 候補レース（7PLUS_CAND）は現在オッズで SS/S/A を再判定
         if rank == "7PLUS_CAND":
             live_rank, live_thirds, live_odds = _determine_live_rank(pick, odds_data)
+            if live_rank == "不明":
+                # オッズ取得失敗 → 再試行の余地を残すため newly_done に追加しない
+                print(f"[prerace] {rk} 候補 → オッズ取得不可（次回再試行）", flush=True)
+                time.sleep(0.3)
+                continue
+
+            # ── 三連単Sランク判定（SS=三連複とは独立・同一レース併存購入可）──
+            st_rank, st_combos, st_leg_odds, st_stake = _determine_st_rank(pick, odds_data)
+            st_bought = st_rank in ("7PLUS_ST", "7PLUS_STP")
+            _r3 = int(pick["thirds"][0]) if pick.get("thirds") else None
+            st_record = {
+                "decision": "buy" if st_bought else "skip",
+                "pivot1": pick.get("pivot1"),
+                "seconds": ([int(pick.get("pivot2")), _r3] if _r3 is not None else []),
+                "stake": st_stake if st_bought else 0,
+                "st_min_odds": round(min(st_leg_odds.values()), 2) if st_leg_odds else None,
+            }
+            if st_bought:
+                st_record["rank"] = st_rank
+                st_record["combos"] = [f"{a}-{b}-{c}" for a, b, c in st_combos]
+                st_record["leg_odds"] = st_leg_odds
+            _save_decision(today, f"{rk}#ST", st_record)
+
+            def _emit_st_buy():
+                _insert_st_pick(rk, ri["race_date"], st_rank, pick, st_combos, st_stake)
+                messages.append((rk, _build_st_message(pick, ri, st_rank, st_combos, st_leg_odds, st_stake)))
+                _label = "S+" if st_rank == "7PLUS_STP" else "S"
+                print(f"[prerace] {rk} 候補 → 三連単{_label} ({len(st_combos)}点×{st_stake}円)", flush=True)
+
             if live_rank == "なし":
-                # gami条件不成立 → kisekiに見送りを即時反映 + 判定を確定記録
+                # SS(三連複)不成立 → 見送りを即時反映 + 判定を確定記録
+                # （ST購入がある場合はこの後の _insert_st_pick が #7ST 行を miwokuri=False で入れ直す）
                 _save_picks_history_state(rk, True)
                 _save_decision(today, rk, {
                     "decision": "skip",
@@ -718,13 +882,12 @@ def main():
                     "leg_odds": {str(t): o for t, o in live_odds.items()},
                     **_score_stats(pick),
                 })
-                print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
+                if st_bought:
+                    _emit_st_buy()
+                    print(f"[prerace] {rk} 候補 → 三連複は条件不成立（三連単{st_rank}のみ）", flush=True)
+                else:
+                    print(f"[prerace] {rk} 候補 → live判定: 条件不成立（通知なし）", flush=True)
                 newly_done.add(rk)
-                time.sleep(0.3)
-                continue
-            if live_rank == "不明":
-                # オッズ取得失敗 → 再試行の余地を残すため newly_done に追加しない
-                print(f"[prerace] {rk} 候補 → オッズ取得不可（次回再試行）", flush=True)
                 time.sleep(0.3)
                 continue
             # 判定成立: ランクと買い目を上書き
@@ -736,14 +899,11 @@ def main():
             pick_with_raceno["combo_str"] = f"{pivot1}-{pivot2}-{','.join(str(t) for t in live_thirds)}"
             pick_with_raceno["n_points"] = n_pts
             pick_with_raceno["stake"] = n_pts * 100
-            # prerace_gami を購入目（ガミカット後・全目 >= GAMI_THRESHOLD）の最安値で上書き。
-            # 上記 _save_prerace_gami(rk, min_odds) は全thirds最安値を使っており、
-            # カット済み低オッズ目が含まれると prerace_gami < 7.0 のまま残り
-            # notify_results_wt.py / kiseki 側でガミ見送り扱いに誤記される（SS/S共通）。
+            # prerace_gami を購入目の最安値で上書き（R は全目購入なので全目 min と一致）。
             _buy_leg_odds = [live_odds[t] for t in live_thirds if t in live_odds]
             if _buy_leg_odds:
                 _save_prerace_gami(rk, min(_buy_leg_odds))
-            # ランク確定をkisekiに即時反映（SS/Sとも・カット後の買い目も更新）
+            # ランク確定をkisekiに即時反映（買い目も更新）
             _save_picks_history_state(
                 rk, False, live_rank,
                 new_pred=(pick_with_raceno["combo_str"], n_pts),
@@ -758,10 +918,12 @@ def main():
                 "all_min_odds": min_odds,
                 **_score_stats(pick),
             })
+            if st_bought:
+                _emit_st_buy()
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
-            # 非候補（朝ガミ通過済み）: 直前でガミ落ちなら見送りを即時反映
-            # SSはガミ目カット済みのため gami判定を適用しない（全目最安値でmiwokuri=Trueにしない）
+            # 非候補（朝ガミ通過済み・detail JSONフォールバック時のみ）: 直前でガミ落ちなら見送りを即時反映
+            # SS（旧カット方式・過去日互換）はガミ目カット済みのため gami判定を適用しない
             if rank != "7PLUS_SS" and min_odds is not None and min_odds < GAMI_THRESHOLD:
                 _save_picks_history_state(rk, True)
                 _save_decision(today, rk, {
