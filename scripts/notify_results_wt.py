@@ -229,7 +229,7 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
         # write_candidates_wt.py が SS 追跡用に gap12>=0.07 を #CAND 登録するため、
         # ここでスキップすると未購入のまま miwokuri=FALSE が残り、kiseki 一覧で
         # 推奨のように表示される（2026-07-08 大垣5R/取手6R で発生）。
-        rank = "7PLUS_S"
+        rank = "7PLUS_CAND"
         p1 = cand.get("pivot1")
         p2 = cand.get("pivot2")
         thirds = cand.get("thirds", [])
@@ -674,7 +674,7 @@ def _main_inner(date, _db_url):
             mark = f"◎ ¥{pay:,}" if hit else "×"
             if is_gami_skip:
                 mark += "（見送り）"
-            rank_label = {"7PLUS_SS": "旧SS", "7PLUS_R": "7SS"}.get(rank, "7S")
+            rank_label = {"7PLUS_SS": "7SS", "7PLUS_R": "7SS"}.get(rank, "7S")
             row_str = f"[{rank_label}] {venue} {race_no}R {tstr}  予:{pred}  実:{actual}  {mark}"
             if rank == "7PLUS_SS":
                 if not is_gami_skip:
@@ -756,8 +756,8 @@ def _main_inner(date, _db_url):
                           st_b.get("7PLUS_ST", 0), st_r.get("7PLUS_ST", 0), st_h.get("7PLUS_ST", 0))
     stp_line = _rank_line("S+(3連単増額)", st_n.get("7PLUS_STP", 0),
                           st_b.get("7PLUS_STP", 0), st_r.get("7PLUS_STP", 0), st_h.get("7PLUS_STP", 0))
-    ss_line = _rank_line("旧SS", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 旧カット方式（過去日互換）
-    s_line  = _rank_line("旧S",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
+    ss_line = _rank_line("SS*", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 廃止済み旧方式（過去日再採点時のみ）
+    s_line  = _rank_line("S*",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
     for _l in (r_line, stl_line, stp_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)

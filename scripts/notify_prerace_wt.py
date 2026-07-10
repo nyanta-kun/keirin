@@ -675,7 +675,7 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
         "7PLUS_SS": "🚲⭐", "7PLUS_S": "🚲🔵", "7PLUS_R": "🚲⭐",
         "7PLUS": "🚲", "SS": "⭐", "S": "🔵", "A": "🟢",
     }.get(rank, "▪️")
-    rank_disp = {"7PLUS_R": "7+ SS", "7PLUS_SS": "7+ 旧SS", "7PLUS_S": "7+ 旧S"}.get(rank, rank)
+    rank_disp = {"7PLUS_R": "7+ SS", "7PLUS_SS": "7+ SS", "7PLUS_S": "7+ S"}.get(rank, rank)
     # ガミ表示閾値（レース単位: min全目 >= GAMI_THRESHOLD）
     gami_thr = GAMI_THRESHOLD
     is_trifecta = rank in TRIFECTA_RANKS
