@@ -82,6 +82,8 @@ def main() -> None:
         st_pay = int(st_combos[r["order"]] * st_stake) // 10 * 10 if st_hit else 0
 
         gap23_pt = round(r["gap23_pt"], 2)
+        gap12_v = round(r["gap12"], 4)
+        gap34_v = round(r["gap34"], 4)
         pg = round(gami, 2) if gami is not None else None
 
         if ss_buy:
@@ -90,7 +92,7 @@ def main() -> None:
                 "pred_combo": f"{p1}-{p2}-{','.join(str(t) for t in legs)}",
                 "n_combos": len(legs), "hit": int(ss_hit), "payout": ss_pay,
                 "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": len(legs) * 100,
-                "miwokuri": False, "prerace_gami": pg, "gap23": gap23_pt,
+                "miwokuri": False, "prerace_gami": pg, "gap23": gap23_pt, "gap12": gap12_v, "gap34": gap34_v,
             })
             n_ss += 1
         if st_buy:
@@ -99,7 +101,7 @@ def main() -> None:
                 "pred_combo": f"3連単F: {p1}→{p2},{r3}→全",
                 "n_combos": len(st_combos), "hit": int(st_hit), "payout": st_pay,
                 "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": len(st_combos) * st_stake,
-                "miwokuri": False, "prerace_gami": None, "gap23": gap23_pt,
+                "miwokuri": False, "prerace_gami": None, "gap23": gap23_pt, "gap12": gap12_v, "gap34": gap34_v,
             })
             if st_rank == "7PLUS_STP":
                 n_stp += 1
@@ -113,7 +115,7 @@ def main() -> None:
                 "pred_combo": f"{p1}-{p2}-{','.join(str(t) for t in thirds)}",
                 "n_combos": len(thirds), "hit": int(mw_hit), "payout": 0,
                 "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": 0,
-                "miwokuri": True, "prerace_gami": pg, "gap23": gap23_pt,
+                "miwokuri": True, "prerace_gami": pg, "gap23": gap23_pt, "gap12": gap12_v, "gap34": gap34_v,
             })
             n_mw += 1
 

@@ -259,11 +259,21 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
 
         try:
             _tri_pay_val = pm.get(rk, {}).get(("trifecta", mw_actual), 0) if mw_actual else 0
+            _g12 = cand.get("gap12")
+            _g34 = None
+            _riders_mw = sorted(cand.get("riders", []), key=lambda r: r.get("ai_rank", 99))
+            if len(_riders_mw) >= 4:
+                try:
+                    _g34 = (_riders_mw[2]["pred_prob_pct"] - _riders_mw[3]["pred_prob_pct"]) / 100.0
+                except (KeyError, TypeError):
+                    _g34 = None
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,?,0,?,?,0,'wt',TRUE)",
-                (target_date, store_key, rank, pred, n_combos, hit_val, trio_pay_val, _tri_pay_val),
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,gap12,gap34) "
+                "VALUES (?,?,?,?,?,?,0,?,?,0,'wt',TRUE,?,?)",
+                (target_date, store_key, rank, pred, n_combos, hit_val, trio_pay_val, _tri_pay_val,
+                 round(_g12, 4) if _g12 is not None else None,
+                 round(_g34, 4) if _g34 is not None else None),
             )
             count += 1
         except Exception as e:
@@ -450,6 +460,10 @@ def _main_inner(date, _db_url):
             conn.execute("ALTER TABLE picks_history ADD COLUMN trio_payout INTEGER NOT NULL DEFAULT 0")
         if "trifecta_payout" not in cols:
             conn.execute("ALTER TABLE picks_history ADD COLUMN trifecta_payout INTEGER NOT NULL DEFAULT 0")
+        if "gap12" not in cols:
+            conn.execute("ALTER TABLE picks_history ADD COLUMN gap12 REAL")
+        if "gap34" not in cols:
+            conn.execute("ALTER TABLE picks_history ADD COLUMN gap34 REAL")
         name2code = {n: c for c, n in conn.execute("SELECT venue_code, name FROM venue_info").fetchall()}
         start_map = dict(conn.execute(
             "SELECT race_key, start_at FROM wt_races WHERE race_date=?", (target_date,)).fetchall())
@@ -498,7 +512,9 @@ def _main_inner(date, _db_url):
             picks[_pk] = (_dec.get("rank", "7PLUS_ST"), "", "")
 
     # miwokuri採点用に candidates.json のレース分も先読みする
+    # （gap12/gap34 もここから取得して picks_history に永続化する）
     _cand_keys_extra: set[str] = set()
+    gap_map: dict[str, tuple[float | None, float | None]] = {}  # rk -> (gap12, gap34)
     _picks_dir = Path(__file__).parent.parent / "data" / "picks"
     for _fname in (f"wave_picks_wt_{target_date}_candidates.json", f"wave_picks_wt_{target_date}_night_candidates.json"):
         _p = _picks_dir / _fname
@@ -508,6 +524,16 @@ def _main_inner(date, _db_url):
                     _rk = _cand.get("race_key")
                     if _rk:
                         _cand_keys_extra.add(_rk)
+                        _g12 = _cand.get("gap12")
+                        _g34 = None
+                        _riders = sorted(_cand.get("riders", []), key=lambda r: r.get("ai_rank", 99))
+                        if len(_riders) >= 4:
+                            try:
+                                _g34 = (_riders[2]["pred_prob_pct"] - _riders[3]["pred_prob_pct"]) / 100.0
+                            except (KeyError, TypeError):
+                                _g34 = None
+                        gap_map[_rk] = (round(_g12, 4) if _g12 is not None else None,
+                                        round(_g34, 4) if _g34 is not None else None)
             except Exception:
                 pass
     keys = list({f"{dc}_{name2code[v]}_{int(rn):02d}" for (v, rn, _s) in picks if v in name2code} | _cand_keys_extra)
@@ -600,7 +626,8 @@ def _main_inner(date, _db_url):
                     st_r[st_rank_v] = st_r.get(st_rank_v, 0) + st_pay
                     st_h[st_rank_v] = st_h.get(st_rank_v, 0) + 1
                 history.append((target_date, f"{rk}#7ST", st_rank_v, st_pred, len(live_combos),
-                                int(st_hit), st_pay, st_trio_pay, st_trifecta_pay, st_bet, False, None))
+                                int(st_hit), st_pay, st_trio_pay, st_trifecta_pay, st_bet, False, None,
+                                *gap_map.get(rk, (None, None))))
                 continue
 
             # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
@@ -703,9 +730,9 @@ def _main_inner(date, _db_url):
                 results_7plus_s.append(row_str)
             # prerace ガミ条件落ち → 見送り（bet/pay=0, miwokuri=True）として記録
             if is_gami_skip:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, trifecta_pay, 0, True, pg))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, trifecta_pay, 0, True, pg, *gap_map.get(rk, (None, None))))
             else:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, trifecta_pay, bet, False, pg))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, trifecta_pay, bet, False, pg, *gap_map.get(rk, (None, None))))
 
         if history:
             # 採点済みレースのベースキー単位で選択削除する。
@@ -719,8 +746,8 @@ def _main_inner(date, _db_url):
                 )
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,prerace_gami) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?)", history)
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,prerace_gami,gap12,gap34) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?,?,?)", history)
 
         purchased_base_keys = {h[1].split("#")[0] for h in history}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)

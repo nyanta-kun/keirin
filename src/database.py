@@ -458,6 +458,11 @@ def migrate_db():
             conn.execute("ALTER TABLE picks_history ADD COLUMN trifecta_payout INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already exists
+        for _col in ("gap12 REAL", "gap34 REAL"):
+            try:
+                conn.execute(f"ALTER TABLE picks_history ADD COLUMN {_col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(race_date)"
         )
