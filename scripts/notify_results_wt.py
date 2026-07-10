@@ -451,13 +451,16 @@ def _main_inner(date, _db_url):
 
     # 発走前判定で購入となったが txt に載っていないレースを picks に注入する。
     # （gap12∈[0.07,0.10) 候補の SS 昇格などは朝の txt に含まれず、従来は採点漏れしていた）
+    # ガードは「同一スロットが未登録か」で判定する。ベースキー単位だと、txt に別スロット
+    # （例: 旧txtのS section）で載っているレースの SS 買いが注入されず採点漏れする
+    # （2026-07-10 移行日の伊東5R で発生）。decisions が正本のため同一スロットは上書きする。
     code2name = {c: n for n, c in name2code.items()}
-    _txt_bases = {f"{dc}_{name2code[v]}_{int(rn):02d}"
-                  for (v, rn, _s) in picks if v in name2code}
     for _rk, _dec in decisions.items():
+        if "#" in _rk:
+            continue  # {rk}#ST は下の三連単ブロックで処理
         if _dec.get("decision") != "buy" or not _dec.get("thirds"):
             continue
-        if not _rk.startswith(dc) or _rk in _txt_bases:
+        if not _rk.startswith(dc):
             continue
         try:
             _, _code, _rno = _rk.split("_")
