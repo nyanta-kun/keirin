@@ -43,6 +43,8 @@ def main() -> None:
         p1, p2, r3 = r["p1"], r["p2"], r["r3"]
         thirds = [t for t in r["frames"][2:]]
         trio_top3_pay = int(r["trio"].get(r["top3"], 0) * 100) // 10 * 10 if r["top3"] in r["trio"] else 0
+        trifecta_top3_pay = (int(r["tri"].get(r["order"], 0) * 100) // 10 * 10
+                             if r["order"] in r["tri"] else 0)
 
         # ── SS 判定（レース単位 min全目>=7 ∧ gap12>=0.10 ∧ gap23>=1pt）──
         legs = {t: r["trio"].get(frozenset({p1, p2, t})) for t in thirds}
@@ -87,7 +89,7 @@ def main() -> None:
                 "race_date": race_date, "race_key": f"{rk}#7R", "rank": "7PLUS_R",
                 "pred_combo": f"{p1}-{p2}-{','.join(str(t) for t in legs)}",
                 "n_combos": len(legs), "hit": int(ss_hit), "payout": ss_pay,
-                "trio_payout": trio_top3_pay, "bet_amount": len(legs) * 100,
+                "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": len(legs) * 100,
                 "miwokuri": False, "prerace_gami": pg, "gap23": gap23_pt,
             })
             n_ss += 1
@@ -96,8 +98,8 @@ def main() -> None:
                 "race_date": race_date, "race_key": f"{rk}#7ST", "rank": st_rank,
                 "pred_combo": f"3連単F: {p1}→{p2},{r3}→全",
                 "n_combos": len(st_combos), "hit": int(st_hit), "payout": st_pay,
-                "trio_payout": trio_top3_pay, "bet_amount": len(st_combos) * st_stake,
-                "miwokuri": False, "prerace_gami": pg, "gap23": gap23_pt,
+                "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": len(st_combos) * st_stake,
+                "miwokuri": False, "prerace_gami": None, "gap23": gap23_pt,
             })
             if st_rank == "7PLUS_STP":
                 n_stp += 1
@@ -110,7 +112,7 @@ def main() -> None:
                 "race_date": race_date, "race_key": f"{rk}#CAND", "rank": "7PLUS_CAND",
                 "pred_combo": f"{p1}-{p2}-{','.join(str(t) for t in thirds)}",
                 "n_combos": len(thirds), "hit": int(mw_hit), "payout": 0,
-                "trio_payout": trio_top3_pay, "bet_amount": 0,
+                "trio_payout": trio_top3_pay, "trifecta_payout": trifecta_top3_pay, "bet_amount": 0,
                 "miwokuri": True, "prerace_gami": pg, "gap23": gap23_pt,
             })
             n_mw += 1

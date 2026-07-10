@@ -239,6 +239,7 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
 
         # 三連複採点（finish_order が揃っていれば採点）
         hit_val, trio_pay_val = 0, 0
+        mw_actual = None  # 実着順 (1着,2着,3着) — trifecta_payout 記録用
         if p1 is not None and p2 is not None and thirds:
             rows = conn.execute(
                 "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
@@ -246,6 +247,7 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
             ).fetchall()
             order_list = [int(r[0]) for r in rows]
             if len(order_list) >= 3:
+                mw_actual = tuple(order_list[:3])
                 top3_cand = frozenset(order_list[:3])
                 for t in thirds:
                     if frozenset((p1, p2, t)) == top3_cand:
@@ -256,11 +258,12 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
                     trio_pay_val = pm.get(rk, {}).get(("trio", top3_cand), 0)
 
         try:
+            _tri_pay_val = pm.get(rk, {}).get(("trifecta", mw_actual), 0) if mw_actual else 0
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,?,0,?,0,'wt',TRUE)",
-                (target_date, store_key, rank, pred, n_combos, hit_val, trio_pay_val),
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,?,0,?,?,0,'wt',TRUE)",
+                (target_date, store_key, rank, pred, n_combos, hit_val, trio_pay_val, _tri_pay_val),
             )
             count += 1
         except Exception as e:
@@ -445,6 +448,8 @@ def _main_inner(date, _db_url):
             conn.execute("ALTER TABLE picks_history ADD COLUMN route TEXT DEFAULT 'ks'")
         if "trio_payout" not in cols:
             conn.execute("ALTER TABLE picks_history ADD COLUMN trio_payout INTEGER NOT NULL DEFAULT 0")
+        if "trifecta_payout" not in cols:
+            conn.execute("ALTER TABLE picks_history ADD COLUMN trifecta_payout INTEGER NOT NULL DEFAULT 0")
         name2code = {n: c for c, n in conn.execute("SELECT venue_code, name FROM venue_info").fetchall()}
         start_map = dict(conn.execute(
             "SELECT race_key, start_at FROM wt_races WHERE race_date=?", (target_date,)).fetchall())
@@ -573,6 +578,7 @@ def _main_inner(date, _db_url):
                     st_pay = pm.get(rk, {}).get(("trifecta", st_actual), 0) * st_stake // 100
                 st_bet = len(live_combos) * st_stake
                 st_trio_pay = pm.get(rk, {}).get(("trio", frozenset(st_actual)), 0)
+                st_trifecta_pay = pm.get(rk, {}).get(("trifecta", st_actual), 0)
                 _seconds = dec_st.get("seconds") or []
                 st_pred = f"{st_p1}→{','.join(map(str, _seconds))}→全"
                 st_label = "7S+" if st_rank_v == "7PLUS_STP" else "7S"
@@ -594,7 +600,7 @@ def _main_inner(date, _db_url):
                     st_r[st_rank_v] = st_r.get(st_rank_v, 0) + st_pay
                     st_h[st_rank_v] = st_h.get(st_rank_v, 0) + 1
                 history.append((target_date, f"{rk}#7ST", st_rank_v, st_pred, len(live_combos),
-                                int(st_hit), st_pay, st_trio_pay, st_bet, False, None))
+                                int(st_hit), st_pay, st_trio_pay, st_trifecta_pay, st_bet, False, None))
                 continue
 
             # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
@@ -626,8 +632,9 @@ def _main_inner(date, _db_url):
             for t in thirds:
                 if frozenset((p1, p2, t)) == top3:
                     pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0); hit = True; break
-            # 不的中に関わらずレース確定三連複払戻を trio_payout に記録
+            # 不的中に関わらずレース確定三連複/三連単払戻を記録
             trio_pay = pm.get(rk, {}).get(("trio", top3), 0)
+            trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(order[:3])), 0)
             bet = n_combos * 100
             actual = "-".join(map(str, order[:3]))
             stt = start_map.get(rk)
@@ -696,9 +703,9 @@ def _main_inner(date, _db_url):
                 results_7plus_s.append(row_str)
             # prerace ガミ条件落ち → 見送り（bet/pay=0, miwokuri=True）として記録
             if is_gami_skip:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, 0, True, pg))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, trifecta_pay, 0, True, pg))
             else:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, bet, False, pg))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, trifecta_pay, bet, False, pg))
 
         if history:
             # 採点済みレースのベースキー単位で選択削除する。
@@ -712,8 +719,8 @@ def _main_inner(date, _db_url):
                 )
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,prerace_gami) "
-                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?,?)", history)
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,prerace_gami) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?)", history)
 
         purchased_base_keys = {h[1].split("#")[0] for h in history}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)

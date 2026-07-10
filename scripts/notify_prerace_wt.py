@@ -553,8 +553,9 @@ def _build_st_message(pick: dict, race_info: dict, st_rank: str,
 def _save_prerace_gami(race_key: str, min_odds: float) -> None:
     """picks_history.prerace_gami を発走前実測値で更新する（SQLite + VPS）。
 
-    picks_history の race_key は "{base_key}#7S" / "#7A" / "#7SS" / "#CAND" 等の
-    サフィックス付き形式で保存されているため、LIKE で全サフィックスを一括更新する。
+    picks_history の race_key は "{base_key}#7R" / "#CAND" 等のサフィックス付き形式で
+    保存されているため、LIKE で一括更新する。ただし三連単行(#7ST)は三連複基準の
+    この値と無関係（ガミ条件は三連単オッズ min>=10）のため更新対象から除外する。
 
     #CAND エントリが存在しない（candidates.json のガミフィルタで除外された）レースは
     UPDATE が 0 件になる。その場合 #GAMI プレースホルダーを INSERT し、
@@ -572,7 +573,8 @@ def _save_prerace_gami(race_key: str, min_odds: float) -> None:
     try:
         with get_connection() as conn:
             cur = conn.execute(
-                "UPDATE picks_history SET prerace_gami = ? WHERE race_key LIKE ?",
+                "UPDATE picks_history SET prerace_gami = ? WHERE race_key LIKE ? "
+                "AND race_key NOT LIKE '%#7ST'",
                 (rounded, pattern),
             )
             if cur.rowcount == 0:
@@ -595,8 +597,9 @@ def _save_prerace_gami(race_key: str, min_odds: float) -> None:
             with psycopg2.connect(db_url) as pg_conn:
                 with pg_conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE keirin.picks_history SET prerace_gami = %s WHERE race_key LIKE %s",
-                        (rounded, pattern),
+                        "UPDATE keirin.picks_history SET prerace_gami = %s WHERE race_key LIKE %s"
+                        " AND race_key NOT LIKE %s",
+                        (rounded, pattern, "%#7ST"),
                     )
                     if cur.rowcount == 0:
                         cur.execute(

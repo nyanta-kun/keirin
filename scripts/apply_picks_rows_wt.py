@@ -27,11 +27,11 @@ def main() -> None:
         for r in rows:
             conn.execute(
                 "INSERT INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,"
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,"
                 " bet_amount,route,miwokuri,prerace_gami,gap23) "
-                "VALUES (?,?,?,?,?,?,?,?,?,'wt',?,?,?)",
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?,?)",
                 (r["race_date"], r["race_key"], r["rank"], r["pred_combo"], r["n_combos"],
-                 r["hit"], r["payout"], r["trio_payout"], r["bet_amount"],
+                 r["hit"], r["payout"], r["trio_payout"], r.get("trifecta_payout", 0), r["bet_amount"],
                  r["miwokuri"], r["prerace_gami"], r["gap23"]))
     print(f"{date_from}〜{date_to}: 削除 {deleted} 行 → 挿入 {len(rows)} 行")
 
