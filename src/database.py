@@ -458,7 +458,8 @@ def migrate_db():
             conn.execute("ALTER TABLE picks_history ADD COLUMN trifecta_payout INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already exists
-        for _col in ("gap12 REAL", "gap34 REAL"):
+        for _col in ("gap12 REAL", "gap34 REAL", "gap23 REAL"):
+            # gap23 のみ pt(%ポイント)スケール。gap12/gap34 は 0-1 スケール（歴史的経緯・変更不可）
             try:
                 conn.execute(f"ALTER TABLE picks_history ADD COLUMN {_col}")
             except sqlite3.OperationalError:

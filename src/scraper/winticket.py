@@ -157,23 +157,30 @@ class WinticketScraper:
         self._interval = request_interval
         self._last_req = 0.0
 
-    def _get(self, url: str, timeout: int = 15) -> requests.Response | None:
-        elapsed = time.time() - self._last_req
-        if elapsed < self._interval:
-            time.sleep(self._interval - elapsed)
-        try:
-            resp = self._session.get(url, timeout=timeout)
-            self._last_req = time.time()
-            return resp
-        except requests.RequestException as e:
-            logger.warning("GET failed %s: %s", url, e)
-            self._last_req = time.time()
-            return None
+    def _get(self, url: str, timeout: int = 15, max_retries: int = 3) -> requests.Response | None:
+        for attempt in range(max_retries):
+            elapsed = time.time() - self._last_req
+            if elapsed < self._interval:
+                time.sleep(self._interval - elapsed)
+            try:
+                resp = self._session.get(url, timeout=timeout)
+                self._last_req = time.time()
+                return resp
+            except requests.RequestException as e:
+                self._last_req = time.time()
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt  # 1, 2秒の指数バックオフ
+                    logger.warning("GET failed %s (retry %d/%d in %ds): %s",
+                                   url, attempt + 1, max_retries, wait, e)
+                    time.sleep(wait)
+                else:
+                    logger.warning("GET failed %s (giving up): %s", url, e)
+        return None
 
     def find_cup_info(self, venue_id: str, target_date: str) -> tuple[str, int] | None:
         """
         venue_id と target_date から (cup_id, day_index) を返す。
-        イベント開始日を最大4日前まで試す。
+        イベント開始日を最大7日前まで試す（G1等は6日制開催があるため）。
 
         Returns None if venue not in winticket or no race found.
         """
@@ -182,7 +189,7 @@ class WinticketScraper:
             return None
 
         target_dt = datetime.strptime(target_date, "%Y-%m-%d")
-        for days_back in range(4):
+        for days_back in range(7):
             start_dt = target_dt - timedelta(days=days_back)
             cup_id = start_dt.strftime("%Y%m%d") + venue_id
             day_index = days_back + 1

@@ -126,7 +126,7 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
     """候補レースのオッズを取得して初回ガミ判定（prerace_gami）を設定する。
 
     winticket から三連複オッズを取得し最安値を prerace_gami に保存する。
-    最安値 < 5.0 なら miwokuri=True（早期見送り）。
+    最安値 < GAMI_THRESHOLD(7.0) なら miwokuri=True（早期見送り）。
     取得失敗時は prerace_gami=NULL のまま notify_prerace_wt.py に委ねる。
     """
     from src.scraper.winticket import WinticketScraper  # noqa: PLC0415
