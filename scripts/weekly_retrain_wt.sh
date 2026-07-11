@@ -23,9 +23,34 @@ echo "[$(date '+%H:%M:%S')] === winticket週次再学習 $DATE (test-from=$TEST_
 
 # ① ホールドアウト評価モデル（監視用・--no-promote で本番 lgbm_wt は汚さない）
 echo "[$(date '+%H:%M:%S')] ① holdout評価（直近90日をテスト）..." | tee -a "$LOG"
+# 前回 eval の AUC を比較用に退避（初回は存在しなくてよい）
+PREV_EVAL_META="data/models/lgbm_wt_eval.meta.json"
+PREV_AUC=$(python3 -c "import json,sys; print(json.load(open('$PREV_EVAL_META')).get('test_auc_holdout') or '')" 2>/dev/null || echo "")
 .venv/bin/python3 -m src.cli.main train-wt \
   --from 2023-07-01 --test-from "$TEST_FROM" --save-as lgbm_wt_eval --no-promote \
   2>&1 | tee -a "$LOG"
+
+# ①' 品質ゲート: holdout AUC が絶対下限未満 or 前回比で大幅悪化なら本番昇格を中止
+#     （正常終了＝無条件で lgbm_wt 上書き→rsync 配布 だった構造への安全弁・2026-07-12）
+AUC_GATE_MIN="${AUC_GATE_MIN:-0.75}"       # 絶対下限（直近実績 ~0.77）
+AUC_GATE_MAX_DROP="${AUC_GATE_MAX_DROP:-0.02}"  # 前回比の許容悪化幅
+python3 - "$AUC_GATE_MIN" "$AUC_GATE_MAX_DROP" "$PREV_AUC" <<'PYGATE' 2>&1 | tee -a "$LOG"
+import json, sys
+auc_min, max_drop = float(sys.argv[1]), float(sys.argv[2])
+prev = float(sys.argv[3]) if sys.argv[3] else None
+meta = json.load(open("data/models/lgbm_wt_eval.meta.json"))
+auc = meta.get("test_auc_holdout")
+if auc is None:
+    print(f"[gate] holdout AUC が meta に無い → 昇格中止")
+    sys.exit(1)
+if auc < auc_min:
+    print(f"[gate] AUC {auc:.4f} < 下限 {auc_min} → 昇格中止")
+    sys.exit(1)
+if prev is not None and prev - auc > max_drop:
+    print(f"[gate] AUC {auc:.4f} が前回 {prev:.4f} から {prev-auc:.4f} 悪化 (> {max_drop}) → 昇格中止")
+    sys.exit(1)
+print(f"[gate] AUC {auc:.4f} OK (下限 {auc_min} / 前回 {prev})")
+PYGATE
 
 # ② 配信モデル: 全データで再学習して lgbm_wt を更新（H-1）
 echo "[$(date '+%H:%M:%S')] ② 配信用: 全データ再学習 → lgbm_wt ..." | tee -a "$LOG"
