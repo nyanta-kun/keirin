@@ -63,3 +63,20 @@ docs/bet-structure-guide.md            # 買い目戦略（SS/S/A）
 - **2026-06-08 winticketルートへ完全移行**（wtがks同等以上を確認）。ks収集停止・cronはwt版。ks資産はロールバック用に保持
 - finish_order=0(欠車)は着外。top3は `between(1,3)` で判定（DNS誤算入バグ修正済）
 - **バックテストの3バイアスに注意（2026-06-12発見・docs/analysis/18）**: ①ランキングは必ず全エントリーで行う（完走者のみ=欠車生存バイアス×stale oddsで黒字が捏造される・旧 `_apply_pred_prob_wt`系は該当）②≤6車判定は出走表基準（`_filter_by_n_riders`を欠車除去後に適用すると7車立てが混入）③モデルは評価期間外で学習（週次再学習済みlgbm_wtはリーク）。標準実装= `exp_leakfree_rescore_wt.py`。本番忠実ではC0現行戦略含む全レバー~70-90%＝**採否判断はlive実測(picks_history)のみ**
+
+## 現行ランク体系（2026-07-10 doc52〜・7車専用）
+
+- **SS** = 内部rank `7PLUS_R`（race_key suffix `#7R`）: 三連複レース単位。min(全目オッズ)≥7.0 ∧ gap12≥0.10 ∧ gap23≥1pt → 全目購入 100円/点
+- **S** = `7PLUS_ST`（suffix `#7ST`）: 三連単1着固定F（1位→2,3位→全）。gap12≥0.15 ∧ min(全目)≥10.0 → 100円/点
+- **S+** = `7PLUS_STP`（suffix は S と同じ `#7ST`・rank列で区別）: S条件 + gap12≥0.25 ∧ gap34≥0.04 → 200円/点
+- **SO（合成オッズ）≥8 フィルタは廃止済み**（全目合成だと構造的に8を超えないため。旧ドキュメント・メモに残る記載は無効）
+- 見送り=miwokuri=TRUE。購入集計は `rank IN ('7PLUS_R','7PLUS_ST','7PLUS_STP') AND NOT miwokuri AND bet_amount>0`
+- `prerace_decisions_{date}.json` が採点/Web/サマリー/Discord の正本（15分前判定を事後変更しない）
+- 旧≤6車 SS/S/A/B・ワイドロジックは 2026-07-12 に `wave_picks_wt` から削除済み（デッドコードだった）
+
+## スキーマ管理ルール（picks_history 等 keirin スキーマ）
+
+- **DDL は「kiseki 側 alembic」と「本リポジトリ src/database.py::migrate_db()（SQLite用）」の両方に必ず追加する**
+  （gap23 列が両方から漏れて本番 PG に手動ALTERだけで存在する「幽霊カラム」になった事故あり → 2026-07-12 に両側へ正式化済み: kiseki alembic `j6k7l8m9n0p1` / migrate_db）
+- **gap カラムのスケール**: gap12 / gap34 = 0-1 スケール、**gap23 のみ pt（%ポイント・×100済み）**。歴史的経緯によるもので変更不可。読み書き時に注意
+- 閾値定数（GAMI_THRESHOLD=7.0 等）は `src/cli/main.py` / `scripts/notify_prerace_wt.py` / `scripts/write_candidates_wt.py` に多重定義。**変更時は3ファイル + kiseki フロント（page.tsx）を必ず grep して揃える**
