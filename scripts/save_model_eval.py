@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """バックテスト結果を PostgreSQL keirin.model_evaluation に保存する。
 
-7+車 SS/S/A 本番戦略（wave-picks-wt と同条件）で VAL / HOLD を評価し、
-kiseki フロントエンドの「モデル精度」表示用に保存する。
+7車ちょうど限定の本番戦略（2026-07-10〜 新ランク体系・notify_prerace_wt.py と同条件）で
+VAL / HOLD を評価し、kiseki フロントエンドの「モデル精度」表示用に保存する。
+
+ランク体系（notify_prerace_wt.py の `_determine_live_rank` / `_determine_st_rank` と同一）:
+  R  （表示 SS・三連複・レース単位）: min(全目オッズ)≥GAMI_THRESHOLD ∧ gap12≥SEVEN_PLUS_S_GAP12
+       ∧ gap23≥GAP23_MIN → 全目購入 100円/点。的中条件=軸2車(pivot1/pivot2)が3着内。
+  ST （表示 S・三連単1着固定フォーメーション）: gap12≥ST_GAP12 ∧ min(全目オッズ)≥ST_GAMI
+       → 100円/点。的中条件=1着=pivot1 ∧ 2着∈{pivot2, 指数3位}。
+  STP（表示 S+・同上 + 増額）: ST条件 + gap12≥STP_GAP12 ∧ gap34≥STP_GAP34 → 200円/点。
 
 事前条件:
   - KEIRIN_DB_URL 環境変数が設定されていること
@@ -46,11 +53,21 @@ HOLD = ("2026-03-01", "2026-06-16")
 VAL_MODEL_NAME  = "lgbm_wt_train_only"
 HOLD_MODEL_NAME = "lgbm_wt"
 
-# ── 戦略パラメータ（wave-picks-wt と同条件） ─────────────────────────
-MIN_RIDERS  = 7       # 7車以上対象
-MIN_GAP12   = 0.07    # gap12 最低閾値
-S_GAP12     = 0.10    # S/A 分岐閾値
-GAMI_MIN    = 5.0     # ガミ足切りオッズ
+# ── 戦略パラメータ（notify_prerace_wt.py と同値・2026-07-10〜 新ランク体系） ──────
+N_ENTRIES_TARGET   = 7      # 7車ちょうど限定（8/9車は対象外。write_candidates_wt.py/main.py と同一基準）
+
+# R（表示SS・三連複・レース単位）
+GAMI_THRESHOLD     = 7.0    # min(全目三連複オッズ) 下限
+SEVEN_PLUS_S_GAP12 = 0.10   # gap12 下限
+GAP23_MIN          = 1.0    # gap23（2位-3位予測確率差, pt）下限
+
+# ST/STP（表示S/S+・三連単1着固定フォーメーション）
+ST_GAP12    = 0.15   # S: gap12 下限
+ST_GAMI     = 10.0   # S: min(全目三連単オッズ) 下限
+STP_GAP12   = 0.25   # S+: gap12 下限（Sの条件に追加）
+STP_GAP34   = 0.04   # S+: gap34（3位-4位予測確率差）下限
+ST_STAKE    = 100    # S 1点あたり金額（円）
+STP_STAKE   = 200    # S+ 1点あたり金額（円）
 
 
 def _load_trio_odds(race_keys: list[str]) -> dict[str, dict[frozenset, float]]:
@@ -77,6 +94,36 @@ def _load_trio_odds(race_keys: list[str]) -> dict[str, dict[frozenset, float]]:
     return odds_map
 
 
+def _load_trifecta_odds(race_keys: list[str]) -> dict[str, dict[tuple[int, int, int], float]]:
+    """wt_odds(bet_type='trifecta') から {race_key: {(着順タプル): odds}} を返す。
+
+    combination は "1-2-3"（着順そのまま）形式で保存されている（"=" 区切りの trio とは別形式）。
+    ST/STP ランク（三連単1着固定フォーメーション）の判定・採点に使う。
+    """
+    if not race_keys:
+        return {}
+    with get_connection() as conn:
+        placeholders = ",".join("?" * len(race_keys))
+        rows = conn.execute(
+            f"SELECT race_key, combination, odds_value FROM wt_odds "
+            f"WHERE bet_type='trifecta' AND race_key IN ({placeholders})",
+            race_keys,
+        ).fetchall()
+
+    odds_map: dict[str, dict] = {}
+    for rk, combo_str, ov in rows:
+        if ov is None or float(ov) <= 0:
+            continue
+        parts = re.split(r"[-=]", str(combo_str))
+        try:
+            nums = tuple(int(p) for p in parts)
+        except ValueError:
+            continue
+        if len(nums) == 3:
+            odds_map.setdefault(str(rk), {})[nums] = float(ov)
+    return odds_map
+
+
 def _load_n_entries(race_keys: list[str]) -> dict[str, int]:
     """wt_races から {race_key: n_entries} を返す。"""
     if not race_keys:
@@ -96,13 +143,25 @@ def run_7plus_backtest(
     period_from: str,
     period_to: str,
 ) -> dict:
-    """7+車 SS/S/A 本番戦略のバックテストを実行して集計結果を返す。
+    """7車ちょうど限定・現行R/ST/STPランク本番戦略のバックテストを実行して集計結果を返す。
 
-    戦略 (wave-picks-wt と同条件):
-      - n_entries ≥ 7 かつ gap12 ≥ MIN_GAP12
-      - SS: ガミ目カット後 残り1〜3目（残存目のみ購入）
-      - S : 全目 gami ≥ 5倍 + gap12 ≥ S_GAP12 → 全3相手(3点)
-      - A : 全目 gami ≥ 5倍 + gap12 ∈ [MIN_GAP12, S_GAP12) → 全3相手(3点)
+    判定条件は notify_prerace_wt.py の `_determine_live_rank` / `_determine_st_rank` と同値
+    （閾値定数は本ファイル冒頭に集約・値は notify_prerace_wt.py の同名定数と一致させること）。
+
+    戦略:
+      - n_entries == N_ENTRIES_TARGET(7) のレースのみ対象（8/9車は対象外）
+      - R  (表示SS・三連複レース単位): min(全目オッズ)≥GAMI_THRESHOLD ∧ gap12≥SEVEN_PLUS_S_GAP12
+        ∧ gap23≥GAP23_MIN → 全目購入 100円/点。的中=軸2車(pivot1/pivot2)が3着内。
+      - ST (表示S・三連単1着固定F): gap12≥ST_GAP12 ∧ min(全目オッズ)≥ST_GAMI → 100円/点。
+        的中=1着=pivot1 ∧ 2着∈{pivot2, 指数3位}（3着は全通り）。
+      - STP(表示S+・同上+増額): ST条件 + gap12≥STP_GAP12 ∧ gap34≥STP_GAP34 → 200円/点。
+      R と ST/STP は独立判定（同一レースで両方成立しうる。notify_prerace_wt.py と同様）。
+
+    欠車(finish_order=0)の返還処理は notify_results_wt.py の `_void_by_dns` と同一規則:
+      軸(R: pivot1/pivot2、ST: pivot1)が欠車 → 賭け不成立（除外）。
+      相手（third・ST の pivot2/指数3位/3着候補）が欠車 → その目のみ除外。
+    ランキングは全エントリー（欠車含む・pred_prob=0でランク末尾）で行い、車数判定は
+    wt_races.n_entries（出走表基準）で行う — exp_leakfree_rescore_wt.py と同じバイアス回避。
     """
     df_period = df[
         (df["race_date"] >= period_from) &
@@ -115,8 +174,7 @@ def run_7plus_backtest(
         return {"n_picks": 0, "n_hits": 0, "total_bet": 0, "total_payout": 0, "roi": None}
 
     # モデル予測確率を付与（実走者のみで予測し、欠車選手は pred_prob=0 でランク末尾に）
-    # この方式は exp_7plus_conditional_wt.py 等の実験ハーネスと同一の条件であり、
-    # doc48/doc49 の 137-138% HOLD 結果と整合する。
+    # ランキングは全エントリー（欠車含む）で行う — 本番 main.py / exp_leakfree_rescore_wt.py と同条件。
     df_runners = df_period[df_period["finish_order"] >= 1].copy()
     X = prepare_X(df_runners)
     df_runners["pred_prob"] = model.predict_proba(X)[:, 1]
@@ -130,113 +188,124 @@ def run_7plus_backtest(
     all_race_keys = df_period["race_key"].unique().tolist()
     n_entries_map = _load_n_entries(all_race_keys)
     trio_odds_map = _load_trio_odds(all_race_keys)
+    trifecta_odds_map = _load_trifecta_odds(all_race_keys)
 
-    # 7+車のレースのみ
-    target_keys = {rk for rk in all_race_keys if n_entries_map.get(rk, 0) >= MIN_RIDERS}
-    df_7plus = df_period[df_period["race_key"].isin(target_keys)].copy()
+    # 7車ちょうどのレースのみ（出走表基準・write_candidates_wt.py/main.py と同一基準）
+    target_keys = {rk for rk in all_race_keys if n_entries_map.get(rk, 0) == N_ENTRIES_TARGET}
+    df_7 = df_period[df_period["race_key"].isin(target_keys)].copy()
 
     total_n_bet_races = total_bets = total_returns = total_hits = 0
-    ss_bets = ss_returns = ss_hits = ss_races = 0
-    s_bets  = s_returns  = s_hits  = s_races  = 0
-    a_bets  = a_returns  = a_hits  = a_races  = 0
+    r_bets   = r_returns   = r_hits   = r_races   = 0   # R（表示SS）
+    st_bets  = st_returns  = st_hits  = st_races  = 0   # ST（表示S）
+    stp_bets = stp_returns = stp_hits = stp_races = 0   # STP（表示S+）
 
-    for race_key, grp in df_7plus.groupby("race_key"):
-        # 欠車(pred_prob=0)は自然にランク末尾へ → pivot1/pivot2 は常に実走者
+    for race_key, grp in df_7.groupby("race_key"):
+        # 欠車(pred_prob=0)は自然にランク末尾へ → pivot1/pivot2 は原則実走者
         grp = grp.sort_values("pred_prob", ascending=False)
         n = len(grp)
         if n < 3:
             continue
 
         probs = grp["pred_prob"].tolist()
-        gap12 = probs[0] - probs[1]
-        if gap12 < MIN_GAP12:
-            continue
-
         frames = grp["frame_no"].astype(int).tolist()
         pivot1, pivot2 = frames[0], frames[1]
-        thirds_all = frames[2:]
-        if not thirds_all:
-            continue
-
-        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
-        if pivot1 not in runners or pivot2 not in runners:
+        thirds = frames[2:]
+        if not thirds:
             continue
 
         fin = grp[grp["finish_order"].between(1, 3)]
         if len(fin) < 3:
-            continue
+            continue  # 結果未確定レース
         top3_set = frozenset(fin["frame_no"].astype(int).tolist())
+        actual_order = tuple(
+            fin.sort_values("finish_order")["frame_no"].astype(int).tolist()[:3]
+        )
 
-        rk_odds = trio_odds_map.get(race_key, {})
+        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
 
-        combo_odds: dict[int, float] = {}
-        for t in thirds_all:
-            if t not in runners:
-                continue
-            cs = frozenset({pivot1, pivot2, t})
-            ov = rk_odds.get(cs)
-            if ov and ov > 0:
-                combo_odds[t] = ov
-
-        if not combo_odds:
-            continue
-
+        gap12 = probs[0] - probs[1]
         race_bet = False
 
-        # SSランク: gami≥5倍の目が 1〜3点
-        valid_ss = [t for t in thirds_all if combo_odds.get(t, 0) >= GAMI_MIN]
-        if 1 <= len(valid_ss) <= 3:
-            for t in valid_ss:
-                cs = frozenset({pivot1, pivot2, t})
-                ov = combo_odds[t]
-                total_bets += 100
-                ss_bets += 100
-                if cs == top3_set:
-                    # 公式払戻金は10円単位に切り捨て
-                    payout = round(ov * 100) // 10 * 10
-                    total_returns += payout
-                    total_hits += 1
-                    ss_returns += payout
-                    ss_hits += 1
-            race_bet = True
-            ss_races += 1
+        # ── Rランク（表示SS・三連複・レース単位ガミ） ──────────────────────
+        if pivot1 in runners and pivot2 in runners:
+            rk_trio_odds = trio_odds_map.get(race_key, {})
+            valid_thirds = [t for t in thirds if t in runners]  # 相手欠車はその目のみ除外
+            combo_odds: dict[int, float] = {}
+            for t in valid_thirds:
+                ov = rk_trio_odds.get(frozenset({pivot1, pivot2, t}))
+                if ov and ov > 0:
+                    combo_odds[t] = ov
 
-        # S/Aランク: 全相手がgami≥5倍。gap12 で S / A を分岐
-        all_thirds_runner = [t for t in thirds_all if t in runners]
-        if all_thirds_runner and all(combo_odds.get(t, 0) >= GAMI_MIN for t in all_thirds_runner):
-            is_s_rank = (gap12 >= S_GAP12)
-            for t in all_thirds_runner:
-                ov = combo_odds.get(t, 0)
-                if ov <= 0:
-                    continue
-                cs = frozenset({pivot1, pivot2, t})
-                total_bets += 100
-                hit_this = (cs == top3_set)
-                pay = (round(ov * 100) // 10 * 10) if hit_this else 0
-                if is_s_rank:
-                    s_bets += 100
-                    if hit_this:
-                        s_returns += pay; s_hits += 1
-                else:
-                    a_bets += 100
-                    if hit_this:
-                        a_returns += pay; a_hits += 1
-                if hit_this:
-                    total_returns += pay
-                    total_hits += 1
-            race_bet = True
-            if is_s_rank:
-                s_races += 1
-            else:
-                a_races += 1
+            if combo_odds:
+                gami_r = min(combo_odds.values())
+                gap23 = (probs[1] - probs[2]) * 100.0 if len(probs) >= 3 else 0.0
+                if (gami_r >= GAMI_THRESHOLD and gap12 >= SEVEN_PLUS_S_GAP12
+                        and gap23 >= GAP23_MIN):
+                    race_bet = True
+                    r_races += 1
+                    for t, ov in combo_odds.items():
+                        total_bets += 100
+                        r_bets += 100
+                        if frozenset({pivot1, pivot2, t}) == top3_set:
+                            # 公式払戻金は10円単位に切り捨て
+                            pay = round(ov * 100) // 10 * 10
+                            total_returns += pay
+                            total_hits += 1
+                            r_returns += pay
+                            r_hits += 1
+
+        # ── ST/STPランク（表示S/S+・三連単1着固定フォーメーション） ─────────
+        # 1着=pivot1固定 / 2着=pivot2または指数3位(r3) / 3着=全通り（軸欠車は不成立・相手欠車はその半分/その目のみ除外）
+        if gap12 >= ST_GAP12 and thirds and pivot1 in runners:
+            rk_tri_odds = trifecta_odds_map.get(race_key, {})
+            r3 = thirds[0]
+            st_combos: dict[tuple[int, int, int], float] = {}
+            for s in (pivot2, r3):
+                if s not in runners:
+                    continue  # 2着候補が欠車 → その半分は購入不成立
+                for t in frames:
+                    if t in (pivot1, s) or t not in runners:
+                        continue
+                    ov = rk_tri_odds.get((pivot1, s, t))
+                    if ov and ov > 0:
+                        st_combos[(pivot1, s, t)] = ov
+
+            if st_combos:
+                gami_st = min(st_combos.values())
+                if gami_st >= ST_GAMI:
+                    gap34 = (probs[2] - probs[3]) if len(probs) >= 4 else 0.0
+                    is_plus = (gap12 >= STP_GAP12 and gap34 >= STP_GAP34)
+                    stake = STP_STAKE if is_plus else ST_STAKE
+                    race_bet = True
+                    if is_plus:
+                        stp_races += 1
+                    else:
+                        st_races += 1
+                    for combo, ov in st_combos.items():
+                        total_bets += stake
+                        hit_this = (combo == actual_order)
+                        pay = (round(ov * 100) // 10 * 10) * (stake // 100) if hit_this else 0
+                        if is_plus:
+                            stp_bets += stake
+                            if hit_this:
+                                stp_returns += pay
+                                stp_hits += 1
+                        else:
+                            st_bets += stake
+                            if hit_this:
+                                st_returns += pay
+                                st_hits += 1
+                        if hit_this:
+                            total_returns += pay
+                            total_hits += 1
 
         if race_bet:
             total_n_bet_races += 1
 
-    roi    = round(total_returns / total_bets, 3) if total_bets > 0 else None
-    ss_roi = round(ss_returns / ss_bets, 3)       if ss_bets  > 0 else None
-    s_roi  = round(s_returns  / s_bets,  3)       if s_bets   > 0 else None
-    a_roi  = round(a_returns  / a_bets,  3)       if a_bets   > 0 else None
+    roi     = round(total_returns / total_bets, 3) if total_bets > 0 else None
+    r_roi   = round(r_returns   / r_bets,   3) if r_bets   > 0 else None
+    st_roi  = round(st_returns  / st_bets,  3) if st_bets  > 0 else None
+    stp_roi = round(stp_returns / stp_bets, 3) if stp_bets > 0 else None
 
     result = {
         "n_picks":      total_n_bet_races,
@@ -245,12 +314,12 @@ def run_7plus_backtest(
         "total_payout": total_returns,
         "roi":          roi,
         "by_rank": {
-            "SS": {"n_picks": ss_races, "n_hits": ss_hits, "total_bet": ss_bets,
-                   "total_payout": ss_returns, "roi": ss_roi},
-            "S":  {"n_picks": s_races,  "n_hits": s_hits,  "total_bet": s_bets,
-                   "total_payout": s_returns,  "roi": s_roi},
-            "A":  {"n_picks": a_races,  "n_hits": a_hits,  "total_bet": a_bets,
-                   "total_payout": a_returns,  "roi": a_roi},
+            "R":   {"n_picks": r_races,   "n_hits": r_hits,   "total_bet": r_bets,
+                    "total_payout": r_returns,   "roi": r_roi},
+            "ST":  {"n_picks": st_races,  "n_hits": st_hits,  "total_bet": st_bets,
+                    "total_payout": st_returns,  "roi": st_roi},
+            "STP": {"n_picks": stp_races, "n_hits": stp_hits, "total_bet": stp_bets,
+                    "total_payout": stp_returns, "roi": stp_roi},
         },
     }
 
@@ -263,9 +332,9 @@ def run_7plus_backtest(
         f"投資={total_bets:,}円  回収={total_returns:,}円  ROI={_fmt_roi(roi)}",
         flush=True,
     )
-    print(f"    SS: {ss_races:,}R  投資={ss_bets:,}  回収={ss_returns:,}  ROI={_fmt_roi(ss_roi)}", flush=True)
-    print(f"    S:  {s_races:,}R  投資={s_bets:,}  回収={s_returns:,}  ROI={_fmt_roi(s_roi)}",  flush=True)
-    print(f"    A:  {a_races:,}R  投資={a_bets:,}  回収={a_returns:,}  ROI={_fmt_roi(a_roi)}",  flush=True)
+    print(f"    SS(R):  {r_races:,}R  投資={r_bets:,}  回収={r_returns:,}  ROI={_fmt_roi(r_roi)}", flush=True)
+    print(f"    S(ST):  {st_races:,}R  投資={st_bets:,}  回収={st_returns:,}  ROI={_fmt_roi(st_roi)}", flush=True)
+    print(f"    S+(STP):{stp_races:,}R  投資={stp_bets:,}  回収={stp_returns:,}  ROI={_fmt_roi(stp_roi)}", flush=True)
     return result
 
 
@@ -307,7 +376,7 @@ def save_to_db(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="7+車バックテスト結果をDBに保存")
+    parser = argparse.ArgumentParser(description="7車限定R/ST/STPランクバックテスト結果をDBに保存")
     parser.add_argument("--dry-run", action="store_true", help="DB書き込みなし（数値確認のみ）")
     args = parser.parse_args()
 

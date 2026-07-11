@@ -1,7 +1,10 @@
-"""ユニットテスト: live_report_wt.py — 集計・void除外・WIDE分離。
+"""ユニットテスト: live_report_wt.py — 集計・見送り/候補除外・ランク分離。
 
 合成 picks_history を使って純粋関数をテストする。
 DBアクセス・ファイルI/O は monkeypatch で差し替え。
+
+ランク体系（2026-07-10〜）: 内部rank列は 7PLUS_R(表示SS)/7PLUS_ST(表示S)/7PLUS_STP(表示S+) の
+3種のみが購入対象。旧 SS/S/A/WIDE/B 表記のテストは新ランク名に置き換え済み。
 """
 import importlib
 import sys
@@ -22,7 +25,7 @@ def _make_picks(*rows):
         result.append({
             "race_date": r.get("race_date", "2026-06-01"),
             "race_key": r.get("race_key", "20260601_11_01"),
-            "rank": r.get("rank", "A"),
+            "rank": r.get("rank", "7PLUS_ST"),
             "n_combos": r.get("n_combos", 3),
             "hit": r.get("hit", False),
             "payout": r.get("payout", 0),
@@ -34,32 +37,32 @@ def _make_picks(*rows):
 # ── 1. _rank_section ──────────────────────────────────────────────────
 
 def test_rank_section_basic():
-    """SS/S/A が別々に集計される。"""
+    """7PLUS_R/7PLUS_ST/7PLUS_STP が別々に集計される。"""
     picks = _make_picks(
-        {"rank": "SS", "hit": True, "payout": 900, "bet_amount": 300},
-        {"rank": "S",  "hit": False, "payout": 0,   "bet_amount": 300},
-        {"rank": "A",  "hit": True, "payout": 600, "bet_amount": 300},
+        {"rank": "7PLUS_R",   "hit": True,  "payout": 900, "bet_amount": 300},
+        {"rank": "7PLUS_ST",  "hit": False, "payout": 0,   "bet_amount": 300},
+        {"rank": "7PLUS_STP", "hit": True,  "payout": 600, "bet_amount": 300},
     )
     result = lr._rank_section(picks)
-    assert result["SS"]["n"] == 1
-    assert abs(result["SS"]["roi"] - 3.0) < 1e-9   # 900/300
-    assert result["S"]["n"] == 1
-    assert result["S"]["roi"] == 0.0
-    assert result["A"]["n"] == 1
-    assert abs(result["A"]["roi"] - 2.0) < 1e-9   # 600/300
+    assert result["7PLUS_R"]["n"] == 1
+    assert abs(result["7PLUS_R"]["roi"] - 3.0) < 1e-9   # 900/300
+    assert result["7PLUS_ST"]["n"] == 1
+    assert result["7PLUS_ST"]["roi"] == 0.0
+    assert result["7PLUS_STP"]["n"] == 1
+    assert abs(result["7PLUS_STP"]["roi"] - 2.0) < 1e-9   # 600/300
 
 
-def test_rank_section_wide_separate():
-    """WIDE は独立して集計される（SS/S/A と混ざらない）。"""
+def test_rank_section_separate_buckets():
+    """各ランクは独立して集計される（互いに混ざらない）。"""
     picks = _make_picks(
-        {"rank": "A",    "hit": True,  "payout": 300, "bet_amount": 300},
-        {"rank": "WIDE", "hit": False, "payout": 0,   "bet_amount": 100},
+        {"rank": "7PLUS_STP", "hit": True,  "payout": 300, "bet_amount": 300},
+        {"rank": "7PLUS_ST",  "hit": False, "payout": 0,   "bet_amount": 100},
     )
     result = lr._rank_section(picks)
-    assert "A" in result and "WIDE" in result
-    assert result["A"]["n"] == 1
-    assert result["WIDE"]["n"] == 1
-    assert result["WIDE"]["roi"] == 0.0
+    assert "7PLUS_STP" in result and "7PLUS_ST" in result
+    assert result["7PLUS_STP"]["n"] == 1
+    assert result["7PLUS_ST"]["n"] == 1
+    assert result["7PLUS_ST"]["roi"] == 0.0
 
 
 def test_rank_section_empty():
@@ -68,14 +71,14 @@ def test_rank_section_empty():
     assert len(result) == 0
 
 
-# ── 2. WIDE 分離（build_report レベル） ──────────────────────────────
+# ── 2. 全ランク合算（build_report レベル） ────────────────────────────
 
-def test_build_report_wide_excluded_from_main(monkeypatch):
-    """build_report の main_total に WIDE が含まれないことを確認。"""
+def test_build_report_all_ranks_in_main(monkeypatch):
+    """build_report の main_total に 7PLUS_R/7PLUS_ST/7PLUS_STP が全て含まれることを確認。"""
     picks = _make_picks(
-        {"rank": "SS",   "hit": True,  "payout": 900, "bet_amount": 300},
-        {"rank": "WIDE", "hit": True,  "payout": 200, "bet_amount": 100},
-        {"rank": "A",    "hit": False, "payout": 0,   "bet_amount": 300},
+        {"rank": "7PLUS_R",   "hit": True,  "payout": 900, "bet_amount": 300},
+        {"rank": "7PLUS_STP", "hit": True,  "payout": 200, "bet_amount": 200},
+        {"rank": "7PLUS_ST",  "hit": False, "payout": 0,   "bet_amount": 300},
     )
     # DB・ファイルアクセスを差し替え
     monkeypatch.setattr(lr, "_load_picks", lambda *a, **k: picks)
@@ -83,29 +86,42 @@ def test_build_report_wide_excluded_from_main(monkeypatch):
     monkeypatch.setattr(lr, "_drift_section", lambda: {"morning": {}, "evening": {}})
 
     result = lr.build_report()
-    # main_total は SS+S+A のみ（WIDE除外・2件）
-    assert result["main_total"]["n"] == 2
-    # WIDE は rank_raw["WIDE"] に記録
-    assert result["rank_raw"]["WIDE"]["total_bet"] == 100
-    assert result["rank_raw"]["WIDE"]["total_pay"] == 200
+    # main_total は 7PLUS_R+7PLUS_ST+7PLUS_STP 全件（3件）
+    assert result["main_total"]["n"] == 3
+    assert result["rank_raw"]["7PLUS_STP"]["total_bet"] == 200
+    assert result["rank_raw"]["7PLUS_STP"]["total_pay"] == 200
+    assert result["rank_raw"]["_main_inv"] == 800
+    assert result["rank_raw"]["_main_pay"] == 1100
 
 
-# ── 3. void 除外（notifyで計上しない行はDBに存在しない） ──────────────
+# ── 3. 見送り・候補・void 除外は _load_picks（SQL側）で行う ────────────
 
-def test_void_races_not_in_picks(monkeypatch):
-    """欠車無効化されたレースは picks_history に存在しない（採点から除外済み）。
-    build_report がその前提で動作することを確認（void行=空）。"""
+def test_picks_already_filtered_are_all_counted(monkeypatch):
+    """_load_picks が返す行（見送り/候補/void除外済み）は build_report でそのまま計上される。"""
     picks = _make_picks(
-        {"rank": "A", "hit": True,  "payout": 500, "bet_amount": 300},
-        {"rank": "A", "hit": False, "payout": 0,   "bet_amount": 300},
+        {"rank": "7PLUS_R", "hit": True,  "payout": 500, "bet_amount": 300},
+        {"rank": "7PLUS_R", "hit": False, "payout": 0,   "bet_amount": 300},
     )
     monkeypatch.setattr(lr, "_load_picks", lambda *a, **k: picks)
     monkeypatch.setattr(lr, "_load_tags", lambda *a, **k: {})
     monkeypatch.setattr(lr, "_drift_section", lambda: {})
 
     result = lr.build_report()
-    # 2件のみ集計（void行なし）
-    assert result["rank"]["A"]["n"] == 2
+    # 2件のみ計上
+    assert result["rank"]["7PLUS_R"]["n"] == 2
+
+
+def test_load_picks_sql_excludes_miwokuri_and_candidate_and_zero_bet():
+    """_load_picks の SQL が見送り(miwokuri)・候補(7PLUS_CAND)・bet_amount=0 を除外する条件を持つ。"""
+    assert lr.RANKS == ["7PLUS_R", "7PLUS_ST", "7PLUS_STP"]
+    assert "7PLUS_CAND" not in lr.RANKS  # IN句には含めない（除外対象）
+    import inspect
+    src = inspect.getsource(lr._load_picks)
+    # SQL 本文（docstring より後）のみを対象に、除外条件が実装されていることを確認
+    sql_body = src.split('"""', 2)[-1]
+    assert "miwokuri" in sql_body
+    assert "bet_amount > 0" in sql_body
+    assert "rank IN" in sql_body
 
 
 # ── 4. タグ突合 ─────────────────────────────────────────────────────
@@ -113,9 +129,9 @@ def test_void_races_not_in_picks(monkeypatch):
 def test_tag_section_fav_mismatch(monkeypatch):
     """fav_mismatch=True のレースのみ別集計される。"""
     picks = _make_picks(
-        {"race_key": "rk1", "rank": "SS", "hit": True,  "payout": 900, "bet_amount": 300},
-        {"race_key": "rk2", "rank": "A",  "hit": False, "payout": 0,   "bet_amount": 300},
-        {"race_key": "rk3", "rank": "A",  "hit": False, "payout": 0,   "bet_amount": 300},
+        {"race_key": "rk1", "rank": "7PLUS_R",  "hit": True,  "payout": 900, "bet_amount": 300},
+        {"race_key": "rk2", "rank": "7PLUS_STP", "hit": False, "payout": 0,   "bet_amount": 300},
+        {"race_key": "rk3", "rank": "7PLUS_STP", "hit": False, "payout": 0,   "bet_amount": 300},
     )
     tags = {
         "rk1": {"fav_mismatch": True,  "upset_tier": "Q1_loose(<1.70)", "top3_sum": 1.5, "top3_sum_band": "Q1_loose(<1.70)"},
@@ -133,16 +149,16 @@ def test_tag_section_fav_mismatch(monkeypatch):
     assert result["fav_mismatch=未記録"]["n"] == 1
 
 
-def test_tag_section_wide_excluded():
-    """タグ別集計では WIDE が除外される。"""
+def test_tag_section_all_ranks_included():
+    """タグ別集計は7PLUS_R/7PLUS_ST/7PLUS_STPの全件が対象になる（WIDEのような独立除外は不要）。"""
     picks = _make_picks(
-        {"race_key": "rk1", "rank": "A",    "hit": True, "payout": 500, "bet_amount": 300},
-        {"race_key": "rk1#W", "rank": "WIDE", "hit": True, "payout": 200, "bet_amount": 100},
+        {"race_key": "rk1", "rank": "7PLUS_R",  "hit": True, "payout": 500, "bet_amount": 300},
+        {"race_key": "rk1", "rank": "7PLUS_ST", "hit": True, "payout": 200, "bet_amount": 100},
     )
     tags = {"rk1": {"fav_mismatch": True, "top3_sum": 1.5, "top3_sum_band": "Q1_loose(<1.70)", "upset_tier": None}}
     result = lr._tag_section(picks, tags)
-    # rk1#W は WIDE なのでタグ集計には含まれない
-    assert result["fav_mismatch=True"]["n"] == 1  # rk1(A)のみ
+    # 両方とも fav_mismatch=True 集計に含まれる（2件）
+    assert result["fav_mismatch=True"]["n"] == 2
 
 
 # ── 5. top3_sum バンド割り当て ─────────────────────────────────────
@@ -198,20 +214,18 @@ def _make_result():
     from scripts.roi_robustness_wt import roi_summary
     main_s = roi_summary([900, 0, 300], [300, 300, 300])
     return {
-        "rank": {"SS": main_s, "A": roi_summary([300], [300])},
+        "rank": {"7PLUS_R": main_s, "7PLUS_STP": roi_summary([300], [300])},
         "rank_raw": {
-            "SS": {"total_bet": 300, "total_pay": 900},
-            "A":  {"total_bet": 300, "total_pay": 300},
-            "S":  {"total_bet": 0, "total_pay": 0},
-            "B":  {"total_bet": 0, "total_pay": 0},
-            "WIDE": {"total_bet": 100, "total_pay": 0},
+            "7PLUS_R":   {"total_bet": 300, "total_pay": 900},
+            "7PLUS_STP": {"total_bet": 300, "total_pay": 300},
+            "7PLUS_ST":  {"total_bet": 0, "total_pay": 0},
             "_main_inv": 600, "_main_pay": 1200,
         },
         "main_total": main_s,
         "tag": {"fav_mismatch=True": roi_summary([900], [300])},
         "drift": {},
-        "required_n": {"SS+S+A合算": {"current_n": 3, "ci_lo_now": 0.5,
-                                       "needed_additional": 500, "note": "test"}},
+        "required_n": {"SS+S+S+合算": {"current_n": 3, "ci_lo_now": 0.5,
+                                        "needed_additional": 500, "note": "test"}},
     }
 
 
@@ -222,6 +236,9 @@ def test_render_text_runs():
     assert "ランク別成績" in text
     assert "ドリフト" in text
     assert "必要標本数" in text
+    # 表示ラベル SS/S+ が出ること（内部rankの生文字列7PLUS_*は表に出さない）
+    assert "SS" in text
+    assert "S+" in text
 
 
 def test_render_md_runs():

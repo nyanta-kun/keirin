@@ -1,11 +1,16 @@
 """live実測レポートCLI — picks_history(route='wt')の集計・ドリフト割引率・必要標本数。
 
 G02: 採否判断の唯一の裁定者（live実測）を見える化する。
-  1. ランク別成績: SS/S/A/B/WIDE 別 n・的中率・投資額・払戻・ROI・bootstrap CI・最大払戻除去ROI
+  1. ランク別成績: 7PLUS_R(表示SS)/7PLUS_ST(表示S)/7PLUS_STP(表示S+) 別
+     n・的中率・投資額・払戻・ROI・bootstrap CI・最大払戻除去ROI
   2. タグ別成績: detail.json の fav_mismatch / upset_tier / top3_sum帯 を race_key で picks_history に突合
   3. 朝→確定ドリフト割引率: wt_odds_snapshot(morning/evening) vs wt_odds(確定) のオッズ帯別ドリフト率
   4. 必要標本数の推定: 現在の的中率・払戻分布を所与として ROI CI下限 >100% に必要な残R数
   5. --from/--to 期間指定、--format md でマークダウン出力
+
+ランク体系は notify_prerace_wt.py（2026-07-10〜）に準拠。内部 rank 列は 7PLUS_R/7PLUS_ST/7PLUS_STP
+のみが購入対象（見送り miwokuri=True・候補 7PLUS_CAND は集計から除外・notify_results_wt.py の
+集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
 
 注: DB 書込みなし・Discord通知なし・標準入出力のみ。
 """
@@ -25,21 +30,31 @@ _SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS))
 from roi_robustness_wt import roi_summary  # noqa: E402
 
+# ── ランク体系（2026-07-10〜・notify_prerace_wt.py と同一） ──────────────
+# 内部rank（DB格納値） → 表示ラベル。購入対象はこの3つのみ（見送り/候補は集計除外）。
+RANKS = ["7PLUS_R", "7PLUS_ST", "7PLUS_STP"]
+RANK_LABELS = {"7PLUS_R": "SS", "7PLUS_ST": "S", "7PLUS_STP": "S+"}
+
 # ── picks_history 集計 ─────────────────────────────────────────────
 
 
 def _load_picks(date_from: str | None, date_to: str | None) -> list[dict]:
-    """picks_history から route='wt' の全行を取得。
+    """picks_history から route='wt' の購入確定行（見送り・候補を除く）を取得。
 
-    WIDE は race_key が '#W' 接尾。void除外済み（notify_results_wt が計上しなかった行は
-    そもそも picks_history に存在しない）。
+    購入対象ランクは 7PLUS_R(表示SS・三連複)/7PLUS_ST(表示S・三連単F)/7PLUS_STP(表示S+・同増額) の3種。
+    見送り(miwokuri=True)・候補(7PLUS_CAND)・bet_amount=0（プレースホルダー行）は集計対象外
+    （notify_results_wt.py の _query_stats と同一条件）。
     """
-    sql = """
+    placeholders = ",".join("?" * len(RANKS))
+    sql = f"""
         SELECT race_date, race_key, rank, n_combos, hit, payout, bet_amount
         FROM picks_history
         WHERE route = 'wt'
+          AND rank IN ({placeholders})
+          AND NOT COALESCE(miwokuri, FALSE)
+          AND bet_amount > 0
     """
-    params: list = []
+    params: list = list(RANKS)
     if date_from:
         sql += " AND race_date >= ?"
         params.append(date_from)
@@ -116,7 +131,7 @@ def _top3_band(v) -> str | None:
 
 
 def _rank_section(picks: list[dict]) -> dict[str, dict]:
-    """ランク別 (SS/S/A/WIDE) の roi_summary を返す。"""
+    """ランク別 (7PLUS_R/7PLUS_ST/7PLUS_STP・表示SS/S/S+) の roi_summary を返す。"""
     buckets: dict[str, tuple[list, list]] = {}
     for r in picks:
         rank = r["rank"]
@@ -135,16 +150,18 @@ def _rank_section(picks: list[dict]) -> dict[str, dict]:
 def _tag_section(picks: list[dict], tags: dict[str, dict]) -> dict:
     """タグ有無別の live ROI を計算する。
 
-    WIDE は独立プロダクトなので除外（main のみ対象）。
+    picks は _load_picks で購入確定ランク(7PLUS_R/7PLUS_ST/7PLUS_STP)のみに
+    絞り込み済みのため、ここでは追加のランク除外は不要（全件が対象）。
     """
-    main_picks = [p for p in picks if p["rank"] != "WIDE"]
-    # race_key の正規化: WIDE の '#W' 接尾は main では付かない
+    main_picks = picks
     tag_results: dict[str, dict] = {}
 
     def _collect(label, predicate):
         pays, bets = [], []
         for p in main_picks:
-            rk = p["race_key"]
+            # picks_history.race_key は #7R/#7ST 等のサフィックス付き。
+            # detail.json 由来のタグは素の race_key キーのため base で突合する。
+            rk = p["race_key"].split("#", 1)[0]
             tag = tags.get(rk, {})
             if predicate(tag):
                 pays.append(p["payout"])
@@ -314,25 +331,26 @@ def _render_text(result: dict, date_from, date_to) -> str:
     lines.append(f"  {'ランク':<7}{'n':>5}{'的中率':>9}{'ROI':>8}{'95%CI':>22}{'除max ROI':>11}{'投資(円)':>12}{'払戻(円)':>12}")
     lines.append("  " + "-" * 82)
     rank_data = result["rank"]
-    for rank in ["SS", "S", "A", "WIDE", "B"]:
+    for rank in RANKS:
         s = rank_data.get(rank)
         if s is None:
             continue
+        label = RANK_LABELS[rank]
         inv = result["rank_raw"][rank]["total_bet"]
         ret = result["rank_raw"][rank]["total_pay"]
         lines.append(
-            f"  {rank:<7}{s['n']:>5}{s['hit_rate']:>8.1%}{s['roi']:>7.1%} "
+            f"  {label:<7}{s['n']:>5}{s['hit_rate']:>8.1%}{s['roi']:>7.1%} "
             f"[{s['ci_lo']:>7.1%},{s['ci_hi']:>7.1%}]{s['roi_ex_max']:>10.1%}"
             f"{inv:>12,}{ret:>12,}"
         )
-    # 合計 (SS/S/A のみ)
+    # 合計 (SS/S/S+ 全ランク)
     main_s = result.get("main_total")
     if main_s:
         inv_m = result["rank_raw"].get("_main_inv", 0)
         ret_m = result["rank_raw"].get("_main_pay", 0)
         lines.append("  " + "-" * 82)
         lines.append(
-            f"  {'SS+S+A':<7}{main_s['n']:>5}{main_s['hit_rate']:>8.1%}{main_s['roi']:>7.1%} "
+            f"  {'SS+S+S+':<7}{main_s['n']:>5}{main_s['hit_rate']:>8.1%}{main_s['roi']:>7.1%} "
             f"[{main_s['ci_lo']:>7.1%},{main_s['ci_hi']:>7.1%}]{main_s['roi_ex_max']:>10.1%}"
             f"{inv_m:>12,}{ret_m:>12,}"
         )
@@ -410,20 +428,21 @@ def _render_md(result: dict, date_from, date_to) -> str:
     lines.append("| ランク | n | 的中率 | ROI | 95%CI | 除max ROI | 投資(円) | 払戻(円) |")
     lines.append("|--------|--:|------:|----:|:------|----------:|---------:|---------:|")
     rank_data = result["rank"]
-    for rank in ["SS", "S", "A", "WIDE", "B"]:
+    for rank in RANKS:
         s = rank_data.get(rank)
         if s is None:
             continue
+        label = RANK_LABELS[rank]
         inv = result["rank_raw"][rank]["total_bet"]
         ret = result["rank_raw"][rank]["total_pay"]
         ci = f"[{s['ci_lo']:.1%},{s['ci_hi']:.1%}]"
-        lines.append(f"| {rank} | {s['n']} | {s['hit_rate']:.1%} | {s['roi']:.1%} | {ci} | {s['roi_ex_max']:.1%} | {inv:,} | {ret:,} |")
+        lines.append(f"| {label} | {s['n']} | {s['hit_rate']:.1%} | {s['roi']:.1%} | {ci} | {s['roi_ex_max']:.1%} | {inv:,} | {ret:,} |")
     main_s = result.get("main_total")
     if main_s:
         inv_m = result["rank_raw"].get("_main_inv", 0)
         ret_m = result["rank_raw"].get("_main_pay", 0)
         ci = f"[{main_s['ci_lo']:.1%},{main_s['ci_hi']:.1%}]"
-        lines.append(f"| **SS+S+A** | **{main_s['n']}** | **{main_s['hit_rate']:.1%}** | **{main_s['roi']:.1%}** | {ci} | **{main_s['roi_ex_max']:.1%}** | **{inv_m:,}** | **{ret_m:,}** |")
+        lines.append(f"| **SS+S+S+** | **{main_s['n']}** | **{main_s['hit_rate']:.1%}** | **{main_s['roi']:.1%}** | {ci} | **{main_s['roi_ex_max']:.1%}** | **{inv_m:,}** | **{ret_m:,}** |")
     lines.append("\n※ N<50 の層は標本不足で暫定。")
 
     # 2. タグ別
@@ -492,18 +511,18 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
     picks = _load_picks(date_from, date_to)
     tags = _load_tags(date_from, date_to)
 
-    # ランク別
+    # ランク別（7PLUS_R/7PLUS_ST/7PLUS_STP の3種のみ・_load_picks で購入確定行に絞り込み済み）
     rank_summaries = _rank_section(picks)
     rank_raw: dict[str, dict] = {}
-    for rank in ["SS", "S", "A", "B", "WIDE"]:
+    for rank in RANKS:
         ps = [p for p in picks if p["rank"] == rank]
         rank_raw[rank] = {
             "total_bet": sum(p["bet_amount"] for p in ps),
             "total_pay": sum(p["payout"] for p in ps),
         }
 
-    # SS+S+A 合計
-    main_picks = [p for p in picks if p["rank"] in ("SS", "S", "A")]
+    # SS+S+S+ 合計（全購入ランク合算）
+    main_picks = picks
     main_pays = [p["payout"] for p in main_picks]
     main_bets = [p["bet_amount"] for p in main_picks]
     main_total = roi_summary(main_pays, main_bets) if main_picks else None
@@ -519,15 +538,10 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
     # 必要標本数
     required: dict[str, dict] = {}
     if main_picks:
-        required["SS+S+A合算"] = _required_n_section(main_pays, main_bets)
-    wide_picks = [p for p in picks if p["rank"] == "WIDE"]
-    if wide_picks:
-        required["WIDE"] = _required_n_section(
-            [p["payout"] for p in wide_picks],
-            [p["bet_amount"] for p in wide_picks],
-        )
+        required["SS+S+S+合算"] = _required_n_section(main_pays, main_bets)
     # fav_mismatch タグ別
-    fm_picks = [p for p in main_picks if tags.get(p["race_key"], {}).get("fav_mismatch") is True]
+    fm_picks = [p for p in main_picks
+                if tags.get(p["race_key"].split("#", 1)[0], {}).get("fav_mismatch") is True]
     if fm_picks:
         required["fav_mismatch=True"] = _required_n_section(
             [p["payout"] for p in fm_picks],
