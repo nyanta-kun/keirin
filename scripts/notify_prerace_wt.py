@@ -635,12 +635,15 @@ def _save_gap23(race_key: str, gap23: float) -> None:
     """picks_history.gap23 を発走前実測値で保存する（SQLite + VPS PG）。
 
     UPDATE が 0 件（#CAND エントリが存在しない）の場合はスキップする。
+    gap23 は三連複(R)ランクの判定条件のため、三連単行(#7ST)には書き込まない
+    （_save_prerace_gami と同じ除外規則）。
     """
     pattern = race_key + "#%"
     try:
         with get_connection() as conn:
             conn.execute(
-                "UPDATE picks_history SET gap23 = ? WHERE race_key LIKE ?",
+                "UPDATE picks_history SET gap23 = ? WHERE race_key LIKE ? "
+                "AND race_key NOT LIKE '%#7ST'",
                 (gap23, pattern),
             )
             conn.commit()
@@ -654,8 +657,9 @@ def _save_gap23(race_key: str, gap23: float) -> None:
             with psycopg2.connect(db_url) as pg_conn:
                 with pg_conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE keirin.picks_history SET gap23 = %s WHERE race_key LIKE %s",
-                        (gap23, pattern),
+                        "UPDATE keirin.picks_history SET gap23 = %s WHERE race_key LIKE %s"
+                        " AND race_key NOT LIKE %s",
+                        (gap23, pattern, "%#7ST"),
                     )
         except Exception as e:
             logger.warning("gap23 VPS 書き込み失敗 %s: %s", race_key, e)
@@ -925,9 +929,45 @@ def main():
                 _emit_st_buy()
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
-            # 非候補（朝ガミ通過済み・detail JSONフォールバック時のみ）: 直前でガミ落ちなら見送りを即時反映
+            # 非候補（detail JSON フォールバック時のみ到達）: 直前オッズで再判定する。
+            # candidates.json 欠損時の保険経路。判定・通知の安全側動作は主経路（7PLUS_CAND）と揃える。
+            if odds_data is None:
+                # オッズ取得失敗 → buy/skip を確定せず次分の実行で再試行
+                print(f"[prerace] {rk} 非候補({rank}) → オッズ取得不可（次回再試行）", flush=True)
+                time.sleep(0.3)
+                continue
+
+            if rank in ("7PLUS_ST", "7PLUS_STP"):
+                # 三連単行: 三連単オッズ(ST_GAMI)で再判定。三連複ロジック(GAMI_THRESHOLD)は適用しない
+                st_rank, st_combos, st_leg_odds, st_stake = _determine_st_rank(pick, odds_data)
+                st_bought = st_rank in ("7PLUS_ST", "7PLUS_STP")
+                _r3 = int(pick["thirds"][0]) if pick.get("thirds") else None
+                st_record = {
+                    "decision": "buy" if st_bought else "skip",
+                    "pivot1": pick.get("pivot1"),
+                    "seconds": ([int(pick.get("pivot2")), _r3] if _r3 is not None else []),
+                    "stake": st_stake if st_bought else 0,
+                    "st_min_odds": round(min(st_leg_odds.values()), 2) if st_leg_odds else None,
+                }
+                if st_bought:
+                    st_record["rank"] = st_rank
+                    st_record["combos"] = [f"{a}-{b}-{c}" for a, b, c in st_combos]
+                    st_record["leg_odds"] = st_leg_odds
+                _save_decision(today, f"{rk}#ST", st_record)
+                if st_bought:
+                    _insert_st_pick(rk, ri["race_date"], st_rank, pick, st_combos, st_stake)
+                    messages.append((rk, _build_st_message(pick, ri, st_rank, st_combos, st_leg_odds, st_stake)))
+                    print(f"[prerace] {rk} 非候補 → 三連単{st_rank} ({len(st_combos)}点×{st_stake}円)", flush=True)
+                else:
+                    _save_picks_history_state(rk, True)
+                    print(f"[prerace] {rk} 非候補 → 三連単条件不成立（見送り・通知なし）", flush=True)
+                newly_done.add(rk)
+                time.sleep(0.3)
+                continue
+
+            # 三連複行（7PLUS_R / 旧互換）: ガミ落ち・オッズ解決不能（欠車等で min_odds=None）は見送り
             # SS（旧カット方式・過去日互換）はガミ目カット済みのため gami判定を適用しない
-            if rank != "7PLUS_SS" and min_odds is not None and min_odds < GAMI_THRESHOLD:
+            if rank != "7PLUS_SS" and (min_odds is None or min_odds < GAMI_THRESHOLD):
                 _save_picks_history_state(rk, True)
                 _save_decision(today, rk, {
                     "decision": "skip",
@@ -935,15 +975,18 @@ def main():
                     "all_min_odds": min_odds,
                     **_score_stats(pick),
                 })
-            else:
-                _save_decision(today, rk, {
-                    "decision": "buy",
-                    "rank": rank,
-                    "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
-                    "thirds": [int(t) for t in pick.get("thirds", [])],
-                    "all_min_odds": min_odds,
-                    **_score_stats(pick),
-                })
+                print(f"[prerace] {rk} 非候補({rank}) → 条件不成立（見送り・通知なし）", flush=True)
+                newly_done.add(rk)
+                time.sleep(0.3)
+                continue
+            _save_decision(today, rk, {
+                "decision": "buy",
+                "rank": rank,
+                "pivot1": pick.get("pivot1"), "pivot2": pick.get("pivot2"),
+                "thirds": [int(t) for t in pick.get("thirds", [])],
+                "all_min_odds": min_odds,
+                **_score_stats(pick),
+            })
 
         msg = _build_message(pick_with_raceno, ri, odds_data)
         messages.append((rk, msg))
