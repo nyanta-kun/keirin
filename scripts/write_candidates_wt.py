@@ -32,6 +32,34 @@ from src.database import get_connection
 GAMI_THRESHOLD = 7.0  # レース単位ガミ閾値（min全目。main.py / notify_prerace_wt.py と揃える）
 
 
+def _calc_gaps(cand: dict) -> tuple[float | None, float | None, float | None]:
+    """candidates JSON から (gap12, gap34, gap23_pt) を計算する。
+
+    notify_results_wt.py の採点時計算と同ロジック。朝の #CAND 書き込み時点で
+    永続化することで、kiseki 側が当日中に SS/S/S+ の候補ランク判定
+    （gap12≥0.10∧gap23≥1pt / gap12≥0.15 / gap12≥0.25∧gap34≥0.04）を表示できる。
+    gap23 のみ pt スケール、gap12/gap34 は 0-1 スケール。
+    """
+    g12 = cand.get("gap12")
+    g23 = g34 = None
+    riders = sorted(cand.get("riders", []), key=lambda r: r.get("ai_rank", 99))
+    if len(riders) >= 3:
+        try:
+            g23 = riders[1]["pred_prob_pct"] - riders[2]["pred_prob_pct"]  # pt
+        except (KeyError, TypeError):
+            g23 = None
+    if len(riders) >= 4:
+        try:
+            g34 = (riders[2]["pred_prob_pct"] - riders[3]["pred_prob_pct"]) / 100.0
+        except (KeyError, TypeError):
+            g34 = None
+    return (
+        round(g12, 4) if g12 is not None else None,
+        round(g34, 4) if g34 is not None else None,
+        round(g23, 2) if g23 is not None else None,
+    )
+
+
 def _insert_candidates_sqlite(
     target_date: str, rows: list[tuple], existing: set[str]
 ) -> tuple[int, list[str]]:
@@ -39,7 +67,7 @@ def _insert_candidates_sqlite(
     inserted = 0
     newly_inserted_bases: list[str] = []
     with get_connection() as conn:
-        for target_date_v, store_key, rank, pred, n_combos in rows:
+        for target_date_v, store_key, rank, pred, n_combos, g12, g34, g23 in rows:
             base = store_key.rsplit("#", 1)[0]
             if any(k.startswith(base + "#") and k != store_key for k in existing):
                 continue
@@ -47,9 +75,9 @@ def _insert_candidates_sqlite(
                 continue
             conn.execute(
                 "INSERT OR IGNORE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,0,0,0,'wt',False)",
-                (target_date_v, store_key, rank, pred, n_combos),
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,bet_amount,route,miwokuri,gap12,gap34,gap23) "
+                "VALUES (?,?,?,?,?,0,0,0,'wt',False,?,?,?)",
+                (target_date_v, store_key, rank, pred, n_combos, g12, g34, g23),
             )
             existing.add(store_key)
             inserted += 1
@@ -63,25 +91,27 @@ def _insert_candidates_vps(target_date: str, rows: list[tuple], existing: set[st
     if not db_url:
         return
     to_insert = []
-    for target_date_v, store_key, rank, pred, n_combos in rows:
+    for row in rows:
+        store_key = row[1]
         base = store_key.rsplit("#", 1)[0]
         if any(k.startswith(base + "#") and k != store_key for k in existing):
             continue
-        to_insert.append((target_date_v, store_key, rank, pred, n_combos))
+        to_insert.append(row)
     if not to_insert:
         return
     try:
         import psycopg2  # noqa: PLC0415
         with psycopg2.connect(db_url) as pg_conn:
             with pg_conn.cursor() as cur:
-                for target_date_v, store_key, rank, pred, n_combos in to_insert:
+                for target_date_v, store_key, rank, pred, n_combos, g12, g34, g23 in to_insert:
                     cur.execute(
                         """INSERT INTO keirin.picks_history
                             (race_date, race_key, rank, pred_combo, n_combos,
-                             hit, payout, trio_payout, bet_amount, route, miwokuri)
-                           VALUES (%s, %s, %s, %s, %s, 0, 0, 0, 0, 'wt', FALSE)
+                             hit, payout, trio_payout, bet_amount, route, miwokuri,
+                             gap12, gap34, gap23)
+                           VALUES (%s, %s, %s, %s, %s, 0, 0, 0, 0, 'wt', FALSE, %s, %s, %s)
                            ON CONFLICT DO NOTHING""",
-                        (target_date_v, store_key, rank, pred, n_combos),
+                        (target_date_v, store_key, rank, pred, n_combos, g12, g34, g23),
                     )
     except Exception as e:
         print(f"[write_candidates_wt] VPS INSERT 失敗: {e}", flush=True)
@@ -278,7 +308,8 @@ def main() -> None:
         pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
         n_combos = len(thirds)
         store_key = f"{rk}#CAND"
-        rows.append((target_date, store_key, rank, pred, n_combos))
+        g12, g34, g23 = _calc_gaps(cand)
+        rows.append((target_date, store_key, rank, pred, n_combos, g12, g34, g23))
 
     with get_connection() as conn:
         existing = {
