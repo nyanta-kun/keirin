@@ -63,7 +63,9 @@ def collect(model, date_from, date_to):
         ne_map = dict(c.execute(
             "SELECT race_key, n_entries FROM wt_races WHERE race_date BETWEEN ? AND ?",
             (date_from, date_to)))
-    df = df[df["race_key"].isin({rk for rk, ne in ne_map.items() if ne and int(ne) >= 7})].copy()
+    # 7車ちょうど限定（本番 wave_picks_wt / notify_prerace_wt と同一母集団。
+    # >=7 だと実運用が買わない8/9車が混入し検証と実績が乖離する。2026-07-12）
+    df = df[df["race_key"].isin({rk for rk, ne in ne_map.items() if ne and int(ne) == 7})].copy()
     df = df[df["finish_order"] >= 1].copy()
     if df.empty:
         return []
