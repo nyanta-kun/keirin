@@ -99,3 +99,79 @@ def passes_upset_gate(top3_sum: float, max_tier: str = "Q1_loose") -> bool:
     """
     order = {t: i for i, t in enumerate(UPSET_TIERS)}
     return order[upset_tier(top3_sum)] <= order[max_tier]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SS/S 統合購入ポリシー（doc53・2026-07-12）
+#
+# 検証: scripts/exp_ss_policy_combo_wt.py（SS）/ exp_st_threshold_sweep_wt.py（S）
+#   SS(P3b): 選抜カット ∧ ライン数≥4見送り ∧ ライン平均得点格差≥1.5で2倍賭け
+#     → OOS(2026-04〜07/10) ROI 2.47→3.85（CI[+0.45,+2.53]有意）・的中33→41%
+#     ※適用順序が必須: 格差増額は選抜・4分戦の除外後（4分戦∧格差大はOOS 0.82）
+#   S(f): S通常帯のみ gami 10→15 + 選抜カット（S+帯は現行維持）
+#     → OOS S計ROI 148.6→192.8%・利益CIが両窓で0除外は本構成のみ
+# ═══════════════════════════════════════════════════════════════════════════
+
+SS_STAKE = 100             # SS 基本賭け金（円/点）
+SS_BOOST_STAKE = 200       # SS ライン格差増額時（円/点）
+SS_LINE_GAP_BOOST = 1.5    # ライン平均得点格差(1位-2位) >= で増額
+SS_N_LINES_SKIP = 4        # ライン数 >= で見送り（全単騎レースは除く）
+ST_BASE_GAMI = 15.0        # S通常帯の三連単min下限（S+帯は ST_GAMI=10 のまま）
+
+
+def is_senbatsu(race_type: str | None) -> bool:
+    """「選抜」系レース種別か（選抜/チャレンジ選抜/ガールズ選抜等）。"""
+    return bool(race_type) and "選抜" in str(race_type)
+
+
+def line_score_features(
+    line_points: list[tuple[int | None, float | None]],
+) -> tuple[float | None, int | None, bool | None]:
+    """出走全車の (line_group, race_point) からライン構造特徴を返す。
+
+    returns (avg_gap, n_lines, all_solo)
+      - avg_gap: ライン別 race_point 平均の 1位 − 2位（ライン2本未満は None）
+      - n_lines: ライン本数（line_group の distinct 数）
+      - all_solo: 全員単騎（=ライン本数が車数と一致）か
+    line_group 欠損車が1台でもあれば (None, None, None)（判定はフォールバック側）。
+    """
+    if not line_points:
+        return None, None, None
+    groups: dict[int, list[float]] = {}
+    for lg, rp in line_points:
+        if lg is None or rp is None:
+            return None, None, None
+        groups.setdefault(int(lg), []).append(float(rp))
+    n_lines = len(groups)
+    all_solo = n_lines == len(line_points)
+    if n_lines < 2:
+        return None, n_lines, all_solo
+    means = sorted((sum(v) / len(v) for v in groups.values()), reverse=True)
+    return round(means[0] - means[1], 3), n_lines, all_solo
+
+
+def ss_policy(
+    race_type: str | None,
+    avg_gap: float | None,
+    n_lines: int | None,
+    all_solo: bool | None,
+) -> tuple[str | None, int]:
+    """SS(7PLUS_R) の統合ポリシー判定。
+
+    returns (skip_reason, stake_per_pt)
+      - skip_reason: "選抜" / "4分戦" / None（None=購入可）
+      - stake_per_pt: SS_BOOST_STAKE（格差増額）or SS_STAKE
+    ライン特徴が None（情報欠損）の場合は見送り・増額とも適用しない（基本賭け）。
+    """
+    if is_senbatsu(race_type):
+        return "選抜", 0
+    if n_lines is not None and n_lines >= SS_N_LINES_SKIP and not all_solo:
+        return "4分戦", 0
+    if avg_gap is not None and avg_gap >= SS_LINE_GAP_BOOST:
+        return None, SS_BOOST_STAKE
+    return None, SS_STAKE
+
+
+def st_normal_allowed(race_type: str | None, min_leg_odds: float) -> bool:
+    """S通常帯（S+非該当）の追加ゲート: min(全目)≥ST_BASE_GAMI ∧ 非選抜。"""
+    return min_leg_odds >= ST_BASE_GAMI and not is_senbatsu(race_type)

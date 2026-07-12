@@ -644,8 +644,10 @@ def _main_inner(date, _db_url):
 
             # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
             dec = decisions.get(rk)
+            r_stake = 100  # doc53: ライン格差増額時は decisions.stake=200
             if dec and dec.get("decision") == "buy" and dec.get("thirds"):
                 rank = dec.get("rank", rank)
+                r_stake = int(dec.get("stake") or 100)
                 combo_str = (f"{dec['pivot1']}-{dec['pivot2']}-"
                              + ",".join(map(str, dec["thirds"])))
             rows = conn.execute(
@@ -670,11 +672,13 @@ def _main_inner(date, _db_url):
             pred = f"{p1}-{p2}-" + ",".join(map(str, thirds))
             for t in thirds:
                 if frozenset((p1, p2, t)) == top3:
-                    pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0); hit = True; break
+                    pay = pm.get(rk, {}).get(("trio", frozenset((p1, p2, t))), 0) * r_stake // 100
+                    hit = True
+                    break
             # 不的中に関わらずレース確定三連複/三連単払戻を記録
             trio_pay = pm.get(rk, {}).get(("trio", top3), 0)
             trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(order[:3])), 0)
-            bet = n_combos * 100
+            bet = n_combos * r_stake
             actual = "-".join(map(str, order[:3]))
             stt = start_map.get(rk)
             from datetime import datetime, timezone, timedelta

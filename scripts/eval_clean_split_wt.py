@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.database import get_connection
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
+from src.strategy_wt import line_score_features, ss_policy, st_normal_allowed
 
 # 本番条件（notify_prerace_wt.py と揃える）
 CAND_GAP12 = 0.07
@@ -30,6 +31,8 @@ STP_GAP12 = 0.25
 STP_GAP34 = 0.04
 ST_STAKE = 100
 STP_STAKE = 200
+# doc53 統合ポリシー（選抜/4分戦/ライン格差増額・S通常gami15）は
+# src.strategy_wt の ss_policy / st_normal_allowed を参照（単一実装）
 
 
 def load_boards(race_keys):
@@ -63,6 +66,15 @@ def collect(model, date_from, date_to):
         ne_map = dict(c.execute(
             "SELECT race_key, n_entries FROM wt_races WHERE race_date BETWEEN ? AND ?",
             (date_from, date_to)))
+        rt_map = dict(c.execute(
+            "SELECT race_key, race_type FROM wt_races WHERE race_date BETWEEN ? AND ?",
+            (date_from, date_to)))
+        line_map: dict[str, list] = {}
+        for rk_, lg_, rp_ in c.execute(
+            "SELECT e.race_key, e.line_group, e.race_point FROM wt_entries e "
+            "JOIN wt_races r ON e.race_key = r.race_key "
+            "WHERE r.race_date BETWEEN ? AND ?", (date_from, date_to)):
+            line_map.setdefault(rk_, []).append((lg_, rp_))
     # 7車ちょうど限定（本番 wave_picks_wt / notify_prerace_wt と同一母集団。
     # >=7 だと実運用が買わない8/9車が混入し検証と実績が乖離する。2026-07-12）
     df = df[df["race_key"].isin({rk for rk, ne in ne_map.items() if ne and int(ne) == 7})].copy()
@@ -89,6 +101,7 @@ def collect(model, date_from, date_to):
         if len(fin) < 3:
             continue
         frames = g["frame_no"].astype(int).tolist()
+        avg_gap, n_lines, all_solo = line_score_features(line_map.get(rk, []))
         rows.append({
             "rk": rk, "gap12": gap12,
             "gap23_pt": (p[1] - p[2]) * 100.0,
@@ -99,6 +112,9 @@ def collect(model, date_from, date_to):
             "order": (fin[1], fin[2], fin[3]),
             "trio": trio_bd.get(rk, {}),
             "tri": tri_bd.get(rk, {}),
+            # doc53 統合ポリシー用コンテキスト
+            "race_type": rt_map.get(rk),
+            "avg_gap": avg_gap, "n_lines": n_lines, "all_solo": all_solo,
         })
     return rows
 
@@ -113,14 +129,19 @@ def eval_ss(rows):
             continue
         if r["gap12"] < SS_GAP12 or r["gap23_pt"] < GAP23_MIN:
             continue
+        # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額
+        skip_reason, stake = ss_policy(
+            r["race_type"], r["avg_gap"], r["n_lines"], r["all_solo"])
+        if skip_reason:
+            continue
         pay = 0
         for t, o in legs.items():
             if frozenset({r["p1"], r["p2"], t}) == r["top3"]:
-                pay = int(o * 100)
+                pay = int(o * stake)
                 break
         n += 1
         h += 1 if pay > 0 else 0
-        b += len(legs) * 100
+        b += len(legs) * stake
         pp += pay
     return n, h, b, pp
 
@@ -141,6 +162,9 @@ def eval_st(rows, plus_only=False, base_only=False):
         if not combos or min(combos.values()) < ST_GAMI:
             continue
         is_plus = r["gap12"] >= STP_GAP12 and r["gap34"] >= STP_GAP34
+        # doc53: S通常帯は min>=ST_BASE_GAMI(15) ∧ 非選抜（S+帯は現行のまま）
+        if not is_plus and not st_normal_allowed(r["race_type"], min(combos.values())):
+            continue
         if plus_only and not is_plus:
             continue
         if base_only and is_plus:

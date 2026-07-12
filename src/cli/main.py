@@ -1161,7 +1161,10 @@ def wave_picks_wt(target_date, output_path, model_name,
     )
     from src.models.trainer import load_model
     from src.database import get_connection
-    from src.strategy_wt import race_signals
+    from src.strategy_wt import (
+        SS_BOOST_STAKE, SS_LINE_GAP_BOOST, ST_BASE_GAMI,
+        line_score_features, race_signals, ss_policy, st_normal_allowed,
+    )
     from pathlib import Path
 
     if target_date is None:
@@ -1313,10 +1316,15 @@ def wave_picks_wt(target_date, output_path, model_name,
     plus7_r_races = []      # SSランク（三連複・レース単位gami）
     plus7_st_races = []     # Sランク（三連単 1着固定フォーメーション）
     skipped_7plus_gami = 0
+    skipped_7plus_policy = 0  # doc53: 選抜/4分戦見送り件数
     if include_7plus:
         with get_connection() as conn7:
             n_entries_map = dict(conn7.execute(
                 "SELECT race_key, n_entries FROM wt_races WHERE race_date=?",
+                (target_date,)
+            ).fetchall())
+            race_type_map = dict(conn7.execute(
+                "SELECT race_key, race_type FROM wt_races WHERE race_date=?",
                 (target_date,)
             ).fetchall())
 
@@ -1391,6 +1399,15 @@ def wave_picks_wt(target_date, output_path, model_name,
 
             sig7 = race_signals(p, int(n_ent))
 
+            # ライン構造特徴 + レース種別（doc53 統合ポリシー: 選抜/4分戦/格差増額）
+            race_type7 = race_type_map.get(race_key)
+            _line_pairs7 = [
+                (None if pd.isna(_r.line_group) else int(_r.line_group),
+                 None if pd.isna(_r.race_point) else float(_r.race_point))
+                for _r in grp_sorted.itertuples(index=False)
+            ]
+            line_avg_gap7, line_n_lines7, line_all_solo7 = line_score_features(_line_pairs7)
+
             # 候補（gamiフィルタなし・発走前再検証用）
             plus7_candidates.append({
                 "rank":          "7PLUS_CAND",
@@ -1410,6 +1427,11 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "bet_type":      "3連複",
                 "min_trio_odds": round(float(gami_7), 2) if gami_7 > 0 else None,
                 "gami_rank":     None,  # loop後に plus7_r_races との照合で上書き
+                # doc53 統合ポリシー用コンテキスト（notify_prerace_wt が参照）
+                "race_type":     race_type7,
+                "line_avg_gap":  line_avg_gap7,
+                "line_n_lines":  line_n_lines7,
+                "line_all_solo": line_all_solo7,
             })
 
             # Sランク（三連単 1着固定フォーメーション・doc52追記 2026-07-10）
@@ -1439,8 +1461,10 @@ def wave_picks_wt(target_date, output_path, model_name,
                         if ov:
                             st_combos7.append(ov)
                 gap34_7 = float(p[2] - p[3]) if len(p) >= 4 else 0.0
-                if st_combos7 and min(st_combos7) >= ST_GAMI:
-                    _is_plus7 = gap12_7 >= STP_GAP12 and gap34_7 >= STP_GAP34
+                # doc53: S+帯は現行条件のまま / S通常帯は min≥ST_BASE_GAMI(15) ∧ 非選抜
+                _is_plus7 = gap12_7 >= STP_GAP12 and gap34_7 >= STP_GAP34
+                if st_combos7 and min(st_combos7) >= ST_GAMI and (
+                        _is_plus7 or st_normal_allowed(race_type7, min(st_combos7))):
                     _st_stake7 = STP_STAKE if _is_plus7 else ST_STAKE
                     _n_st = len(st_combos7)
                     plus7_st_races.append({
@@ -1476,6 +1500,13 @@ def wave_picks_wt(target_date, output_path, model_name,
             if gap12_7 < seven_plus_s_gap12 or gap23_pt7 < 1.0:
                 continue
 
+            # doc53 統合ポリシー: 選抜/4分戦は見送り・ライン格差≥1.5は増額
+            ss_skip7, ss_stake7 = ss_policy(
+                race_type7, line_avg_gap7, line_n_lines7, line_all_solo7)
+            if ss_skip7:
+                skipped_7plus_policy += 1
+                continue
+
             thirds_str7 = ",".join(str(t) for t in thirds_7)
             n_pts7 = len(thirds_7)
             plus7_r_races.append({
@@ -1490,12 +1521,14 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "pivot2":      int(pivot2_7),
                 "thirds":      [int(t) for t in thirds_7],
                 "riders":      riders_detail7,
-                "odds_label":  f"min{gami_7:.1f}倍",
+                "odds_label":  f"min{gami_7:.1f}倍"
+                               + (f"・格差増額{ss_stake7}円/点" if ss_stake7 == SS_BOOST_STAKE else ""),
                 "top3_sum":    round(float(sig7["top3_sum"]), 4),
                 "upset_tier":  sig7["upset_tier"],
                 "market_fav":  int(mkt_fav7) if mkt_fav7 is not None else None,
                 "fav_mismatch": bool(mkt_fav7 is not None and mkt_fav7 != pivot1_7),
-                "stake":       int(n_pts7 * 100),
+                "stake":       int(n_pts7 * ss_stake7),
+                "stake_per_pt": int(ss_stake7),
                 "n_points":    int(n_pts7),
                 "combo_str":   f"{pivot1_7}-{pivot2_7}-{thirds_str7}",
                 "bet_type":    "3連複",
@@ -1532,13 +1565,16 @@ def wave_picks_wt(target_date, output_path, model_name,
     lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 SS=三連複 / S=三連単F)")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
     lines.append(f" 7+車(gap12≥{seven_plus_s_gap12:.2f}): SS:{len(plus7_r_races)}件"
-                 f"  S:{len(plus7_st_races)}件  (SS gami不足スキップ:{skipped_7plus_gami}件)")
+                 f"  S:{len(plus7_st_races)}件  (SS gami不足:{skipped_7plus_gami}件"
+                 f" 選抜/4分戦:{skipped_7plus_policy}件)")
     lines.append("=" * 70)
     lines.append(f" SSランク: 三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}+gap23≥1pt  全目購入")
-    lines.append("   2025通年 的中率29.3%・ROI147.6%（真OOS 11月120%/12月140%）")
-    lines.append(f" Sランク: 三連単F 1位→2,3位→全  全目min≥{ST_GAMI:.0f}倍+gap12≥{ST_GAP12:.2f}")
-    lines.append(f"   S+={STP_STAKE}円/点増額(gap12≥{STP_GAP12:.2f}∧gap34≥{STP_GAP34:.2f})"
-                 f"  真OOSプール 的中19.5%・ROI115%")
+    lines.append(f"   選抜/4分戦は見送り・ライン格差≥{SS_LINE_GAP_BOOST}で{SS_BOOST_STAKE}円/点増額"
+                 f"（doc53・OOS ROI385%）")
+    lines.append(f" Sランク: 三連単F 1位→2,3位→全  gap12≥{ST_GAP12:.2f}"
+                 f"  S通常=min≥{ST_BASE_GAMI:.0f}倍∧非選抜")
+    lines.append(f"   S+={STP_STAKE}円/点増額(gap12≥{STP_GAP12:.2f}∧gap34≥{STP_GAP34:.2f}∧min≥{ST_GAMI:.0f}倍)"
+                 f"  doc53 OOS S計ROI193%")
     lines.append("=" * 70)
     lines.append("")
 

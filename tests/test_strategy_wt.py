@@ -90,3 +90,88 @@ def test_load_cuts_equal_values_rejected(monkeypatch, tmp_path):
 def test_stake_units(monkeypatch, top3_sum, expected_mult):
     monkeypatch.setattr(sw, "UPSET_TOP3SUM_CUTS", sw.UPSET_TOP3SUM_CUTS_DEFAULT)
     assert sw.stake_units(top3_sum) == expected_mult
+
+
+# ── doc53 統合ポリシー（2026-07-12） ─────────────────────────────────────────
+
+from src.strategy_wt import (  # noqa: E402
+    SS_BOOST_STAKE, SS_STAKE, is_senbatsu, line_score_features,
+    ss_policy, st_normal_allowed,
+)
+
+
+class TestLineScoreFeatures:
+    def test_basic_two_lines(self):
+        # ライン1: 平均90 / ライン2: 平均88 → avg_gap=2.0
+        pairs = [(1, 92.0), (1, 88.0), (2, 88.0), (2, 88.0), (3, 85.0), (3, 85.0), (3, 85.0)]
+        gap, n_lines, all_solo = line_score_features(pairs)
+        assert gap == 2.0
+        assert n_lines == 3
+        assert all_solo is False
+
+    def test_all_solo(self):
+        pairs = [(i, 80.0 + i) for i in range(1, 8)]
+        gap, n_lines, all_solo = line_score_features(pairs)
+        assert n_lines == 7
+        assert all_solo is True
+        assert gap == 1.0  # 86-85（単騎も1本のラインとして格差計算）
+
+    def test_missing_line_group(self):
+        pairs = [(1, 90.0), (None, 88.0), (2, 85.0)]
+        assert line_score_features(pairs) == (None, None, None)
+
+    def test_single_line(self):
+        pairs = [(1, 90.0), (1, 88.0)]
+        gap, n_lines, all_solo = line_score_features(pairs)
+        assert gap is None
+        assert n_lines == 1
+
+    def test_empty(self):
+        assert line_score_features([]) == (None, None, None)
+
+
+class TestSsPolicy:
+    def test_normal(self):
+        assert ss_policy("Ａ級一般", 0.5, 3, False) == (None, SS_STAKE)
+
+    def test_senbatsu_skip(self):
+        reason, _ = ss_policy("Ａ級選抜", 0.5, 3, False)
+        assert reason == "選抜"
+
+    def test_four_lines_skip(self):
+        reason, _ = ss_policy("Ａ級一般", 3.0, 4, False)
+        assert reason == "4分戦"
+
+    def test_all_solo_not_skipped(self):
+        reason, stake = ss_policy("Ａ級一般", 2.0, 7, True)
+        assert reason is None
+        assert stake == SS_BOOST_STAKE
+
+    def test_boost(self):
+        assert ss_policy("Ａ級一般", 1.5, 3, False) == (None, SS_BOOST_STAKE)
+
+    def test_none_context_fallback(self):
+        assert ss_policy(None, None, None, None) == (None, SS_STAKE)
+
+
+class TestStNormalAllowed:
+    def test_ok(self):
+        assert st_normal_allowed("Ａ級一般", 15.0) is True
+
+    def test_gami_below_15(self):
+        assert st_normal_allowed("Ａ級一般", 12.0) is False
+
+    def test_senbatsu(self):
+        assert st_normal_allowed("Ａ級選抜", 20.0) is False
+
+    def test_none_race_type(self):
+        assert st_normal_allowed(None, 20.0) is True
+
+
+def test_is_senbatsu():
+    assert is_senbatsu("Ａ級選抜")
+    assert is_senbatsu("Ａ級チャレンジ選抜")
+    assert is_senbatsu("Ｌ級ガールズ選抜")
+    assert not is_senbatsu("Ａ級特選")  # 特選は選抜ではない
+    assert not is_senbatsu("Ａ級一般")
+    assert not is_senbatsu(None)

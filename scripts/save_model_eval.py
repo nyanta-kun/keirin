@@ -42,6 +42,7 @@ from src.preprocessing.feature_wt import (
     load_raw_data_wt, build_features_wt, prepare_X,
 )
 from src.models.trainer import load_model
+from src.strategy_wt import line_score_features, ss_policy, st_normal_allowed
 
 # ── バックテスト対象期間 ──────────────────────────────────────────────
 VAL  = ("2025-07-01", "2026-02-28")
@@ -137,6 +138,19 @@ def _load_n_entries(race_keys: list[str]) -> dict[str, int]:
     return {str(rk): (int(ne) if ne else 0) for rk, ne in rows}
 
 
+def _load_race_types(race_keys: list[str]) -> dict[str, str | None]:
+    """wt_races から {race_key: race_type} を返す（doc53 選抜カット用）。"""
+    if not race_keys:
+        return {}
+    with get_connection() as conn:
+        placeholders = ",".join("?" * len(race_keys))
+        rows = conn.execute(
+            f"SELECT race_key, race_type FROM wt_races WHERE race_key IN ({placeholders})",
+            race_keys,
+        ).fetchall()
+    return {str(rk): rt for rk, rt in rows}
+
+
 def run_7plus_backtest(
     df: pd.DataFrame,
     model,
@@ -187,6 +201,7 @@ def run_7plus_backtest(
 
     all_race_keys = df_period["race_key"].unique().tolist()
     n_entries_map = _load_n_entries(all_race_keys)
+    race_type_map = _load_race_types(all_race_keys)
     trio_odds_map = _load_trio_odds(all_race_keys)
     trifecta_odds_map = _load_trifecta_odds(all_race_keys)
 
@@ -226,6 +241,15 @@ def run_7plus_backtest(
         gap12 = probs[0] - probs[1]
         race_bet = False
 
+        # doc53 統合ポリシーのコンテキスト（選抜/4分戦/ライン格差増額）
+        race_type = race_type_map.get(race_key)
+        _line_pairs = [
+            (None if pd.isna(_r.line_group) else int(_r.line_group),
+             None if pd.isna(_r.race_point) else float(_r.race_point))
+            for _r in grp.itertuples(index=False)
+        ]
+        avg_gap, n_lines, all_solo = line_score_features(_line_pairs)
+
         # ── Rランク（表示SS・三連複・レース単位ガミ） ──────────────────────
         if pivot1 in runners and pivot2 in runners:
             rk_trio_odds = trio_odds_map.get(race_key, {})
@@ -239,16 +263,18 @@ def run_7plus_backtest(
             if combo_odds:
                 gami_r = min(combo_odds.values())
                 gap23 = (probs[1] - probs[2]) * 100.0 if len(probs) >= 3 else 0.0
+                # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額（200円/点）
+                _skip_r, _stake_r = ss_policy(race_type, avg_gap, n_lines, all_solo)
                 if (gami_r >= GAMI_THRESHOLD and gap12 >= SEVEN_PLUS_S_GAP12
-                        and gap23 >= GAP23_MIN):
+                        and gap23 >= GAP23_MIN and not _skip_r):
                     race_bet = True
                     r_races += 1
                     for t, ov in combo_odds.items():
-                        total_bets += 100
-                        r_bets += 100
+                        total_bets += _stake_r
+                        r_bets += _stake_r
                         if frozenset({pivot1, pivot2, t}) == top3_set:
                             # 公式払戻金は10円単位に切り捨て
-                            pay = round(ov * 100) // 10 * 10
+                            pay = (round(ov * 100) // 10 * 10) * (_stake_r // 100)
                             total_returns += pay
                             total_hits += 1
                             r_returns += pay
@@ -272,9 +298,11 @@ def run_7plus_backtest(
 
             if st_combos:
                 gami_st = min(st_combos.values())
-                if gami_st >= ST_GAMI:
-                    gap34 = (probs[2] - probs[3]) if len(probs) >= 4 else 0.0
-                    is_plus = (gap12 >= STP_GAP12 and gap34 >= STP_GAP34)
+                gap34 = (probs[2] - probs[3]) if len(probs) >= 4 else 0.0
+                is_plus = (gap12 >= STP_GAP12 and gap34 >= STP_GAP34)
+                # doc53: S通常帯は min>=ST_BASE_GAMI(15) ∧ 非選抜（S+帯は現行のまま）
+                if gami_st >= ST_GAMI and (
+                        is_plus or st_normal_allowed(race_type, gami_st)):
                     stake = STP_STAKE if is_plus else ST_STAKE
                     race_bet = True
                     if is_plus:

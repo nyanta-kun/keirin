@@ -64,6 +64,37 @@ def test_skip_when_min_odds_below_10():
     assert combos == []
 
 
+# ── doc53: S通常帯 min>=15 ∧ 非選抜（S+帯は現行 min>=10 のまま） ──────────
+
+def test_st_normal_skip_when_min_between_10_and_15():
+    """S通常帯: min が [10,15) はガミ閾値引き上げ（doc53）により見送り。"""
+    rank, combos, _, _ = np_wt._determine_st_rank(_pick(), _odds_data(12.0))
+    assert rank == "なし"
+    assert combos == []
+
+
+def test_stp_still_allowed_when_min_between_10_and_15():
+    """S+帯は現行条件のまま: min が [10,15) でも成立する。"""
+    pick = _pick(gap12=0.30, probs=(60.0, 30.0, 25.0, 15.0))  # gap34=0.10
+    rank, _, _, stake = np_wt._determine_st_rank(pick, _odds_data(12.0))
+    assert rank == "7PLUS_STP"
+    assert stake == np_wt.STP_STAKE
+
+
+def test_st_normal_skip_senbatsu():
+    """S通常帯: 選抜レースは min>=15 でも見送り。"""
+    rank, _, _, _ = np_wt._determine_st_rank(
+        _pick(), _odds_data(20.0), race_type="Ａ級選抜")
+    assert rank == "なし"
+
+
+def test_stp_allowed_in_senbatsu():
+    """S+帯は選抜カットの対象外（現行条件維持）。"""
+    pick = _pick(gap12=0.30, probs=(60.0, 30.0, 25.0, 15.0))
+    rank, _, _, _ = np_wt._determine_st_rank(pick, _odds_data(20.0), race_type="Ａ級選抜")
+    assert rank == "7PLUS_STP"
+
+
 def test_skip_when_gap12_below_015():
     rank, _, _, _ = np_wt._determine_st_rank(_pick(gap12=0.12), _odds_data(20.0))
     assert rank == "なし"
