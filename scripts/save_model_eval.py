@@ -361,11 +361,13 @@ def save_to_db(
 
     with get_connection() as conn:
         for row in rows:
+            # evaluated_at を明示更新（PG の ON CONFLICT DO UPDATE は列リストに
+            # ある列しか SET しないため、省略すると既存行の評価日時が残る）
             conn.execute(
                 "INSERT OR REPLACE INTO model_evaluation "
                 "(model_name, period_from, period_to, period_type, "
-                " n_picks, n_hits, total_bet, total_payout, roi) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " n_picks, n_hits, total_bet, total_payout, roi, evaluated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
                 row,
             )
     print(
