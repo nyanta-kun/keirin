@@ -1768,6 +1768,98 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(m_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {m_path}  (M候補 {len(m_candidates)}件・◎不一致×システム◎/ペーパー検証)")
 
+    # ── A候補（◎一致×波乱×別ライン先頭・二連単・ペーパートレード検証 2026-07-16〜）──
+    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が一致した波乱見込み
+    # レースで、◎と別ラインの「先頭」のうち競走得点最上位の1車を軸にする
+    # （検証: kiseki scratchpad wt_match_hitrate_frontier.py 窓1 ROI100.2%/窓2 96.7%）。
+    # オッズ判定（盤面7車・二連単 目5〜50倍）は発走15分前に
+    # notify_prerace_wt.judge_a が確定する。mto 条件はなし（U/M との相違点）。
+    if include_7plus:
+        a_candidates = []
+        # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
+        pm_fallback_a = None
+        if "prediction_mark" not in df.columns:
+            pm_fallback_a = {}
+            with get_connection() as conn_a:
+                for _rk_a, _fno_a, _pm_a in conn_a.execute(
+                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
+                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
+                    "WHERE r.race_date = ?", (target_date,)
+                ).fetchall():
+                    if _pm_a is not None:
+                        pm_fallback_a.setdefault(_rk_a, {})[int(_fno_a)] = int(_pm_a)
+
+        for race_key, grp in df.groupby("race_key"):
+            if n_entries_map.get(race_key, 0) != 7:
+                continue
+            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+            if len(grp_sorted) != 7:
+                continue
+            if _hour_skip(_hour_of(grp_sorted)):
+                continue
+            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
+            if ent < U_ENTROPY_MIN:  # Uと同じ凍結値を再利用
+                continue
+
+            def _a_int(v):
+                return None if v is None or pd.isna(v) else int(v)
+
+            rows_a = list(grp_sorted.itertuples(index=False))
+
+            # WT◎（prediction_mark==1）の存在確認
+            if pm_fallback_a is None:
+                wt_marks_a = [int(r_a.frame_no) for r_a in rows_a
+                              if _a_int(getattr(r_a, "prediction_mark", None)) == 1]
+            else:
+                wt_marks_a = [fno for fno, pm_v in pm_fallback_a.get(race_key, {}).items()
+                              if pm_v == 1]
+            if not wt_marks_a:
+                continue
+            wt_fno_a = min(wt_marks_a)
+
+            # システム◎ = pred_prob 1位。WT◎と一致のレースのみ対象（Mと逆条件）
+            r1_a = rows_a[0]
+            top_fno_a = int(r1_a.frame_no)
+            if top_fno_a != wt_fno_a:
+                continue
+
+            # 軸 = ◎と別ラインの「先頭」（line_pos==1）のうち競走得点最上位。
+            # ◎のライン不明（単騎等）の場合は全ライン先頭が対象。
+            # 得点欠損は -1 扱い、同点は車番大きい方（検証スクリプトと同一の決定則）。
+            lg1_a = _a_int(getattr(r1_a, "line_group", None))
+            rivals_a = []
+            for r_a in rows_a:
+                fno_a = int(r_a.frame_no)
+                if fno_a == top_fno_a:
+                    continue
+                if _a_int(getattr(r_a, "line_pos", None)) != 1:
+                    continue
+                lg_a = _a_int(getattr(r_a, "line_group", None))
+                if lg1_a is not None and lg_a == lg1_a:
+                    continue
+                rp_a = getattr(r_a, "race_point", None)
+                rp_val = float(rp_a) if rp_a is not None and rp_a == rp_a else -1.0
+                rivals_a.append((rp_val, fno_a))
+            if not rivals_a:
+                continue
+            axis_rp_a, axis_fno_a = max(rivals_a)
+
+            a_candidates.append({
+                "race_key":   race_key,
+                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                "start_time": grp_sorted["start_time"].iloc[0],
+                "entropy":    round(float(ent), 4),
+                "pair":       {"axis": axis_fno_a, "top": top_fno_a},
+                "axis_rp":    round(axis_rp_a, 1) if axis_rp_a >= 0 else None,
+            })
+
+        a_suffix = "_night_a_candidates.json" if out_stem.endswith("_night") else "_a_candidates.json"
+        a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{a_suffix}"
+        with open(a_path, "w", encoding="utf-8") as f:
+            json.dump(a_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {a_path}  (A候補 {len(a_candidates)}件・◎一致×波乱×別L先頭/ペーパー検証)")
+
 
 @cli.command("backtest-wt")
 @click.option("--from", "from_date", default="2025-01-01", help="評価開始日")
