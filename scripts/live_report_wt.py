@@ -1,14 +1,14 @@
 """live実測レポートCLI — picks_history(route='wt')の集計・ドリフト割引率・必要標本数。
 
 G02: 採否判断の唯一の裁定者（live実測）を見える化する。
-  1. ランク別成績: 7PLUS_R(表示SS)/7PLUS_ST(表示S)/7PLUS_STP(表示S+) 別
+  1. ランク別成績: 7PLUS_R(表示SS) 別（S/S+は2026-07-15全廃・集計対象外）
      n・的中率・投資額・払戻・ROI・bootstrap CI・最大払戻除去ROI
   2. タグ別成績: detail.json の fav_mismatch / upset_tier / top3_sum帯 を race_key で picks_history に突合
   3. 朝→確定ドリフト割引率: wt_odds_snapshot(morning/evening) vs wt_odds(確定) のオッズ帯別ドリフト率
   4. 必要標本数の推定: 現在の的中率・払戻分布を所与として ROI CI下限 >100% に必要な残R数
   5. --from/--to 期間指定、--format md でマークダウン出力
 
-ランク体系は notify_prerace_wt.py（2026-07-10〜）に準拠。内部 rank 列は 7PLUS_R/7PLUS_ST/7PLUS_STP
+ランク体系は notify_prerace_wt.py（2026-07-10〜）に準拠。内部 rank 列は 7PLUS_R
 のみが購入対象（見送り miwokuri=True・候補 7PLUS_CAND は集計から除外・notify_results_wt.py の
 集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
 
@@ -32,8 +32,8 @@ from roi_robustness_wt import roi_summary  # noqa: E402
 
 # ── ランク体系（2026-07-10〜・notify_prerace_wt.py と同一） ──────────────
 # 内部rank（DB格納値） → 表示ラベル。購入対象はこの3つのみ（見送り/候補は集計除外）。
-RANKS = ["7PLUS_R", "7PLUS_ST", "7PLUS_STP"]
-RANK_LABELS = {"7PLUS_R": "SS", "7PLUS_ST": "S", "7PLUS_STP": "S+"}
+RANKS = ["7PLUS_R"]
+RANK_LABELS = {"7PLUS_R": "SS"}
 
 # ── picks_history 集計 ─────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ RANK_LABELS = {"7PLUS_R": "SS", "7PLUS_ST": "S", "7PLUS_STP": "S+"}
 def _load_picks(date_from: str | None, date_to: str | None) -> list[dict]:
     """picks_history から route='wt' の購入確定行（見送り・候補を除く）を取得。
 
-    購入対象ランクは 7PLUS_R(表示SS・三連複)/7PLUS_ST(表示S・三連単F)/7PLUS_STP(表示S+・同増額) の3種。
+    購入対象ランクは 7PLUS_R(表示SS・三連複) のみ。
     見送り(miwokuri=True)・候補(7PLUS_CAND)・bet_amount=0（プレースホルダー行）は集計対象外
     （notify_results_wt.py の _query_stats と同一条件）。
     """
@@ -131,7 +131,7 @@ def _top3_band(v) -> str | None:
 
 
 def _rank_section(picks: list[dict]) -> dict[str, dict]:
-    """ランク別 (7PLUS_R/7PLUS_ST/7PLUS_STP・表示SS/S/S+) の roi_summary を返す。"""
+    """ランク別 (7PLUS_R・表示SS) の roi_summary を返す。"""
     buckets: dict[str, tuple[list, list]] = {}
     for r in picks:
         rank = r["rank"]
@@ -150,7 +150,7 @@ def _rank_section(picks: list[dict]) -> dict[str, dict]:
 def _tag_section(picks: list[dict], tags: dict[str, dict]) -> dict:
     """タグ有無別の live ROI を計算する。
 
-    picks は _load_picks で購入確定ランク(7PLUS_R/7PLUS_ST/7PLUS_STP)のみに
+    picks は _load_picks で購入確定ランク(7PLUS_R)のみに
     絞り込み済みのため、ここでは追加のランク除外は不要（全件が対象）。
     """
     main_picks = picks
@@ -511,7 +511,7 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
     picks = _load_picks(date_from, date_to)
     tags = _load_tags(date_from, date_to)
 
-    # ランク別（7PLUS_R/7PLUS_ST/7PLUS_STP の3種のみ・_load_picks で購入確定行に絞り込み済み）
+    # ランク別（7PLUS_R のみ・_load_picks で購入確定行に絞り込み済み）
     rank_summaries = _rank_section(picks)
     rank_raw: dict[str, dict] = {}
     for rank in RANKS:

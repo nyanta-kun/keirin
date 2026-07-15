@@ -106,10 +106,9 @@ def fixture_picks_file():
 
 def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
     picks = nr._parse_picks_full(_FIXTURE_DATE)
-    # 7+車 Sランク（2026-07-10〜は三連単 7PLUS_ST）を採点対象。slot は "7plus_st"。
-    assert ("京王閣", 3, "7plus_st") in picks
-    assert picks[("京王閣", 3, "7plus_st")][0] == "7PLUS_ST"
-    assert len(picks) == 1
+    # S/S+（三連単F）は 2026-07-15 全廃 → 旧txtのSセクションは採点対象外
+    assert not any(slot == "7plus_st" for (_, _, slot) in picks)
+    assert len(picks) == 0
 
 
 # ── _parse_picks_full: SS と S が別 slot で並立し、Aランクは無視される ──
@@ -128,7 +127,7 @@ _WIDE_FIXTURE = """\
 
 
 def test_parse_picks_full_wide_coexists_with_main():
-    """新日付(2026-07-10〜)のSSランクは 7PLUS_R、Sは並立、廃止済みAランクは無視。"""
+    """新日付(2026-07-10〜)のSSランクは 7PLUS_R。廃止済みS/Aランクは無視。"""
     path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_WIDE_DATE}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_WIDE_FIXTURE, encoding="utf-8")
@@ -137,11 +136,10 @@ def test_parse_picks_full_wide_coexists_with_main():
     finally:
         path.unlink(missing_ok=True)
     assert ("京王閣", 3, "7plus_r") in picks
-    assert ("京王閣", 5, "7plus_st") in picks
-    assert ("京王閣", 7, "7plus_a") not in picks  # Aランク廃止 → 無視
+    assert ("京王閣", 5, "7plus_st") not in picks  # S/S+全廃 → 無視
+    assert ("京王閣", 7, "7plus_a") not in picks   # Aランク廃止 → 無視
     assert picks[("京王閣", 3, "7plus_r")][0] == "7PLUS_R"
-    assert picks[("京王閣", 5, "7plus_st")][0] == "7PLUS_ST"
-    assert len(picks) == 2, "7plus_r と 7plus_st のみ2エントリ"
+    assert len(picks) == 1, "7plus_r のみ1エントリ"
 
 
 def test_parse_picks_full_old_date_ss_is_legacy():

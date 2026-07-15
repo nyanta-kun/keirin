@@ -7,9 +7,8 @@ wave_picks_wt_{date}.txt の公開買い目と prerace_decisions を、winticket
 ランク体系（2026-07-10〜）:
   SS(#7R)  = 三連複 レース単位 min(全目)≥7 全目購入（内部rank 7PLUS_R）
   S/S+(#7ST) = 三連単 1着固定F（7PLUS_ST/STP）
-    ※ 優位性なしのため 2026-07-15 に全廃。生成・購入は停止済みで、
-      本ファイルの #7ST 採点ロジックは過去日・廃止前購入分の精算互換のためのみ残す
-  旧SS(#7SS)/旧S(#7S) = 買い目カット方式（廃止済み・過去日再採点の互換のみ）
+    ※ 優位性なしのため 2026-07-15 に全廃（過去分も無効。採点・集計・DBから除外）
+  旧SS(#7SS)/旧S(#7S) = 買い目カット方式（廃止済み・採点対象外）
 
 また candidates.json にあり購入されなかった候補レースを miwokuri=True で保存する。
 """
@@ -146,8 +145,7 @@ def _parse_picks_full(target_date: str) -> dict:
                 rank = "7PLUS_R" if target_date >= "2026-07-10" else "7PLUS_SS"
             elif "【7+車 Rランク】" in line: rank = "7PLUS_R"   # 移行期の旧表記互換
             elif "【7+車 Sランク】" in line:
-                # 2026-07-10〜 の「Sランク」は三連単フォーメーション 7PLUS_ST。以前は旧S。
-                rank = "7PLUS_ST" if target_date >= "2026-07-10" else "7PLUS_S"
+                rank = None   # S/S+（三連単F）は 2026-07-15 全廃・過去分も採点対象外
             elif "【7+車 Aランク】" in line: rank = None   # 廃止済み
             elif "【7+車】" in line: rank = "7PLUS_S"  # 旧フォーマット後方互換
             elif "【SSランク】" in line: rank = None   # 旧SS/S/A/B/WIDEは採点対象外
@@ -158,8 +156,7 @@ def _parse_picks_full(target_date: str) -> dict:
             elif rank:
                 m = re.match(r"\s+(\d{1,2}:\d{2})\s+(\S+)\s+(\d+)R\s+\[\d+車\]\s+(.+?)\s+\(\d+点", line)
                 if m:
-                    slot = {"7PLUS_SS": "7plus_ss", "7PLUS_R": "7plus_r",
-                            "7PLUS_ST": "7plus_st"}.get(rank, "7plus_s")
+                    slot = {"7PLUS_SS": "7plus_ss", "7PLUS_R": "7plus_r"}.get(rank, "7plus_s")
                     picks[(m.group(2), int(m.group(3)), slot)] = (rank, m.group(1), m.group(4))
     return picks
 
@@ -360,7 +357,7 @@ def _query_stats(like):
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*) AS races, SUM(hit) AS hits, SUM(payout) AS returns_, SUM(bet_amount) AS bets "
-            "FROM picks_history WHERE route='wt' AND rank IN ('7PLUS_SS','7PLUS_S','7PLUS_R','7PLUS_ST','7PLUS_STP') "
+            "FROM picks_history WHERE route='wt' AND rank = '7PLUS_R' "
             "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r["races"] or 0, "hits": r["hits"] or 0, "returns": r["returns_"] or 0, "bets": r["bets"] or 0}
 
@@ -484,7 +481,7 @@ def _main_inner(date, _db_url):
     code2name = {c: n for n, c in name2code.items()}
     for _rk, _dec in decisions.items():
         if "#" in _rk:
-            continue  # {rk}#ST は下の三連単ブロックで処理
+            continue  # {rk}#ST（S/S+・全廃済み）等のサフィックス付きキーは対象外
         if _dec.get("decision") != "buy" or not _dec.get("thirds"):
             continue
         if not _rk.startswith(dc):
@@ -500,24 +497,6 @@ def _main_inner(date, _db_url):
         _slot = {"7PLUS_SS": "7plus_ss", "7PLUS_R": "7plus_r"}.get(_rank, "7plus_s")
         _combo = f"{_dec['pivot1']}-{_dec['pivot2']}-" + ",".join(map(str, _dec["thirds"]))
         picks[(_venue, int(_rno), _slot)] = (_rank, "", _combo)
-
-    # 三連単Sランク（decisions キー {rk}#ST・decision=buy）を picks に注入
-    for _key, _dec in decisions.items():
-        if not _key.endswith("#ST") or _dec.get("decision") != "buy" or not _dec.get("combos"):
-            continue
-        _rk = _key[:-3]
-        if not _rk.startswith(dc):
-            continue
-        try:
-            _, _code, _rno = _rk.split("_")
-        except ValueError:
-            continue
-        _venue = code2name.get(_code)
-        if _venue is None:
-            continue
-        _pk = (_venue, int(_rno), "7plus_st")
-        if _pk not in picks:
-            picks[_pk] = (_dec.get("rank", "7PLUS_ST"), "", "")
 
     # miwokuri採点用に candidates.json のレース分も先読みする
     # （gap12/gap34 もここから取得して picks_history に永続化する）
@@ -567,8 +546,6 @@ def _main_inner(date, _db_url):
             existing_gami[_rk.split("#")[0]] = _pg
 
     results_7plus_ss, results_7plus_s, results_7plus_r, history = [], [], [], []
-    results_7plus_st = []                       # 三連単S/S+（1着固定フォーメーション）行
-    st_n, st_b, st_r, st_h = {}, {}, {}, {}     # 三連単S/S+ ランク別 件数/投資/回収/的中
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 旧Sランク 合計
     p7rb = p7rr = p7rh = 0    # 7+車 SSランク（内部R・レース単位gami・全目購入）合計
@@ -579,70 +556,6 @@ def _main_inner(date, _db_url):
             if code is None:
                 continue
             rk = f"{dc}_{code}_{int(race_no):02d}"
-
-            if _slot == "7plus_st":
-                # ── 三連単Sランク（1着固定フォーメーション・doc52追記）採点 ──
-                # 正本は decisions の {rk}#ST。記録がなければ幻の購入防止で不計上。
-                dec_st = decisions.get(rk + "#ST")
-                st_rows_q = conn.execute(
-                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
-                    "ORDER BY finish_order", (rk,)).fetchall()
-                st_order = [int(r[0]) for r in st_rows_q]
-                if len(st_order) < 3:
-                    continue
-                st_runners = {int(r[0]) for r in conn.execute(
-                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order >= 1",
-                    (rk,)).fetchall()}
-                if not (dec_st and dec_st.get("decision") == "buy" and dec_st.get("combos")):
-                    print(f"[notify_results_wt] ST判定記録なし {rk}: 不計上（幻の購入防止）", flush=True)
-                    continue
-                st_rank_v = dec_st.get("rank", "7PLUS_ST")
-                st_stake = int(dec_st.get("stake") or 100)
-                try:
-                    st_p1 = int(dec_st.get("pivot1"))
-                    st_combos = [tuple(int(x) for x in c.split("-")) for c in dec_st["combos"]]
-                except (TypeError, ValueError, AttributeError):
-                    continue
-                if st_p1 not in st_runners:
-                    skipped_dns += 1
-                    continue
-                # 欠車を含む目は返還（投資から除外）
-                live_combos = [c for c in st_combos if set(c) <= st_runners]
-                if not live_combos:
-                    skipped_dns += 1
-                    continue
-                st_actual = (st_order[0], st_order[1], st_order[2])
-                st_hit = st_actual in live_combos
-                st_pay = 0
-                if st_hit:
-                    st_pay = pm.get(rk, {}).get(("trifecta", st_actual), 0) * st_stake // 100
-                st_bet = len(live_combos) * st_stake
-                st_trio_pay = pm.get(rk, {}).get(("trio", frozenset(st_actual)), 0)
-                st_trifecta_pay = pm.get(rk, {}).get(("trifecta", st_actual), 0)
-                _seconds = dec_st.get("seconds") or []
-                st_pred = f"{st_p1}→{','.join(map(str, _seconds))}→全"
-                st_label = "7S+" if st_rank_v == "7PLUS_STP" else "7S"
-                st_tstr = ptime
-                _stt = start_map.get(rk)
-                if _stt:
-                    try:
-                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-                        st_tstr = _dt.fromtimestamp(int(_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
-                    except (ValueError, TypeError):
-                        pass
-                st_mark = f"◎ ¥{st_pay:,}" if st_hit else "×"
-                results_7plus_st.append(
-                    f"[{st_label}] {venue} {race_no}R {st_tstr}  予:{st_pred}"
-                    f"  実:{'-'.join(map(str, st_actual))}  {st_mark}")
-                st_n[st_rank_v] = st_n.get(st_rank_v, 0) + 1
-                st_b[st_rank_v] = st_b.get(st_rank_v, 0) + st_bet
-                if st_hit:
-                    st_r[st_rank_v] = st_r.get(st_rank_v, 0) + st_pay
-                    st_h[st_rank_v] = st_h.get(st_rank_v, 0) + 1
-                history.append((target_date, f"{rk}#7ST", st_rank_v, st_pred, len(live_combos),
-                                int(st_hit), st_pay, st_trio_pay, st_trifecta_pay, st_bet, False, None,
-                                *gap_map.get(rk, (None, None, None))))
-                continue
 
             # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
             dec = decisions.get(rk)
@@ -777,15 +690,15 @@ def _main_inner(date, _db_url):
         if n_backfill:
             print(f"[notify_results_wt] 見送り trio_payout バックフィル {n_backfill} 件", flush=True)
 
-    total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r + results_7plus_st
+    total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r
     if not total_7plus:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         _sync_vps(_db_url, target_date)
         return
 
-    p7b = p7ssb + p7sb + p7rb + sum(st_b.values())
-    p7r = p7ssr + p7sr + p7rr + sum(st_r.values())
-    p7h = p7ssh + p7sh + p7rh + sum(st_h.values())
+    p7b = p7ssb + p7sb + p7rb
+    p7r = p7ssr + p7sr + p7rr
+    p7h = p7ssh + p7sh + p7rh
     p7roi = p7r / p7b * 100 if p7b else 0
     n7 = len(total_7plus)
     header = (
@@ -804,13 +717,9 @@ def _main_inner(date, _db_url):
 
     rank_lines = []
     r_line   = _rank_line("SS", len(results_7plus_r), p7rb, p7rr, p7rh)  # 新SS（内部rank 7PLUS_R）
-    stl_line = _rank_line("S(3連単)", st_n.get("7PLUS_ST", 0),
-                          st_b.get("7PLUS_ST", 0), st_r.get("7PLUS_ST", 0), st_h.get("7PLUS_ST", 0))
-    stp_line = _rank_line("S+(3連単増額)", st_n.get("7PLUS_STP", 0),
-                          st_b.get("7PLUS_STP", 0), st_r.get("7PLUS_STP", 0), st_h.get("7PLUS_STP", 0))
     ss_line = _rank_line("SS*", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 廃止済み旧方式（過去日再採点時のみ）
     s_line  = _rank_line("S*",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
-    for _l in (r_line, stl_line, stp_line, ss_line, s_line):
+    for _l in (r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -828,7 +737,6 @@ def _main_inner(date, _db_url):
 
     emit(msg[:1900])
     print(f"[notify_results_wt] {target_date} 7+車SS {len(results_7plus_r)}R 的中{p7rh} / "
-          f"7+車S(3連単) {sum(st_n.values())}R 的中{sum(st_h.values())} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
 
     _sync_vps(_db_url, target_date)

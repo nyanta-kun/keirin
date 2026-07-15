@@ -161,8 +161,7 @@ def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150)
     plt.rcParams["axes.unicode_minus"] = False
 
     rank_colors = {
-        "7PLUS_R": "#FFD700", "7PLUS_ST": "#AED6F1", "7PLUS_STP": "#C5CAE9",
-        "7PLUS_S": "#AED6F1",
+        "7PLUS_R": "#FFD700",
         "SS": "#FFD700", "S": "#AED6F1", "A": "#ABEBC6", "B": "#F5B7B1",
     }
     role_bg = {"軸1": "#AED6F1", "軸2": "#D6EAF8", "流し": "#EBF5FB", "-": "#FFFFFF"}
