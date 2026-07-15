@@ -271,8 +271,7 @@ def main():
         text = ""
 
     ss_n = len(picks_by_rank["SS"])
-    s_n  = len(picks_by_rank.get("S", []))
-    total = ss_n + s_n
+    total = ss_n
 
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
 
@@ -292,7 +291,7 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}/S:{s_n}")
+            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
@@ -302,12 +301,12 @@ def main():
         gami_skip = n_cands  # 全候補が条件不成立 or 候補なし
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
-            f"推奨なし（SS/S条件不成立）　候補{gami_skip}件（gap12≥0.07）"
+            f"推奨なし（SS条件不成立）　候補{gami_skip}件（gap12≥0.07）"
         )
     else:
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
-            f"SS:{ss_n} / S:{s_n} = {total}件　投資:{total_cost}円\n"
+            f"SS:{ss_n}件　投資:{total_cost}円\n"
             f"候補{n_cands}件（gap12≥0.07）"
         )
     send(header)
@@ -327,8 +326,6 @@ def main():
         sections = []
         if picks_by_rank.get("SS"):
             sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "全目min≥7倍+gap12≥0.10+gap23≥1pt  的中29%/ROI148%(2025)"))
-        if picks_by_rank.get("S"):
-            sections.append(_fmt_rank_block("S",  picks_by_rank["S"],  "三連単F 1位→2,3位→全  全目min≥10倍+gap12≥0.15"))
         for section in sections:
             msg = f"```\n{section}\n```"
             if len(msg) > 1900:
@@ -347,7 +344,7 @@ def main():
     # ── 全レース指数PDF ────────────────────────────────────────────────────────
     _send_index_pdf()
 
-    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}/S:{s_n}, 候補:{n_cands})")
+    print(f"[notify_picks] Discord 送信完了 ({target_date}{'/夜' if night else ''}, SS:{ss_n}, 候補:{n_cands})")
 
 
 if __name__ == "__main__":

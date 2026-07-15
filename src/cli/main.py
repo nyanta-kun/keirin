@@ -18,14 +18,8 @@ from src.scraper.pipeline import CollectionPipeline, setup_logging
 # notify_prerace_wt.py / write_candidates_wt.py の GAMI_THRESHOLD と揃えること。
 GAMI_THRESHOLD = 7.0
 
-# Sランク（三連単 1着固定フォーメーション・doc52追記 2026-07-10）
-# notify_prerace_wt.py の ST_* と揃えること。
-ST_GAP12 = 0.15
-ST_GAMI = 10.0
-STP_GAP12 = 0.25
-STP_GAP34 = 0.04
-ST_STAKE = 100
-STP_STAKE = 200
+# ※ S/S+（三連単 1着固定フォーメーション・7PLUS_ST/STP）は 2026-07-15 に全廃。
+#   優位性なし（keirin_survivor_bias_inflation 調査で ROI 70-90% = 控除率の壁）。
 
 # JKA venue_code → 場名（venue_info DBが取得できない場合のフォールバック）
 _VENUE_NAMES: dict[str, str] = {
@@ -1143,10 +1137,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
 def wave_picks_wt(target_date, output_path, model_name,
                   start_from_hour, start_to_hour, min_gap12, include_7plus,
                   seven_plus_s_gap12):
-    """winticket モデルで wave-picks を生成（7+車 SS=三連複 / S=三連単F 専用）
+    """winticket モデルで wave-picks を生成（7+車 SS=三連複 専用）
 
-    2026-07-10 doc52 以降は 7車専用モード（SS=7PLUS_R / S=7PLUS_ST / S+=7PLUS_STP）のみ。
+    2026-07-10 doc52 以降は 7車専用モード（SS=7PLUS_R）のみ。
     旧≤6車 SS/S/A/B・ワイドロジックは出力に使われないデッドコードだったため削除済み。
+    S/S+（三連単F 7PLUS_ST/STP）は優位性なしのため 2026-07-15 に全廃。
 
     例:
         python -m src.cli.main wave-picks-wt
@@ -1162,8 +1157,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        SS_BOOST_STAKE, SS_LINE_GAP_BOOST, ST_BASE_GAMI,
-        line_score_features, race_signals, ss_policy, st_normal_allowed,
+        SS_BOOST_STAKE, SS_LINE_GAP_BOOST,
+        line_score_features, race_signals, ss_policy,
     )
     from pathlib import Path
 
@@ -1240,25 +1235,6 @@ def wave_picks_wt(target_date, output_path, model_name,
             return None
         return max(q, key=lambda k: q[k])
 
-    def _find_trifecta_odds(odds: dict, pivot1: int, pivot2: int, thirds: list[int]) -> float | None:
-        """3連単オッズの中で pivot1→pivot2→{thirds} の最小値を返す"""
-        trifecta_list = odds.get("trifecta", [])
-        if not trifecta_list:
-            return None
-        targets = {f"{pivot1}-{pivot2}-{t}" for t in thirds}
-        # 区切り文字が不明なので正規化して比較
-        min_odds = None
-        for item in trifecta_list:
-            raw = item["combination"]
-            parts = re.split(r"[-=→]", raw)
-            if len(parts) == 3:
-                normalized = f"{parts[0]}-{parts[1]}-{parts[2]}"
-                if normalized in targets:
-                    v = item["odds_value"]
-                    if min_odds is None or v < min_odds:
-                        min_odds = v
-        return min_odds
-
     try:
         model = load_model(model_name)
     except FileNotFoundError:
@@ -1314,7 +1290,6 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 検証: 2025通年 的中率29.3%・ROI147.6%（真OOS 11月120%/12月140%/2026-06 299%）
     plus7_candidates = []   # gap12≥min_gap12のみ（gamiフィルタなし・prerace用）
     plus7_r_races = []      # SSランク（三連複・レース単位gami）
-    plus7_st_races = []     # Sランク（三連単 1着固定フォーメーション）
     skipped_7plus_gami = 0
     skipped_7plus_policy = 0  # doc53: 選抜/4分戦見送り件数
     if include_7plus:
@@ -1434,63 +1409,6 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "line_all_solo": line_all_solo7,
             })
 
-            # Sランク（三連単 1着固定フォーメーション・doc52追記 2026-07-10）
-            # 1着=指数1位 / 2着=指数2,3位 / 3着=全通り。SS(三連複)とは独立に併存。
-            # S: gap12≥ST_GAP12 ∧ 購入全目の三連単min≥ST_GAMI → 100円/点
-            # S+: さらに gap12≥STP_GAP12 ∧ gap34≥STP_GAP34 → 200円/点（増額）
-            if gap12_7 >= ST_GAP12 and thirds_7:
-                tri_map7 = {}
-                for item in odds7.get("trifecta", []):
-                    ov = item["odds_value"]
-                    if ov is None or ov <= 0 or ov >= 90000:
-                        continue
-                    try:
-                        key3 = tuple(int(x) for x in re.split(r"[-=→]", str(item["combination"])))
-                    except ValueError:
-                        continue
-                    if len(key3) == 3:
-                        tri_map7[key3] = float(ov)
-                r3_7 = int(thirds_7[0])
-                st_combos7 = []
-                for s7 in (int(pivot2_7), r3_7):
-                    for t7 in frames:
-                        t7 = int(t7)
-                        if t7 in (int(pivot1_7), s7):
-                            continue
-                        ov = tri_map7.get((int(pivot1_7), s7, t7))
-                        if ov:
-                            st_combos7.append(ov)
-                gap34_7 = float(p[2] - p[3]) if len(p) >= 4 else 0.0
-                # doc53: S+帯は現行条件のまま / S通常帯は min≥ST_BASE_GAMI(15) ∧ 非選抜
-                _is_plus7 = gap12_7 >= STP_GAP12 and gap34_7 >= STP_GAP34
-                if st_combos7 and min(st_combos7) >= ST_GAMI and (
-                        _is_plus7 or st_normal_allowed(race_type7, min(st_combos7))):
-                    _st_stake7 = STP_STAKE if _is_plus7 else ST_STAKE
-                    _n_st = len(st_combos7)
-                    plus7_st_races.append({
-                        "race_key":    race_key,
-                        "venue_name":  venue_name7,
-                        "race_no":     race_no7,
-                        "start_time":  start_time7,
-                        "n_riders":    int(n_ent),
-                        "gap12":       float(gap12_7),
-                        "ratio":       float(p[0] / (3 / n_ent)) if n_ent else 0.0,
-                        "pivot1":      int(pivot1_7),
-                        "pivot2":      int(pivot2_7),
-                        "thirds":      [int(t) for t in thirds_7],
-                        "riders":      riders_detail7,
-                        "odds_label":  f"min{min(st_combos7):.1f}倍" + ("・S+" if _is_plus7 else ""),
-                        "top3_sum":    round(float(sig7["top3_sum"]), 4),
-                        "upset_tier":  sig7["upset_tier"],
-                        "market_fav":  int(mkt_fav7) if mkt_fav7 is not None else None,
-                        "fav_mismatch": bool(mkt_fav7 is not None and mkt_fav7 != pivot1_7),
-                        "stake":       int(_n_st * _st_stake7),
-                        "n_points":    int(_n_st),
-                        "combo_str":   f"{pivot1_7}→{pivot2_7},{r3_7}→全",
-                        "bet_type":    "3連単F",
-                        "is_plus":     _is_plus7,
-                    })
-
             # SSランク: レース単位除外セマンティクス (doc52・2026-07-10)
             # min(全目)≥GAMI_THRESHOLD ∧ gap12≥seven_plus_s_gap12 ∧ gap23≥1pt → 全目購入
             gap23_pt7 = (p[1] - p[2]) * 100.0 if len(p) >= 3 else 0.0
@@ -1534,7 +1452,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "bet_type":    "3連複",
             })
 
-    if not plus7_r_races and not plus7_st_races:
+    if not plus7_r_races:
         # 推奨0件でもファイルは書き切る（exit 1で中断しない）。
         # notify_picks.py が「推奨はありません」通知＋全レース指数PDF送付の0件正常系を持っており、
         # ここで中断するとファイル欠如→「⚠️ picksファイルが見つかりません」となり
@@ -1545,8 +1463,7 @@ def wave_picks_wt(target_date, output_path, model_name,
         click.echo(msg, err=True)
 
     sort_key = lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"])
-    for lst in (plus7_r_races, plus7_st_races):
-        lst.sort(key=sort_key)
+    plus7_r_races.sort(key=sort_key)
 
     def _fmt(entry):
         n_str = f"{entry['n_riders']}車"
@@ -1562,28 +1479,23 @@ def wave_picks_wt(target_date, output_path, model_name,
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append("=" * 70)
-    lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 SS=三連複 / S=三連単F)")
+    lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 SS=三連複)")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
     lines.append(f" 7+車(gap12≥{seven_plus_s_gap12:.2f}): SS:{len(plus7_r_races)}件"
-                 f"  S:{len(plus7_st_races)}件  (SS gami不足:{skipped_7plus_gami}件"
+                 f"  (SS gami不足:{skipped_7plus_gami}件"
                  f" 選抜/4分戦:{skipped_7plus_policy}件)")
     lines.append("=" * 70)
     lines.append(f" SSランク: 三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}+gap23≥1pt  全目購入")
     lines.append(f"   選抜/4分戦は見送り・ライン格差≥{SS_LINE_GAP_BOOST}で{SS_BOOST_STAKE}円/点増額"
                  f"（doc53・OOS ROI385%）")
-    lines.append(f" Sランク: 三連単F 1位→2,3位→全  gap12≥{ST_GAP12:.2f}"
-                 f"  S通常=min≥{ST_BASE_GAMI:.0f}倍∧非選抜")
-    lines.append(f"   S+={STP_STAKE}円/点増額(gap12≥{STP_GAP12:.2f}∧gap34≥{STP_GAP34:.2f}∧min≥{ST_GAMI:.0f}倍)"
-                 f"  doc53 OOS S計ROI193%")
     lines.append("=" * 70)
     lines.append("")
 
-    # 2026-07-10〜: 旧SS/S(買い目カット)は廃止。SS = 内部rank 7PLUS_R（三連複・全目購入）、
-    # S = 内部rank 7PLUS_ST/STP（三連単フォーメーション）。
+    # 2026-07-10〜: 旧SS/S(買い目カット)は廃止。SS = 内部rank 7PLUS_R（三連複・全目購入）。
+    # S/S+（7PLUS_ST/STP・三連単F）は 2026-07-15 に全廃。
     # notify_results_wt._parse_picks_full が日付で新旧を判別する。
     for p7_rank, p7_list, p7_desc in [
         ("SS", plus7_r_races, f"三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}  全目購入"),
-        ("S", plus7_st_races, f"三連単F 1位→2,3位→全  全目min≥{ST_GAMI:.0f}倍+gap12≥{ST_GAP12:.2f}"),
     ]:
         lines.append(f"【7+車 {p7_rank}ランク】 {len(p7_list)}件  ※{p7_desc}")
         lines.append("─" * 60)
@@ -1595,10 +1507,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     lines.append("=" * 70)
     _cost = lambda lst: sum(int(e.get("stake", 300)) for e in lst)
     p7r_cost = _cost(plus7_r_races)
-    p7st_cost = _cost(plus7_st_races)
     lines.append(f"  7+車 SSランク: {len(plus7_r_races)}件 = {p7r_cost:,}円")
-    lines.append(f"  7+車 Sランク: {len(plus7_st_races)}件 = {p7st_cost:,}円")
-    lines.append(f"  推奨合計投資額: {p7r_cost + p7st_cost:,}円  (7+車)")
+    lines.append(f"  推奨合計投資額: {p7r_cost:,}円  (7+車)")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)
@@ -1615,26 +1525,17 @@ def wave_picks_wt(target_date, output_path, model_name,
     click.echo(f"\n[保存先] {output_path}")
 
     # per-race detail JSON（notify_picks.py の PDF 生成と互換）
-    all_race_details = (
-        [{"rank": "7PLUS_R", **e} for e in plus7_r_races]
-        + [{"rank": ("7PLUS_STP" if e.get("is_plus") else "7PLUS_ST"), **e} for e in plus7_st_races]
-    )
+    all_race_details = [{"rank": "7PLUS_R", **e} for e in plus7_r_races]
     detail_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_detail.json"
     with open(detail_path, "w", encoding="utf-8") as f:
         json.dump(all_race_details, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {detail_path}")
 
-    # candidates に gami_rank を付与（SS/S に入ったレースかを朝通知で表示するため）
+    # candidates に gami_rank を付与（SS に入ったレースかを朝通知で表示するため）
     _r_keys = {r["race_key"] for r in plus7_r_races}
-    _st_keys = {r["race_key"] for r in plus7_st_races}
     for _cand in plus7_candidates:
-        _k = _cand["race_key"]
-        if _k in _r_keys and _k in _st_keys:
-            _cand["gami_rank"] = "SS/S"
-        elif _k in _r_keys:
+        if _cand["race_key"] in _r_keys:
             _cand["gami_rank"] = "SS"
-        elif _k in _st_keys:
-            _cand["gami_rank"] = "S"
 
     # 候補JSON（gamiフィルタなし・gap12≥min_gap12のみ。notify_prerace_wt.py が発走前再検証に使用）
     # 夜run（output_path が _night.txt）は _night_candidates.json に書き、朝分を上書きしない。
@@ -1648,8 +1549,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 全レース指数 JSON（全レース。推奨レースは rank/買い目を付与）。
     # notify_picks.py がこれを読み「全レース指数PDF」を朝のDiscordに添付する。
     rec_by_key = {}
-    for rk_, ent in ([("7PLUS_R", e) for e in plus7_r_races]
-                     + [(("7PLUS_STP" if e.get("is_plus") else "7PLUS_ST"), e) for e in plus7_st_races]):
+    for rk_, ent in [("7PLUS_R", e) for e in plus7_r_races]:
         rec_by_key.setdefault(ent["race_key"], (rk_, ent))
 
     all_index = []

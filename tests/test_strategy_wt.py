@@ -96,7 +96,7 @@ def test_stake_units(monkeypatch, top3_sum, expected_mult):
 
 from src.strategy_wt import (  # noqa: E402
     SS_BOOST_STAKE, SS_STAKE, is_senbatsu, line_score_features,
-    ss_policy, st_normal_allowed,
+    ss_policy,
 )
 
 
@@ -153,19 +153,6 @@ class TestSsPolicy:
     def test_none_context_fallback(self):
         assert ss_policy(None, None, None, None) == (None, SS_STAKE)
 
-
-class TestStNormalAllowed:
-    def test_ok(self):
-        assert st_normal_allowed("Ａ級一般", 15.0) is True
-
-    def test_gami_below_15(self):
-        assert st_normal_allowed("Ａ級一般", 12.0) is False
-
-    def test_senbatsu(self):
-        assert st_normal_allowed("Ａ級選抜", 20.0) is False
-
-    def test_none_race_type(self):
-        assert st_normal_allowed(None, 20.0) is True
 
 
 def test_is_senbatsu():

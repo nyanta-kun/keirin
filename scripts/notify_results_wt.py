@@ -1,4 +1,4 @@
-"""winticket 成績通知＋picks_history保存（7+車 SS=三連複 / S・S+=三連単F）
+"""winticket 成績通知＋picks_history保存（7+車 SS=三連複）
 
 wave_picks_wt_{date}.txt の公開買い目と prerace_decisions を、winticket の確定結果
 (wt_entries.finish_order) と wt_odds(三連複/三連単) で採点し、Discord通知＋picks_history に保存する。
@@ -6,7 +6,9 @@ wave_picks_wt_{date}.txt の公開買い目と prerace_decisions を、winticket
 
 ランク体系（2026-07-10〜）:
   SS(#7R)  = 三連複 レース単位 min(全目)≥7 全目購入（内部rank 7PLUS_R）
-  S/S+(#7ST) = 三連単 1着固定フォーメーション（7PLUS_ST/STP・S+は200円/点）
+  S/S+(#7ST) = 三連単 1着固定F（7PLUS_ST/STP）
+    ※ 優位性なしのため 2026-07-15 に全廃。生成・購入は停止済みで、
+      本ファイルの #7ST 採点ロジックは過去日・廃止前購入分の精算互換のためのみ残す
   旧SS(#7SS)/旧S(#7S) = 買い目カット方式（廃止済み・過去日再採点の互換のみ）
 
 また candidates.json にあり購入されなかった候補レースを miwokuri=True で保存する。

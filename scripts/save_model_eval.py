@@ -4,12 +4,11 @@
 7車ちょうど限定の本番戦略（2026-07-10〜 新ランク体系・notify_prerace_wt.py と同条件）で
 VAL / HOLD を評価し、kiseki フロントエンドの「モデル精度」表示用に保存する。
 
-ランク体系（notify_prerace_wt.py の `_determine_live_rank` / `_determine_st_rank` と同一）:
+ランク体系（notify_prerace_wt.py の `_determine_live_rank` と同一）:
   R  （表示 SS・三連複・レース単位）: min(全目オッズ)≥GAMI_THRESHOLD ∧ gap12≥SEVEN_PLUS_S_GAP12
        ∧ gap23≥GAP23_MIN → 全目購入 100円/点。的中条件=軸2車(pivot1/pivot2)が3着内。
-  ST （表示 S・三連単1着固定フォーメーション）: gap12≥ST_GAP12 ∧ min(全目オッズ)≥ST_GAMI
-       → 100円/点。的中条件=1着=pivot1 ∧ 2着∈{pivot2, 指数3位}。
-  STP（表示 S+・同上 + 増額）: ST条件 + gap12≥STP_GAP12 ∧ gap34≥STP_GAP34 → 200円/点。
+
+※ ST/STP（表示 S/S+・三連単1着固定F）は優位性なしのため 2026-07-15 に全廃。
 
 事前条件:
   - KEIRIN_DB_URL 環境変数が設定されていること
@@ -42,7 +41,7 @@ from src.preprocessing.feature_wt import (
     load_raw_data_wt, build_features_wt, prepare_X,
 )
 from src.models.trainer import load_model
-from src.strategy_wt import line_score_features, ss_policy, st_normal_allowed
+from src.strategy_wt import line_score_features, ss_policy
 
 # ── バックテスト対象期間 ──────────────────────────────────────────────
 VAL  = ("2025-07-01", "2026-02-28")
@@ -61,14 +60,6 @@ N_ENTRIES_TARGET   = 7      # 7車ちょうど限定（8/9車は対象外。writ
 GAMI_THRESHOLD     = 7.0    # min(全目三連複オッズ) 下限
 SEVEN_PLUS_S_GAP12 = 0.10   # gap12 下限
 GAP23_MIN          = 1.0    # gap23（2位-3位予測確率差, pt）下限
-
-# ST/STP（表示S/S+・三連単1着固定フォーメーション）
-ST_GAP12    = 0.15   # S: gap12 下限
-ST_GAMI     = 10.0   # S: min(全目三連単オッズ) 下限
-STP_GAP12   = 0.25   # S+: gap12 下限（Sの条件に追加）
-STP_GAP34   = 0.04   # S+: gap34（3位-4位予測確率差）下限
-ST_STAKE    = 100    # S 1点あたり金額（円）
-STP_STAKE   = 200    # S+ 1点あたり金額（円）
 
 
 def _load_trio_odds(race_keys: list[str]) -> dict[str, dict[frozenset, float]]:
@@ -92,36 +83,6 @@ def _load_trio_odds(race_keys: list[str]) -> dict[str, dict[frozenset, float]]:
         if len(parts) == 3:
             fs = frozenset(int(p) for p in parts)
             odds_map.setdefault(str(rk), {})[fs] = float(ov)
-    return odds_map
-
-
-def _load_trifecta_odds(race_keys: list[str]) -> dict[str, dict[tuple[int, int, int], float]]:
-    """wt_odds(bet_type='trifecta') から {race_key: {(着順タプル): odds}} を返す。
-
-    combination は "1-2-3"（着順そのまま）形式で保存されている（"=" 区切りの trio とは別形式）。
-    ST/STP ランク（三連単1着固定フォーメーション）の判定・採点に使う。
-    """
-    if not race_keys:
-        return {}
-    with get_connection() as conn:
-        placeholders = ",".join("?" * len(race_keys))
-        rows = conn.execute(
-            f"SELECT race_key, combination, odds_value FROM wt_odds "
-            f"WHERE bet_type='trifecta' AND race_key IN ({placeholders})",
-            race_keys,
-        ).fetchall()
-
-    odds_map: dict[str, dict] = {}
-    for rk, combo_str, ov in rows:
-        if ov is None or float(ov) <= 0:
-            continue
-        parts = re.split(r"[-=]", str(combo_str))
-        try:
-            nums = tuple(int(p) for p in parts)
-        except ValueError:
-            continue
-        if len(nums) == 3:
-            odds_map.setdefault(str(rk), {})[nums] = float(ov)
     return odds_map
 
 
@@ -157,23 +118,19 @@ def run_7plus_backtest(
     period_from: str,
     period_to: str,
 ) -> dict:
-    """7車ちょうど限定・現行R/ST/STPランク本番戦略のバックテストを実行して集計結果を返す。
+    """7車ちょうど限定・現行Rランク本番戦略のバックテストを実行して集計結果を返す。
 
-    判定条件は notify_prerace_wt.py の `_determine_live_rank` / `_determine_st_rank` と同値
+    判定条件は notify_prerace_wt.py の `_determine_live_rank` と同値
     （閾値定数は本ファイル冒頭に集約・値は notify_prerace_wt.py の同名定数と一致させること）。
 
     戦略:
       - n_entries == N_ENTRIES_TARGET(7) のレースのみ対象（8/9車は対象外）
       - R  (表示SS・三連複レース単位): min(全目オッズ)≥GAMI_THRESHOLD ∧ gap12≥SEVEN_PLUS_S_GAP12
         ∧ gap23≥GAP23_MIN → 全目購入 100円/点。的中=軸2車(pivot1/pivot2)が3着内。
-      - ST (表示S・三連単1着固定F): gap12≥ST_GAP12 ∧ min(全目オッズ)≥ST_GAMI → 100円/点。
-        的中=1着=pivot1 ∧ 2着∈{pivot2, 指数3位}（3着は全通り）。
-      - STP(表示S+・同上+増額): ST条件 + gap12≥STP_GAP12 ∧ gap34≥STP_GAP34 → 200円/点。
-      R と ST/STP は独立判定（同一レースで両方成立しうる。notify_prerace_wt.py と同様）。
 
     欠車(finish_order=0)の返還処理は notify_results_wt.py の `_void_by_dns` と同一規則:
-      軸(R: pivot1/pivot2、ST: pivot1)が欠車 → 賭け不成立（除外）。
-      相手（third・ST の pivot2/指数3位/3着候補）が欠車 → その目のみ除外。
+      軸(pivot1/pivot2)が欠車 → 賭け不成立（除外）。
+      相手(third)が欠車 → その目のみ除外。
     ランキングは全エントリー（欠車含む・pred_prob=0でランク末尾）で行い、車数判定は
     wt_races.n_entries（出走表基準）で行う — exp_leakfree_rescore_wt.py と同じバイアス回避。
     """
@@ -203,7 +160,6 @@ def run_7plus_backtest(
     n_entries_map = _load_n_entries(all_race_keys)
     race_type_map = _load_race_types(all_race_keys)
     trio_odds_map = _load_trio_odds(all_race_keys)
-    trifecta_odds_map = _load_trifecta_odds(all_race_keys)
 
     # 7車ちょうどのレースのみ（出走表基準・write_candidates_wt.py/main.py と同一基準）
     target_keys = {rk for rk in all_race_keys if n_entries_map.get(rk, 0) == N_ENTRIES_TARGET}
@@ -211,8 +167,6 @@ def run_7plus_backtest(
 
     total_n_bet_races = total_bets = total_returns = total_hits = 0
     r_bets   = r_returns   = r_hits   = r_races   = 0   # R（表示SS）
-    st_bets  = st_returns  = st_hits  = st_races  = 0   # ST（表示S）
-    stp_bets = stp_returns = stp_hits = stp_races = 0   # STP（表示S+）
 
     for race_key, grp in df_7.groupby("race_key"):
         # 欠車(pred_prob=0)は自然にランク末尾へ → pivot1/pivot2 は原則実走者
@@ -280,60 +234,11 @@ def run_7plus_backtest(
                             r_returns += pay
                             r_hits += 1
 
-        # ── ST/STPランク（表示S/S+・三連単1着固定フォーメーション） ─────────
-        # 1着=pivot1固定 / 2着=pivot2または指数3位(r3) / 3着=全通り（軸欠車は不成立・相手欠車はその半分/その目のみ除外）
-        if gap12 >= ST_GAP12 and thirds and pivot1 in runners:
-            rk_tri_odds = trifecta_odds_map.get(race_key, {})
-            r3 = thirds[0]
-            st_combos: dict[tuple[int, int, int], float] = {}
-            for s in (pivot2, r3):
-                if s not in runners:
-                    continue  # 2着候補が欠車 → その半分は購入不成立
-                for t in frames:
-                    if t in (pivot1, s) or t not in runners:
-                        continue
-                    ov = rk_tri_odds.get((pivot1, s, t))
-                    if ov and ov > 0:
-                        st_combos[(pivot1, s, t)] = ov
-
-            if st_combos:
-                gami_st = min(st_combos.values())
-                gap34 = (probs[2] - probs[3]) if len(probs) >= 4 else 0.0
-                is_plus = (gap12 >= STP_GAP12 and gap34 >= STP_GAP34)
-                # doc53: S通常帯は min>=ST_BASE_GAMI(15) ∧ 非選抜（S+帯は現行のまま）
-                if gami_st >= ST_GAMI and (
-                        is_plus or st_normal_allowed(race_type, gami_st)):
-                    stake = STP_STAKE if is_plus else ST_STAKE
-                    race_bet = True
-                    if is_plus:
-                        stp_races += 1
-                    else:
-                        st_races += 1
-                    for combo, ov in st_combos.items():
-                        total_bets += stake
-                        hit_this = (combo == actual_order)
-                        pay = (round(ov * 100) // 10 * 10) * (stake // 100) if hit_this else 0
-                        if is_plus:
-                            stp_bets += stake
-                            if hit_this:
-                                stp_returns += pay
-                                stp_hits += 1
-                        else:
-                            st_bets += stake
-                            if hit_this:
-                                st_returns += pay
-                                st_hits += 1
-                        if hit_this:
-                            total_returns += pay
-                            total_hits += 1
-
         if race_bet:
             total_n_bet_races += 1
 
     roi     = round(total_returns / total_bets, 3) if total_bets > 0 else None
     r_roi   = round(r_returns   / r_bets,   3) if r_bets   > 0 else None
-    st_roi  = round(st_returns  / st_bets,  3) if st_bets  > 0 else None
-    stp_roi = round(stp_returns / stp_bets, 3) if stp_bets > 0 else None
 
     result = {
         "n_picks":      total_n_bet_races,
@@ -344,10 +249,6 @@ def run_7plus_backtest(
         "by_rank": {
             "R":   {"n_picks": r_races,   "n_hits": r_hits,   "total_bet": r_bets,
                     "total_payout": r_returns,   "roi": r_roi},
-            "ST":  {"n_picks": st_races,  "n_hits": st_hits,  "total_bet": st_bets,
-                    "total_payout": st_returns,  "roi": st_roi},
-            "STP": {"n_picks": stp_races, "n_hits": stp_hits, "total_bet": stp_bets,
-                    "total_payout": stp_returns, "roi": stp_roi},
         },
     }
 
@@ -361,8 +262,6 @@ def run_7plus_backtest(
         flush=True,
     )
     print(f"    SS(R):  {r_races:,}R  投資={r_bets:,}  回収={r_returns:,}  ROI={_fmt_roi(r_roi)}", flush=True)
-    print(f"    S(ST):  {st_races:,}R  投資={st_bets:,}  回収={st_returns:,}  ROI={_fmt_roi(st_roi)}", flush=True)
-    print(f"    S+(STP):{stp_races:,}R  投資={stp_bets:,}  回収={stp_returns:,}  ROI={_fmt_roi(stp_roi)}", flush=True)
     return result
 
 
@@ -406,7 +305,7 @@ def save_to_db(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="7車限定R/ST/STPランクバックテスト結果をDBに保存")
+    parser = argparse.ArgumentParser(description="7車限定Rランクバックテスト結果をDBに保存")
     parser.add_argument("--dry-run", action="store_true", help="DB書き込みなし（数値確認のみ）")
     args = parser.parse_args()
 

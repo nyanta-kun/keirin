@@ -13,8 +13,9 @@ cron 設定（crontab -e に追加）:
 
 通知内容（ランク体系 2026-07-10〜）:
   - SS（三連複・レース単位 min(全目)≥7倍 ∧ gap12≥0.10 ∧ gap23≥1pt・全目購入）
-  - S/S+（三連単 1着固定F: 1位→2,3位→全・全目min≥10倍 ∧ gap12≥0.15・S+は200円/点増額）
   - 発走時刻・会場・レース番号・車数・買い目・各目の現在オッズ・ガミ充足確認
+
+※ S/S+（三連単 1着固定F・7PLUS_ST/STP）は優位性なしのため 2026-07-15 に全廃。
 """
 
 from __future__ import annotations
@@ -37,8 +38,8 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    SS_BOOST_STAKE, SS_LINE_GAP_BOOST, SS_STAKE, ST_BASE_GAMI,
-    line_score_features, ss_policy, st_normal_allowed,
+    SS_BOOST_STAKE, SS_LINE_GAP_BOOST, SS_STAKE,
+    line_score_features, ss_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,18 +64,6 @@ SEVEN_PLUS_S_GAP12 = 0.10
 
 # gap23 下限・%ポイント（2位-3位予測確率差 < この値は通知しない）
 GAP23_MIN = 1.0
-
-# ── Sランク（三連単 1着固定フォーメーション・doc52追記 2026-07-10）──
-# 買い目: 1着=指数1位固定 / 2着=指数2,3位 / 3着=全通り（2×(n-2)点）
-# S:  gap12>=0.15 ∧ 購入全目の三連単オッズ min>=10 → 100円/点
-# S+: さらに gap12>=0.25 ∧ gap34>=0.04 → 200円/点（増額）
-# 検証: 真OOSプール(2025-11〜12+2026-06) S=10.2R/日 的中19.5% ROI115% / S+帯 ROI150%
-ST_GAP12 = 0.15
-ST_GAMI = 10.0
-STP_GAP12 = 0.25
-STP_GAP34 = 0.04
-ST_STAKE = 100
-STP_STAKE = 200
 
 
 def _jst_now() -> datetime:
@@ -377,74 +366,6 @@ def _determine_live_rank(
     return "7PLUS_R", [t for t in thirds if t in combo_odds], combo_odds, stake, None
 
 
-def _calc_gap34(pick: dict) -> float | None:
-    """指数3位と4位の予測確率差（0-1スケール）。4人未満は None。"""
-    riders = sorted(pick.get("riders", []), key=lambda r: r.get("ai_rank", 99))
-    if len(riders) < 4:
-        return None
-    try:
-        return (riders[2]["pred_prob_pct"] - riders[3]["pred_prob_pct"]) / 100.0
-    except (KeyError, TypeError):
-        return None
-
-
-def _determine_st_rank(
-    pick: dict, odds_data: dict | None,
-    race_type: str | None = None,
-) -> tuple[str, list, dict, int]:
-    """三連単Sランク判定（1着=指数1位固定 / 2着=指数2,3位 / 3着=全通り）。
-
-    doc53（2026-07-12）: S通常帯は min(全目) >= ST_BASE_GAMI(15) ∧ 非選抜。
-    S+帯（gap12>=0.25 ∧ gap34>=0.04）は現行条件（min>=10）のまま。
-    検証: exp_st_threshold_sweep_wt.py OOS S計ROI 192.8%（現行148.6%）
-
-    returns (rank, combos, leg_odds, stake_per_pt)
-      - rank: "7PLUS_ST"(S) / "7PLUS_STP"(S+増額) / "なし" / "不明"
-      - combos: [(1着, 2着, 3着), ...] 購入目
-      - leg_odds: {"a-b-c": odds} 判定に使った三連単オッズ（記録用）
-    """
-    p1 = pick.get("pivot1")
-    p2 = pick.get("pivot2")
-    thirds = pick.get("thirds", [])
-    gap12 = pick.get("gap12", 0.0)
-
-    if gap12 < ST_GAP12 or len(thirds) < 1:
-        return "なし", [], {}, 0
-    if odds_data is None:
-        return "不明", [], {}, 0
-
-    r3 = thirds[0]  # 指数3位（thirds は指数順）
-    frames = [int(p1), int(p2)] + [int(t) for t in thirds]
-
-    lookup = _build_odds_lookup(odds_data, "trifecta")
-    combos: list[tuple[int, int, int]] = []
-    leg_odds: dict[str, float] = {}
-    for s in (int(p2), int(r3)):
-        for t in frames:
-            if t in (int(p1), s):
-                continue
-            key = (int(p1), s, t)
-            ov = lookup.get(key)
-            if ov and float(ov) > 0:
-                combos.append(key)
-                leg_odds[f"{key[0]}-{key[1]}-{key[2]}"] = float(ov)
-
-    if not combos:
-        return "不明", [], {}, 0
-    # レース単位ガミ条件: 購入全目の三連単オッズ min >= ST_GAMI
-    min_leg = min(leg_odds.values())
-    if min_leg < ST_GAMI:
-        return "なし", [], leg_odds, 0
-
-    gap34 = _calc_gap34(pick)
-    if gap12 >= STP_GAP12 and gap34 is not None and gap34 >= STP_GAP34:
-        return "7PLUS_STP", combos, leg_odds, STP_STAKE
-    # doc53: S通常帯は min>=ST_BASE_GAMI ∧ 非選抜
-    if not st_normal_allowed(race_type, min_leg):
-        return "なし", [], leg_odds, 0
-    return "7PLUS_ST", combos, leg_odds, ST_STAKE
-
-
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
 
 def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
@@ -527,80 +448,6 @@ def _save_picks_history_state(
                         )
         except Exception as e:
             logger.warning("picks_history VPS 更新失敗 %s: %s", race_key, e)
-
-
-def _st_combo_str(pick: dict) -> str:
-    """三連単フォーメーションの表示文字列（例: 3連単F: 1→2,3→全）。"""
-    p1 = pick.get("pivot1")
-    p2 = pick.get("pivot2")
-    thirds = pick.get("thirds", [])
-    r3 = thirds[0] if thirds else "?"
-    return f"3連単F: {p1}→{p2},{r3}→全"
-
-
-def _insert_st_pick(race_key: str, race_date: str, st_rank: str,
-                    pick: dict, combos: list, stake: int) -> None:
-    """三連単Sランクの購入行 {base}#7ST を picks_history に即時反映する（SQLite + VPS）。
-
-    翌朝の notify_results_wt.py が decisions（{rk}#ST）に基づき最終確定する。
-    """
-    store_key = race_key + "#7ST"
-    combo_str = _st_combo_str(pick)
-    n_pts = len(combos)
-    bet = n_pts * stake
-    try:
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, st_rank, combo_str, n_pts, bet),
-            )
-            conn.commit()
-    except Exception as e:
-        logger.warning("ST pick SQLite 書き込み失敗 %s: %s", race_key, e)
-
-    db_url = os.environ.get("KEIRIN_DB_URL")
-    if db_url:
-        try:
-            import psycopg2  # noqa: PLC0415
-            with psycopg2.connect(db_url) as pg_conn:
-                with pg_conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO keirin.picks_history "
-                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
-                        "ON CONFLICT (race_key) DO UPDATE SET "
-                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
-                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, st_rank, combo_str, n_pts, bet),
-                    )
-        except Exception as e:
-            logger.warning("ST pick VPS 書き込み失敗 %s: %s", race_key, e)
-
-
-def _build_st_message(pick: dict, race_info: dict, st_rank: str,
-                      combos: list, leg_odds: dict, stake: int) -> str:
-    """三連単Sランクの15分前通知メッセージ。"""
-    venue = pick.get("venue_name", "?")
-    race_no = pick.get("race_no") or race_info.get("race_no", "?")
-    start = pick.get("start_time", "--:--")
-    n = race_info.get("n_entries", pick.get("n_riders", "?"))
-    gap12 = pick.get("gap12", 0.0)
-    n_pts = len(combos)
-    investment = n_pts * stake
-    min_odds = min(leg_odds.values()) if leg_odds else 0.0
-    is_plus = st_rank == "7PLUS_STP"
-    disp = "7+ S+" if is_plus else "7+ S"
-    icon = "🚲💎" if is_plus else "🚲🔷"
-    plus_note = f"  ※増額 {stake}円/点（gap12≥{STP_GAP12:.2f}∧gap34≥{STP_GAP34:.2f}）\n" if is_plus else ""
-    return (
-        f"{icon} **[{disp}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
-        f"  {_st_combo_str(pick)}（{n_pts}点 / {investment:,}円）\n"
-        f"  **全目min {min_odds:.1f}倍**  gap12={gap12:.3f}\n"
-        f"{plus_note}"
-        f"  的中条件: 1着=指数1位 ∧ 2着=指数2,3位（3着は全通り）"
-    )
 
 
 def _save_prerace_gami(race_key: str, min_odds: float) -> None:
@@ -914,33 +761,8 @@ def main():
                 time.sleep(0.3)
                 continue
 
-            # ── 三連単Sランク判定（SS=三連複とは独立・同一レース併存購入可）──
-            st_rank, st_combos, st_leg_odds, st_stake = _determine_st_rank(
-                pick, odds_data, race_type=_ctx[0])
-            st_bought = st_rank in ("7PLUS_ST", "7PLUS_STP")
-            _r3 = int(pick["thirds"][0]) if pick.get("thirds") else None
-            st_record = {
-                "decision": "buy" if st_bought else "skip",
-                "pivot1": pick.get("pivot1"),
-                "seconds": ([int(pick.get("pivot2")), _r3] if _r3 is not None else []),
-                "stake": st_stake if st_bought else 0,
-                "st_min_odds": round(min(st_leg_odds.values()), 2) if st_leg_odds else None,
-            }
-            if st_bought:
-                st_record["rank"] = st_rank
-                st_record["combos"] = [f"{a}-{b}-{c}" for a, b, c in st_combos]
-                st_record["leg_odds"] = st_leg_odds
-            _save_decision(today, f"{rk}#ST", st_record)
-
-            def _emit_st_buy():
-                _insert_st_pick(rk, ri["race_date"], st_rank, pick, st_combos, st_stake)
-                messages.append((rk, _build_st_message(pick, ri, st_rank, st_combos, st_leg_odds, st_stake)))
-                _label = "S+" if st_rank == "7PLUS_STP" else "S"
-                print(f"[prerace] {rk} 候補 → 三連単{_label} ({len(st_combos)}点×{st_stake}円)", flush=True)
-
             if live_rank == "なし":
                 # SS(三連複)不成立 → 見送りを即時反映 + 判定を確定記録
-                # （ST購入がある場合はこの後の _insert_st_pick が #7ST 行を miwokuri=False で入れ直す）
                 _save_picks_history_state(rk, True)
                 _save_decision(today, rk, {
                     "decision": "skip",
@@ -951,11 +773,7 @@ def main():
                     **_score_stats(pick),
                 })
                 _skip_disp = ss_skip_reason or "オッズ条件"
-                if st_bought:
-                    _emit_st_buy()
-                    print(f"[prerace] {rk} 候補 → 三連複は{_skip_disp}で不成立（三連単{st_rank}のみ）", flush=True)
-                else:
-                    print(f"[prerace] {rk} 候補 → live判定: {_skip_disp}で条件不成立（通知なし）", flush=True)
+                print(f"[prerace] {rk} 候補 → live判定: {_skip_disp}で条件不成立（通知なし）", flush=True)
                 newly_done.add(rk)
                 time.sleep(0.3)
                 continue
@@ -989,8 +807,6 @@ def main():
                 "all_min_odds": min_odds,
                 **_score_stats(pick),
             })
-            if st_bought:
-                _emit_st_buy()
             print(f"[prerace] {rk} 候補 → live判定: {live_rank} ({n_pts}点)", flush=True)
         else:
             # 非候補（detail JSON フォールバック時のみ到達）: 直前オッズで再判定する。
@@ -1003,30 +819,9 @@ def main():
 
             _fb_ctx = _policy_ctx(pick)  # doc53 フォールバック経路もポリシー適用
             if rank in ("7PLUS_ST", "7PLUS_STP"):
-                # 三連単行: 三連単オッズ(ST_GAMI)で再判定。三連複ロジック(GAMI_THRESHOLD)は適用しない
-                st_rank, st_combos, st_leg_odds, st_stake = _determine_st_rank(
-                    pick, odds_data, race_type=_fb_ctx[0])
-                st_bought = st_rank in ("7PLUS_ST", "7PLUS_STP")
-                _r3 = int(pick["thirds"][0]) if pick.get("thirds") else None
-                st_record = {
-                    "decision": "buy" if st_bought else "skip",
-                    "pivot1": pick.get("pivot1"),
-                    "seconds": ([int(pick.get("pivot2")), _r3] if _r3 is not None else []),
-                    "stake": st_stake if st_bought else 0,
-                    "st_min_odds": round(min(st_leg_odds.values()), 2) if st_leg_odds else None,
-                }
-                if st_bought:
-                    st_record["rank"] = st_rank
-                    st_record["combos"] = [f"{a}-{b}-{c}" for a, b, c in st_combos]
-                    st_record["leg_odds"] = st_leg_odds
-                _save_decision(today, f"{rk}#ST", st_record)
-                if st_bought:
-                    _insert_st_pick(rk, ri["race_date"], st_rank, pick, st_combos, st_stake)
-                    messages.append((rk, _build_st_message(pick, ri, st_rank, st_combos, st_leg_odds, st_stake)))
-                    print(f"[prerace] {rk} 非候補 → 三連単{st_rank} ({len(st_combos)}点×{st_stake}円)", flush=True)
-                else:
-                    _save_picks_history_state(rk, True)
-                    print(f"[prerace] {rk} 非候補 → 三連単条件不成立（見送り・通知なし）", flush=True)
+                # S/S+（三連単F）は 2026-07-15 に全廃。旧detail JSONの残存行は見送り扱い。
+                _save_picks_history_state(rk, True)
+                print(f"[prerace] {rk} 非候補 → 三連単ランク廃止済み（見送り・通知なし）", flush=True)
                 newly_done.add(rk)
                 time.sleep(0.3)
                 continue

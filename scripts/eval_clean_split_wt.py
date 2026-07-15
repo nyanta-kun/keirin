@@ -1,7 +1,8 @@
 """クリーン分割モデルの評価（2026-07-10）
 
 指定モデルで test 期間（学習に未使用）と 7月フォワード期間の
-SS（三連複レース単位）/ S・S+（三連単1着固定F）規則の成績を算出する。
+SS（三連複レース単位）規則の成績を算出する。
+※ S/S+（三連単1着固定F）は優位性なしのため 2026-07-15 に全廃・評価対象から除外。
 
 使い方:
   .venv/bin/python scripts/eval_clean_split_wt.py --model lgbm_wt_h1eval \
@@ -18,21 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.database import get_connection
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import line_score_features, ss_policy, st_normal_allowed
+from src.strategy_wt import line_score_features, ss_policy
 
 # 本番条件（notify_prerace_wt.py と揃える）
 CAND_GAP12 = 0.07
 SS_GAP12 = 0.10
 SS_GAMI = 7.0
 GAP23_MIN = 1.0
-ST_GAP12 = 0.15
-ST_GAMI = 10.0
-STP_GAP12 = 0.25
-STP_GAP34 = 0.04
-ST_STAKE = 100
-STP_STAKE = 200
-# doc53 統合ポリシー（選抜/4分戦/ライン格差増額・S通常gami15）は
-# src.strategy_wt の ss_policy / st_normal_allowed を参照（単一実装）
+# doc53 統合ポリシー（選抜/4分戦/ライン格差増額）は src.strategy_wt の ss_policy を参照（単一実装）
 
 
 def load_boards(race_keys):
@@ -146,38 +140,6 @@ def eval_ss(rows):
     return n, h, b, pp
 
 
-def eval_st(rows, plus_only=False, base_only=False):
-    n = h = b = pp = 0
-    for r in rows:
-        if r["gap12"] < ST_GAP12:
-            continue
-        combos = {}
-        for s in (r["p2"], r["r3"]):
-            for t in r["frames"]:
-                if t in (r["p1"], s):
-                    continue
-                ov = r["tri"].get((r["p1"], s, t))
-                if ov:
-                    combos[(r["p1"], s, t)] = ov
-        if not combos or min(combos.values()) < ST_GAMI:
-            continue
-        is_plus = r["gap12"] >= STP_GAP12 and r["gap34"] >= STP_GAP34
-        # doc53: S通常帯は min>=ST_BASE_GAMI(15) ∧ 非選抜（S+帯は現行のまま）
-        if not is_plus and not st_normal_allowed(r["race_type"], min(combos.values())):
-            continue
-        if plus_only and not is_plus:
-            continue
-        if base_only and is_plus:
-            continue
-        stake = STP_STAKE if is_plus else ST_STAKE
-        pay = int(combos[r["order"]] * stake) if r["order"] in combos else 0
-        n += 1
-        h += 1 if pay > 0 else 0
-        b += len(combos) * stake
-        pp += pay
-    return n, h, b, pp
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -194,10 +156,7 @@ def main():
         days = len({r["rk"][:8] for r in rows}) or 1
         print(f"\n===== {f} 〜 {t}（候補{len(rows)}R / 開催{days}日） =====")
         print(f"{'区分':<14} {'R数':>5} {'R/日':>5} {'的中率':>6} {'投資':>9} {'払戻':>9} {'ROI':>7}")
-        for label, fn in (("SS(三連複)", eval_ss),
-                          ("S計(三連単)", eval_st),
-                          ("  うちS+帯", lambda r: eval_st(r, plus_only=True)),
-                          ("  うちS通常", lambda r: eval_st(r, base_only=True))):
+        for label, fn in (("SS(三連複)", eval_ss),):
             n, h, b, pp = fn(rows)
             if n == 0:
                 print(f"{label:<14} {'0':>5}")
