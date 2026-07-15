@@ -290,7 +290,7 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}  SS:{ss_n}")
+            send_file(str(pdf), caption=f"📊 {label} {md}  S1:{ss_n}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
@@ -300,12 +300,12 @@ def main():
         gami_skip = n_cands  # 全候補が条件不成立 or 候補なし
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
-            f"推奨なし（SS条件不成立）　候補{gami_skip}件（gap12≥0.07）"
+            f"推奨なし（S1条件不成立）　候補{gami_skip}件（gap12≥0.07）"
         )
     else:
         header = (
             f"🚲 **{title_label} {target_date}**  [7+車]\n"
-            f"SS:{ss_n}件　投資:{total_cost}円\n"
+            f"S1:{ss_n}件　投資:{total_cost}円\n"
             f"候補{n_cands}件（gap12≥0.07）"
         )
     send(header)
