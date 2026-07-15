@@ -1157,7 +1157,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        line_score_features, race_signals, ss_policy,
+        U_ENTROPY_MIN,
+        line_score_features, race_signals, ss_policy, u_entropy,
     )
     from pathlib import Path
 
@@ -1612,6 +1613,68 @@ def wave_picks_wt(target_date, output_path, model_name,
     with open(allindex_path, "w", encoding="utf-8") as f:
         json.dump(all_index, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {allindex_path}  (全{len(all_index)}レース指数)")
+
+    # ── U候補（波乱ライン連れ込み・ペーパートレード検証 2026-07-16〜）──────────
+    # 朝はモデル情報のみで候補を抽出する（オッズ判定は発走15分前に
+    # notify_prerace_wt.judge_u が盤面7車・mto・市場順位・買い目オッズで確定）。
+    #   対象: 7車ちょうど ∧ u_entropy(全7車 pred_prob) >= U_ENTROPY_MIN
+    #   ペア候補: 穴=モデル3位内 ∧ (単騎 or ライン先頭/番手)、
+    #             相方=同ライン ∧ 脚質「逃」∧ 穴と別人
+    if include_7plus:
+        u_candidates = []
+        for race_key, grp in df.groupby("race_key"):
+            if n_entries_map.get(race_key, 0) != 7:
+                continue
+            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+            if len(grp_sorted) != 7:
+                continue
+            if _hour_skip(_hour_of(grp_sorted)):
+                continue
+            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
+            if ent < U_ENTROPY_MIN:
+                continue
+
+            def _u_int(v):
+                return None if v is None or pd.isna(v) else int(v)
+
+            rows_u = list(grp_sorted.itertuples(index=False))
+            pairs_u = []
+            for rank_idx_u, r_u in enumerate(rows_u[:3], start=1):  # モデル順位3位以内
+                lg_u = _u_int(getattr(r_u, "line_group", None))
+                ls_u = _u_int(getattr(r_u, "line_size", None))
+                lp_u = _u_int(getattr(r_u, "line_pos", None))
+                if not (ls_u == 1 or lp_u in (1, 2)):
+                    continue
+                if lg_u is None:
+                    continue  # ラインなし → 同ラインの相方なし
+                dark_fno = int(r_u.frame_no)
+                for m_u in rows_u:
+                    m_fno = int(m_u.frame_no)
+                    m_lg = _u_int(getattr(m_u, "line_group", None))
+                    m_style = m_u.style if isinstance(getattr(m_u, "style", None), str) else ""
+                    if m_fno == dark_fno or m_lg is None or m_lg != lg_u or m_style != "逃":
+                        continue
+                    pairs_u.append({
+                        "dark": dark_fno,
+                        "dark_model_rank": rank_idx_u,
+                        "mate": m_fno,
+                    })
+            if not pairs_u:
+                continue
+            u_candidates.append({
+                "race_key":   race_key,
+                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                "start_time": grp_sorted["start_time"].iloc[0],
+                "entropy":    round(float(ent), 4),
+                "pairs":      pairs_u,
+            })
+
+        u_suffix = "_night_u_candidates.json" if out_stem.endswith("_night") else "_u_candidates.json"
+        u_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{u_suffix}"
+        with open(u_path, "w", encoding="utf-8") as f:
+            json.dump(u_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
 
 
 @cli.command("backtest-wt")
