@@ -26,7 +26,7 @@ CAND_GAP12 = 0.07
 SS_GAP12 = 0.10
 SS_GAMI = 7.0
 GAP23_MIN = 1.0
-# doc53 統合ポリシー（選抜/4分戦/ライン格差増額）は src.strategy_wt の ss_policy を参照（単一実装）
+# ポリシー（2026-07-16〜: 選抜カットのみ）は src.strategy_wt の ss_policy を参照（単一実装）
 
 
 def load_boards(race_keys):
@@ -133,7 +133,7 @@ def eval_ss(rows):
             continue
         if r["gap12"] < SS_GAP12 or r["gap23_pt"] < GAP23_MIN:
             continue
-        # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額
+        # ポリシー: 選抜のみ見送り（2026-07-16〜）
         skip_reason, stake = ss_policy(
             r["race_type"], r["avg_gap"], r["n_lines"], r["all_solo"])
         if skip_reason:

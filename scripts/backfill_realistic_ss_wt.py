@@ -2,7 +2,7 @@
 
 指数ランキング・買い目は発走前のオッズ盤面掲載車（欠車除く・落車失格含む）で作成し、
 落車・失格絡みの買い目は購入のまま外れ計上する（eval_clean_split_wt.collect の実精算方式）。
-doc53 統合ポリシー（選抜/4分戦見送り・ライン格差>=1.5で200円/点増額）も適用する。
+購入ポリシー（2026-07-16〜: 選抜レースのみ見送り・常に100円/点）も適用する。
 
 クリーンモデル lgbm_wt（学習<=2026-06-30）で判定を再導出し、
 picks_history 行（買い #7R + 見送り #CAND）を JSON に出力する。
@@ -48,7 +48,7 @@ def main() -> None:
         trifecta_top3_pay = (int(r["tri"].get(r["order"], 0) * 100) // 10 * 10
                              if r["order"] in r["tri"] else 0)
 
-        # ── SS 判定（min全目>=7 ∧ gap12>=0.10 ∧ gap23>=1pt ∧ doc53ポリシー）──
+        # ── SS 判定（min全目>=7 ∧ gap12>=0.10 ∧ gap23>=1pt ∧ 非選抜）──
         legs = {t: r["trio"].get(frozenset({p1, p2, t})) for t in thirds}
         legs = {t: o for t, o in legs.items() if o}
         gami = min(legs.values()) if legs else None

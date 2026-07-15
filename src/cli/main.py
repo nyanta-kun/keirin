@@ -1157,7 +1157,6 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        SS_BOOST_STAKE, SS_LINE_GAP_BOOST,
         line_score_features, race_signals, ss_policy,
     )
     from pathlib import Path
@@ -1291,7 +1290,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     plus7_candidates = []   # gap12≥min_gap12のみ（gamiフィルタなし・prerace用）
     plus7_r_races = []      # SSランク（三連複・レース単位gami）
     skipped_7plus_gami = 0
-    skipped_7plus_policy = 0  # doc53: 選抜/4分戦見送り件数
+    skipped_7plus_policy = 0  # 選抜見送り件数（4分戦カット・格差増額は2026-07-16廃止）
     if include_7plus:
         with get_connection() as conn7:
             n_entries_map = dict(conn7.execute(
@@ -1374,7 +1373,7 @@ def wave_picks_wt(target_date, output_path, model_name,
 
             sig7 = race_signals(p, int(n_ent))
 
-            # ライン構造特徴 + レース種別（doc53 統合ポリシー: 選抜/4分戦/格差増額）
+            # ライン構造特徴 + レース種別（ポリシー=選抜カットのみ。ライン特徴は分析用に記録継続）
             race_type7 = race_type_map.get(race_key)
             _line_pairs7 = [
                 (None if pd.isna(_r.line_group) else int(_r.line_group),
@@ -1418,9 +1417,8 @@ def wave_picks_wt(target_date, output_path, model_name,
             if gap12_7 < seven_plus_s_gap12 or gap23_pt7 < 1.0:
                 continue
 
-            # doc53 統合ポリシー: 選抜/4分戦は見送り・ライン格差≥1.5は増額
-            ss_skip7, ss_stake7 = ss_policy(
-                race_type7, line_avg_gap7, line_n_lines7, line_all_solo7)
+            # ポリシー: 選抜レースのみ見送り（4分戦カット・格差増額は2026-07-16廃止）
+            ss_skip7, ss_stake7 = ss_policy(race_type7)
             if ss_skip7:
                 skipped_7plus_policy += 1
                 continue
@@ -1439,8 +1437,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "pivot2":      int(pivot2_7),
                 "thirds":      [int(t) for t in thirds_7],
                 "riders":      riders_detail7,
-                "odds_label":  f"min{gami_7:.1f}倍"
-                               + (f"・格差増額{ss_stake7}円/点" if ss_stake7 == SS_BOOST_STAKE else ""),
+                "odds_label":  f"min{gami_7:.1f}倍",
                 "top3_sum":    round(float(sig7["top3_sum"]), 4),
                 "upset_tier":  sig7["upset_tier"],
                 "market_fav":  int(mkt_fav7) if mkt_fav7 is not None else None,
@@ -1483,11 +1480,10 @@ def wave_picks_wt(target_date, output_path, model_name,
     lines.append(f" モデル: {model_name}  生成: {now_str}")
     lines.append(f" 7+車(gap12≥{seven_plus_s_gap12:.2f}): SS:{len(plus7_r_races)}件"
                  f"  (SS gami不足:{skipped_7plus_gami}件"
-                 f" 選抜/4分戦:{skipped_7plus_policy}件)")
+                 f" 選抜:{skipped_7plus_policy}件)")
     lines.append("=" * 70)
     lines.append(f" SSランク: 三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}+gap23≥1pt  全目購入")
-    lines.append(f"   選抜/4分戦は見送り・ライン格差≥{SS_LINE_GAP_BOOST}で{SS_BOOST_STAKE}円/点増額"
-                 f"（doc53・OOS ROI385%）")
+    lines.append("   選抜レースは見送り（実精算検証で選抜ROI 26-39%・2026-07-16〜は選抜カットのみ）")
     lines.append("=" * 70)
     lines.append("")
 

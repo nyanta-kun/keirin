@@ -95,7 +95,7 @@ def test_stake_units(monkeypatch, top3_sum, expected_mult):
 # ── doc53 統合ポリシー（2026-07-12） ─────────────────────────────────────────
 
 from src.strategy_wt import (  # noqa: E402
-    SS_BOOST_STAKE, SS_STAKE, is_senbatsu, line_score_features,
+    SS_STAKE, is_senbatsu, line_score_features,
     ss_policy,
 )
 
@@ -138,17 +138,13 @@ class TestSsPolicy:
         reason, _ = ss_policy("Ａ級選抜", 0.5, 3, False)
         assert reason == "選抜"
 
-    def test_four_lines_skip(self):
-        reason, _ = ss_policy("Ａ級一般", 3.0, 4, False)
-        assert reason == "4分戦"
+    def test_four_lines_not_skipped(self):
+        # 4分戦カットは2026-07-16廃止
+        assert ss_policy("Ａ級一般", 3.0, 4, False) == (None, SS_STAKE)
 
-    def test_all_solo_not_skipped(self):
-        reason, stake = ss_policy("Ａ級一般", 2.0, 7, True)
-        assert reason is None
-        assert stake == SS_BOOST_STAKE
-
-    def test_boost(self):
-        assert ss_policy("Ａ級一般", 1.5, 3, False) == (None, SS_BOOST_STAKE)
+    def test_no_boost(self):
+        # 格差増額は2026-07-16廃止（常に100円/点）
+        assert ss_policy("Ａ級一般", 2.0, 3, False) == (None, SS_STAKE)
 
     def test_none_context_fallback(self):
         assert ss_policy(None, None, None, None) == (None, SS_STAKE)

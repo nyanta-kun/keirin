@@ -102,21 +102,18 @@ def passes_upset_gate(top3_sum: float, max_tier: str = "Q1_loose") -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SS 統合購入ポリシー（doc53・2026-07-12）
+# SS 購入ポリシー（2026-07-16: 選抜カットのみ）
 #
-# 検証: scripts/exp_ss_policy_combo_wt.py
-#   SS(P3b): 選抜カット ∧ ライン数≥4見送り ∧ ライン平均得点格差≥1.5で2倍賭け
-#     → OOS(2026-04〜07/10) ROI 2.47→3.85（CI[+0.45,+2.53]有意）・的中33→41%
-#     ※適用順序が必須: 格差増額は選抜・4分戦の除外後（4分戦∧格差大はOOS 0.82）
+# doc53（2026-07-12）の 4分戦カット・ライン格差≥1.5増額は、実精算方式
+# （盤面ランキング・落車失格=外れ計上）での再検証（exp_ss_policy_realistic_wt.py）で
+# 窓間の方向不一致（4分戦: テスト有効/VAL逆効果、格差帯: テスト110%/VAL56%）と判明し削除。
+# 選抜カットのみ全3窓一貫（選抜セグメント ROI 26%/39%/0%）で維持。
 #
 # ※ S/S+（三連単F 7PLUS_ST/STP）は優位性なしのため 2026-07-15 に全廃
 #   （keirin_survivor_bias_inflation 調査: ROI 70-90% = 控除率の壁）。
 # ═══════════════════════════════════════════════════════════════════════════
 
-SS_STAKE = 100             # SS 基本賭け金（円/点）
-SS_BOOST_STAKE = 200       # SS ライン格差増額時（円/点）
-SS_LINE_GAP_BOOST = 1.5    # ライン平均得点格差(1位-2位) >= で増額
-SS_N_LINES_SKIP = 4        # ライン数 >= で見送り（全単騎レースは除く）
+SS_STAKE = 100             # SS 賭け金（円/点）
 
 
 def is_senbatsu(race_type: str | None) -> bool:
@@ -152,21 +149,18 @@ def line_score_features(
 
 def ss_policy(
     race_type: str | None,
-    avg_gap: float | None,
-    n_lines: int | None,
-    all_solo: bool | None,
+    avg_gap: float | None = None,
+    n_lines: int | None = None,
+    all_solo: bool | None = None,
 ) -> tuple[str | None, int]:
-    """SS(7PLUS_R) の統合ポリシー判定。
+    """SS(7PLUS_R) の購入ポリシー判定（2026-07-16〜: 選抜カットのみ）。
 
     returns (skip_reason, stake_per_pt)
-      - skip_reason: "選抜" / "4分戦" / None（None=購入可）
-      - stake_per_pt: SS_BOOST_STAKE（格差増額）or SS_STAKE
-    ライン特徴が None（情報欠損）の場合は見送り・増額とも適用しない（基本賭け）。
+      - skip_reason: "選抜" / None（None=購入可）
+      - stake_per_pt: SS_STAKE（増額は廃止・常に100円/点）
+    ライン特徴引数（avg_gap/n_lines/all_solo）は 4分戦カット・格差増額の削除に伴い
+    未使用（呼び出し側互換のため残置）。
     """
     if is_senbatsu(race_type):
         return "選抜", 0
-    if n_lines is not None and n_lines >= SS_N_LINES_SKIP and not all_solo:
-        return "4分戦", 0
-    if avg_gap is not None and avg_gap >= SS_LINE_GAP_BOOST:
-        return None, SS_BOOST_STAKE
     return None, SS_STAKE

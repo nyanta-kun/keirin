@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    SS_BOOST_STAKE, SS_LINE_GAP_BOOST, SS_STAKE,
+    SS_STAKE,
     line_score_features, ss_policy,
 )
 
@@ -313,18 +313,18 @@ def _determine_live_rank(
     pick: dict, odds_data: dict | None,
     ctx: tuple | None = None,
 ) -> tuple[str, list, dict, int, str | None]:
-    """7PLUS_CANDレースの現在オッズで R を判定する（doc52 + doc53 統合ポリシー）。
+    """7PLUS_CANDレースの現在オッズで R を判定する。
 
     Rランク = レース単位セマンティクス:
       min(全目オッズ) >= GAMI_THRESHOLD ∧ gap12 >= 0.10 ∧ gap23 >= 1pt → 全目購入。
-    doc53（2026-07-12）: 選抜レース・4分戦以上（全単騎除く）は見送り、
-    ライン平均得点格差 >= 1.5 は SS_BOOST_STAKE 円/点に増額。
+    ポリシー（2026-07-16〜）: 選抜レースのみ見送り。
+    4分戦カット・格差増額（doc53）は実精算方式再検証で方向不一致のため廃止
+    （exp_ss_policy_realistic_wt.py: 4分戦=テスト有効/VAL逆効果、格差帯=テスト110%/VAL56%）。
     的中条件は「軸2車が3着内」で、的中率はオッズに依存しない（モデル起因）。
-    検証: exp_ss_policy_combo_wt.py OOS ROI 3.85（現行2.47・CI[+0.45,+2.53]）
 
     returns (live_rank, valid_thirds, combo_odds, stake_per_pt, skip_reason)
-      - "7PLUS_R": 条件成立（全目購入・stake_per_pt=100 or 200）
-      - "なし": 購入条件不成立（skip_reason: "選抜"/"4分戦"/None=オッズ条件）
+      - "7PLUS_R": 条件成立（全目購入・stake_per_pt=100）
+      - "なし": 購入条件不成立（skip_reason: "選抜"/None=オッズ条件）
       - "不明": オッズ取得失敗
       combo_odds は {third: 現在オッズ}（判定に使った値・記録用）
     """
@@ -336,7 +336,7 @@ def _determine_live_rank(
     if odds_data is None:
         return "不明", thirds, {}, 0, None
 
-    # doc53: 選抜/4分戦見送りはオッズ非依存 → オッズ判定より先に確定
+    # 選抜見送りはオッズ非依存 → オッズ判定より先に確定
     if ctx is None:
         ctx = _policy_ctx(pick)
     skip_reason, stake = ss_policy(*ctx)
@@ -657,8 +657,7 @@ def _build_message(pick: dict, race_info: dict, odds_data: dict | None) -> str:
     synth_str = f"{synth_odds:.2f}倍" if synth_odds > 0 else "—"
     _g23 = _calc_gap23(pick)
     g23_str = f"{_g23:.1f}pt" if _g23 is not None else "—"
-    boost_note = (f"  ※増額 {stake_pp}円/点（ライン格差≥{SS_LINE_GAP_BOOST}）\n"
-                  if stake_pp == SS_BOOST_STAKE else "")
+    boost_note = ""  # 格差増額は2026-07-16廃止（常に100円/点）
 
     msg = (
         f"{rank_icon} **[{rank_disp}]  {venue} {race_no}R  [{n}車]  発走 {start}**\n"
@@ -828,7 +827,7 @@ def main():
 
             # 三連複行（7PLUS_R / 旧互換）: ガミ落ち・オッズ解決不能（欠車等で min_odds=None）は見送り
             # SS（旧カット方式・過去日互換）はガミ目カット済みのため gami判定を適用しない
-            _fb_skip, _fb_stake = ss_policy(*_fb_ctx)  # doc53: 選抜/4分戦見送り・格差増額
+            _fb_skip, _fb_stake = ss_policy(*_fb_ctx)  # 選抜のみ見送り（2026-07-16〜）
             if (rank != "7PLUS_SS" and (min_odds is None or min_odds < GAMI_THRESHOLD)) or _fb_skip:
                 _save_picks_history_state(rk, True)
                 _save_decision(today, rk, {

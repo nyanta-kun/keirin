@@ -2,7 +2,7 @@
 
 Rランク = レース単位セマンティクス: min(全目) >= GAMI_THRESHOLD(7.0)
 ∧ gap12 >= 0.10 ∧ gap23 >= 1pt で全目購入。買い目カット・SOフィルタは廃止。
-doc53（2026-07-12 統合ポリシー）: 選抜/4分戦（全単騎除く）は見送り、
+2026-07-16〜: 選抜のみ見送り（4分戦カット・格差増額は実精算再検証で廃止）。旧doc53:
 ライン平均得点格差 >= 1.5 は 200円/点に増額。
 """
 import notify_prerace_wt as np_wt  # scripts/ は conftest で path 追加済
@@ -102,32 +102,24 @@ def test_skip_challenge_senbatsu():
     assert reason == "選抜"
 
 
-def test_skip_four_lines():
-    """ライン数>=4（全単騎でない）は見送り（skip_reason="4分戦"）。"""
-    rank, _, _, _, reason = np_wt._determine_live_rank(
-        _pick(line_n_lines=4), _odds_data(LEGS_OK))
-    assert rank == "なし"
-    assert reason == "4分戦"
-
-
-def test_no_skip_all_solo_seven_lines():
-    """全単騎（ガールズ等・ライン数=車数）は4分戦見送りの対象外。"""
+def test_no_skip_four_lines():
+    """4分戦カットは2026-07-16廃止 → ライン数>=4でも購入（100円/点）。"""
     rank, _, _, stake, _ = np_wt._determine_live_rank(
-        _pick(line_n_lines=7, line_all_solo=True, line_avg_gap=None), _odds_data(LEGS_OK))
+        _pick(line_n_lines=4), _odds_data(LEGS_OK))
     assert rank == "7PLUS_R"
     assert stake == np_wt.SS_STAKE
 
 
-def test_boost_stake_when_line_gap_large():
-    """ライン平均得点格差 >= 1.5 → 200円/点に増額。"""
+def test_no_boost_when_line_gap_large():
+    """格差増額は2026-07-16廃止 → ライン格差が大きくても常に100円/点。"""
     rank, _, _, stake, _ = np_wt._determine_live_rank(
         _pick(line_avg_gap=2.1), _odds_data(LEGS_OK))
     assert rank == "7PLUS_R"
-    assert stake == np_wt.SS_BOOST_STAKE
+    assert stake == np_wt.SS_STAKE
 
 
 def test_no_boost_without_line_info():
-    """ライン情報欠損（None）は見送り・増額とも適用しない（基本賭けにフォールバック）。"""
+    """ライン情報欠損（None）でも通常購入（100円/点）。"""
     rank, _, _, stake, _ = np_wt._determine_live_rank(
         _pick(line_avg_gap=None, line_n_lines=None, line_all_solo=None),
         _odds_data(LEGS_OK))
@@ -135,8 +127,8 @@ def test_no_boost_without_line_info():
     assert stake == np_wt.SS_STAKE
 
 
-def test_boost_applied_after_skip():
-    """選抜∧格差大は見送りが優先（増額は選抜/4分戦除外後にのみ適用）。"""
+def test_senbatsu_skip_precedes_odds():
+    """選抜は他条件が全て良くても見送り。"""
     rank, _, _, _, reason = np_wt._determine_live_rank(
         _pick(race_type="Ｓ級選抜", line_avg_gap=3.0), _odds_data(LEGS_OK))
     assert rank == "なし"

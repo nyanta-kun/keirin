@@ -193,7 +193,7 @@ def run_7plus_backtest(
         gap12 = probs[0] - probs[1]
         race_bet = False
 
-        # doc53 統合ポリシーのコンテキスト（選抜/4分戦/ライン格差増額）
+        # ポリシーコンテキスト（2026-07-16〜: 選抜カットのみ・ライン特徴は互換引数）
         race_type = race_type_map.get(race_key)
         _line_pairs = [
             (None if pd.isna(_r.line_group) else int(_r.line_group),
@@ -213,7 +213,7 @@ def run_7plus_backtest(
         if combo_odds:
             gami_r = min(combo_odds.values())
             gap23 = (probs[1] - probs[2]) * 100.0 if len(probs) >= 3 else 0.0
-            # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額（200円/点）
+            # ポリシー: 選抜のみ見送り（4分戦カット・格差増額は2026-07-16廃止）
             _skip_r, _stake_r = ss_policy(race_type, avg_gap, n_lines, all_solo)
             if (gami_r >= GAMI_THRESHOLD and gap12 >= SEVEN_PLUS_S_GAP12
                     and gap23 >= GAP23_MIN and not _skip_r):
