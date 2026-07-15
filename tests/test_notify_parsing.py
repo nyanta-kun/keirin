@@ -45,37 +45,38 @@ def test_wide_hit_rule(combo, top3, expect_hit):
     assert frozenset((p1, p2)).issubset(frozenset(top3)) is expect_hit
 
 
-# ── 欠車の無効化ルール: 軸欠車=レース無効 / 相手欠車=その目除外 ──
+# ── 欠車の無効化ルール（board=最終オッズ盤面掲載車。欠車のみ盤面から消える）:
+#    軸欠車=レース無効(返還) / 相手欠車=その目除外 / 落車失格は盤面に残る=外れ計上 ──
 def test_void_by_dns_axis_scratched():
     """軸(p1 or p2)が欠車ならレース無効（返還・不計上）。"""
-    # p2=2 が出走集合に居ない → 無効
-    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], runners={3, 4, 5}, is_wide=False)
+    # p2=2 が盤面に居ない → 無効
+    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], board={3, 4, 5}, is_wide=False)
     assert skip is True and thirds == []
 
 
 def test_void_by_dns_third_scratched():
     """相手(thirds)の欠車はその目のみ除外、残りで採点。"""
     # 相手 1 が欠車 → 3,4 のみ有効
-    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], runners={2, 3, 4, 5}, is_wide=False)
+    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], board={2, 3, 4, 5}, is_wide=False)
     assert skip is False and thirds == [3, 4]
 
 
 def test_void_by_dns_all_thirds_scratched():
     """相手が全員欠車なら買える目なし→無効。"""
-    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], runners={2, 5}, is_wide=False)
+    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], board={2, 5}, is_wide=False)
     assert skip is True and thirds == []
 
 
 def test_void_by_dns_all_runners_ok():
     """全員出走なら無効化なし・thirdsそのまま。"""
-    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], runners={1, 2, 3, 4, 5}, is_wide=False)
+    skip, thirds = nr._void_by_dns(5, 2, [3, 4, 1], board={1, 2, 3, 4, 5}, is_wide=False)
     assert skip is False and thirds == [3, 4, 1]
 
 
 def test_void_by_dns_wide_leg_scratched():
     """ワイドは2車とも軸扱い→どちらか欠車で無効。"""
-    assert nr._void_by_dns(2, 4, [], runners={2, 3, 5}, is_wide=True)[0] is True   # 4欠車
-    assert nr._void_by_dns(2, 4, [], runners={2, 3, 4, 5}, is_wide=True)[0] is False
+    assert nr._void_by_dns(2, 4, [], board={2, 3, 5}, is_wide=True)[0] is True   # 4欠車
+    assert nr._void_by_dns(2, 4, [], board={2, 3, 4, 5}, is_wide=True)[0] is False
 
 
 # ── _parse_picks_full: 7+車フォーマット SS/S の採点対象確認 ──

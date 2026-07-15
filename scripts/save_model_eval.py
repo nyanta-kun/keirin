@@ -128,33 +128,26 @@ def run_7plus_backtest(
       - R  (表示SS・三連複レース単位): min(全目オッズ)≥GAMI_THRESHOLD ∧ gap12≥SEVEN_PLUS_S_GAP12
         ∧ gap23≥GAP23_MIN → 全目購入 100円/点。的中=軸2車(pivot1/pivot2)が3着内。
 
-    欠車(finish_order=0)の返還処理は notify_results_wt.py の `_void_by_dns` と同一規則:
-      軸(pivot1/pivot2)が欠車 → 賭け不成立（除外）。
-      相手(third)が欠車 → その目のみ除外。
-    ランキングは全エントリー（欠車含む・pred_prob=0でランク末尾）で行い、車数判定は
-    wt_races.n_entries（出走表基準）で行う — exp_leakfree_rescore_wt.py と同じバイアス回避。
+    実精算方式（2026-07-15・欠車バイアス排除）:
+      - 指数ランキング・買い目は **発走前のオッズ盤面掲載車**（=購入可能だった車）で作成する。
+        落車・失格・棄権（発走前に不可知）の選手もランキング・買い目に含める。
+      - 落車・失格絡みの買い目は購入扱いのまま外れ計上（返還しない＝実際の精算と同じ）。
+      - 欠車（盤面から除外済み＝発走前に判明・実際も返還）はランキング・買い目に入らない。
+      - 完走者だけでランキングを組み直す旧方式は、落車した指数上位が最初から居なかった
+        ことになる未来情報リークで ROI を約4倍過大評価していた（keirin-survivor-bias-inflation）。
     """
     df_period = df[
         (df["race_date"] >= period_from) &
-        (df["race_date"] <= period_to) &
-        (df["finish_order"].notna())
+        (df["race_date"] <= period_to)
     ].copy()
 
     if df_period.empty:
         print(f"  [{period_from}〜{period_to}] データなし", flush=True)
         return {"n_picks": 0, "n_hits": 0, "total_bet": 0, "total_payout": 0, "roi": None}
 
-    # モデル予測確率を付与（実走者のみで予測し、欠車選手は pred_prob=0 でランク末尾に）
-    # ランキングは全エントリー（欠車含む）で行う — 本番 main.py / exp_leakfree_rescore_wt.py と同条件。
-    df_runners = df_period[df_period["finish_order"] >= 1].copy()
-    X = prepare_X(df_runners)
-    df_runners["pred_prob"] = model.predict_proba(X)[:, 1]
-    df_period = df_period.merge(
-        df_runners[["race_key", "frame_no", "pred_prob"]],
-        on=["race_key", "frame_no"],
-        how="left",
-    )
-    df_period["pred_prob"] = df_period["pred_prob"].fillna(0.0)
+    # モデル予測確率は全エントリーに付与（発走前情報のみ。着順での絞り込みはしない）
+    X = prepare_X(df_period)
+    df_period["pred_prob"] = model.predict_proba(X)[:, 1]
 
     all_race_keys = df_period["race_key"].unique().tolist()
     n_entries_map = _load_n_entries(all_race_keys)
@@ -169,7 +162,17 @@ def run_7plus_backtest(
     r_bets   = r_returns   = r_hits   = r_races   = 0   # R（表示SS）
 
     for race_key, grp in df_7.groupby("race_key"):
-        # 欠車(pred_prob=0)は自然にランク末尾へ → pivot1/pivot2 は原則実走者
+        rk_trio_odds = trio_odds_map.get(race_key, {})
+        if not rk_trio_odds:
+            continue  # オッズなし（中止等）は対象外
+
+        # 発走前のオッズ盤面掲載車 = 購入可能だった車（欠車は盤面から除外済み）。
+        # 落車・失格・棄権の選手は盤面に残っているためランキング・買い目に含まれる。
+        board: set[int] = set()
+        for _combo in rk_trio_odds:
+            board |= {int(x) for x in _combo}
+
+        grp = grp[grp["frame_no"].astype(int).isin(board)]
         grp = grp.sort_values("pred_prob", ascending=False)
         n = len(grp)
         if n < 3:
@@ -186,11 +189,6 @@ def run_7plus_backtest(
         if len(fin) < 3:
             continue  # 結果未確定レース
         top3_set = frozenset(fin["frame_no"].astype(int).tolist())
-        actual_order = tuple(
-            fin.sort_values("finish_order")["frame_no"].astype(int).tolist()[:3]
-        )
-
-        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
 
         gap12 = probs[0] - probs[1]
         race_bet = False
@@ -205,34 +203,32 @@ def run_7plus_backtest(
         avg_gap, n_lines, all_solo = line_score_features(_line_pairs)
 
         # ── Rランク（表示SS・三連複・レース単位ガミ） ──────────────────────
-        if pivot1 in runners and pivot2 in runners:
-            rk_trio_odds = trio_odds_map.get(race_key, {})
-            valid_thirds = [t for t in thirds if t in runners]  # 相手欠車はその目のみ除外
-            combo_odds: dict[int, float] = {}
-            for t in valid_thirds:
-                ov = rk_trio_odds.get(frozenset({pivot1, pivot2, t}))
-                if ov and ov > 0:
-                    combo_odds[t] = ov
+        # 実精算: 盤面掲載車の買い目は全て購入。落車・失格絡みは外れ計上（返還しない）。
+        combo_odds: dict[int, float] = {}
+        for t in thirds:
+            ov = rk_trio_odds.get(frozenset({pivot1, pivot2, t}))
+            if ov and ov > 0:
+                combo_odds[t] = ov
 
-            if combo_odds:
-                gami_r = min(combo_odds.values())
-                gap23 = (probs[1] - probs[2]) * 100.0 if len(probs) >= 3 else 0.0
-                # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額（200円/点）
-                _skip_r, _stake_r = ss_policy(race_type, avg_gap, n_lines, all_solo)
-                if (gami_r >= GAMI_THRESHOLD and gap12 >= SEVEN_PLUS_S_GAP12
-                        and gap23 >= GAP23_MIN and not _skip_r):
-                    race_bet = True
-                    r_races += 1
-                    for t, ov in combo_odds.items():
-                        total_bets += _stake_r
-                        r_bets += _stake_r
-                        if frozenset({pivot1, pivot2, t}) == top3_set:
-                            # 公式払戻金は10円単位に切り捨て
-                            pay = (round(ov * 100) // 10 * 10) * (_stake_r // 100)
-                            total_returns += pay
-                            total_hits += 1
-                            r_returns += pay
-                            r_hits += 1
+        if combo_odds:
+            gami_r = min(combo_odds.values())
+            gap23 = (probs[1] - probs[2]) * 100.0 if len(probs) >= 3 else 0.0
+            # doc53: 選抜/4分戦は見送り・ライン格差>=1.5は増額（200円/点）
+            _skip_r, _stake_r = ss_policy(race_type, avg_gap, n_lines, all_solo)
+            if (gami_r >= GAMI_THRESHOLD and gap12 >= SEVEN_PLUS_S_GAP12
+                    and gap23 >= GAP23_MIN and not _skip_r):
+                race_bet = True
+                r_races += 1
+                for t, ov in combo_odds.items():
+                    total_bets += _stake_r
+                    r_bets += _stake_r
+                    if frozenset({pivot1, pivot2, t}) == top3_set:
+                        # 公式払戻金は10円単位に切り捨て
+                        pay = (round(ov * 100) // 10 * 10) * (_stake_r // 100)
+                        total_returns += pay
+                        total_hits += 1
+                        r_returns += pay
+                        r_hits += 1
 
         if race_bet:
             total_n_bet_races += 1

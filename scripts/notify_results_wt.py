@@ -169,21 +169,39 @@ def _parse_combo(combo_str: str):
     return int(parts[0]), int(parts[1]), thirds
 
 
-def _void_by_dns(p1, p2, thirds, runners, is_wide=False):
-    """欠車(購入不可=返還)の無効化ルール。
+def _void_by_dns(p1, p2, thirds, board, is_wide=False):
+    """欠車(購入不可=返還)の無効化ルール（実精算方式・2026-07-15）。
 
-    runners = そのレースで出走した車(finish_order>=1)の集合。
+    board = 最終オッズ盤面に掲載されていた車（=実際に購入できた車）の集合。
+    欠車はオッズ盤面から除外されるため board に含まれず、返還（集計除外）となる。
+    落車・失格・棄権（発走前に不可知）は board に残るため買い目は購入扱いのまま
+    外れ計上する（実際の精算と同じ。旧・完走者基準の返還扱いは廃止）。
       軸(p1/p2)が欠車      → レース無効（返還）。 returns (True, [])
       相手(thirds)が欠車   → その目のみ除外。     returns (False, 有効thirds)
       相手が全員欠車       → 買える目なし→無効。  returns (True, [])
     ワイドは2車とも軸扱い（どちらか欠車で無効）。
     """
-    if p1 not in runners or p2 not in runners:
+    if p1 not in board or p2 not in board:
         return True, []
     if is_wide:
         return False, []
-    valid = [t for t in thirds if t in runners]
+    valid = [t for t in thirds if t in board]
     return (not valid), valid
+
+
+def _board_frames(conn, race_key: str) -> set[int]:
+    """最終オッズ盤面(trio)に掲載されている車番集合を返す（欠車は掲載されない）。"""
+    board: set[int] = set()
+    for (comb,) in conn.execute(
+        "SELECT combination FROM wt_odds WHERE race_key=? AND bet_type='trio'",
+        (race_key,),
+    ).fetchall():
+        for part in re.split(r"[-=]", str(comb)):
+            try:
+                board.add(int(part))
+            except ValueError:
+                pass
+    return board
 
 
 def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: dict | None = None) -> int:
@@ -572,12 +590,17 @@ def _main_inner(date, _db_url):
             if len(order) < 3:
                 continue
             top3 = frozenset(order[:3])
-            # 出走した車(=finish_order>=1)。これに無い車は欠車/失格=購入不可(返還)。
-            runners = {int(r[0]) for r in conn.execute(
-                "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order >= 1", (rk,)).fetchall()}
+            # 最終オッズ盤面掲載車（=購入できた車）。盤面に無い車=欠車のみ返還扱い。
+            # 落車・失格・棄権は盤面に残る→買い目は購入のまま外れ計上（実精算・2026-07-15）。
+            # 盤面データが無い場合のみ旧・完走者基準にフォールバック（誤没収防止）。
+            board = _board_frames(conn, rk)
+            if not board:
+                board = {int(r[0]) for r in conn.execute(
+                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order >= 1",
+                    (rk,)).fetchall()}
             p1, p2, thirds = _parse_combo(combo_str)
             # ── 欠車の無効化（返還＝損益に計上しない）──
-            skip_race, thirds = _void_by_dns(p1, p2, thirds, runners, is_wide=(rank == "WIDE"))
+            skip_race, thirds = _void_by_dns(p1, p2, thirds, board, is_wide=(rank == "WIDE"))
             if skip_race:
                 skipped_dns += 1
                 continue

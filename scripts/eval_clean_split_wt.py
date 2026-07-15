@@ -72,14 +72,21 @@ def collect(model, date_from, date_to):
     # 7車ちょうど限定（本番 wave_picks_wt / notify_prerace_wt と同一母集団。
     # >=7 だと実運用が買わない8/9車が混入し検証と実績が乖離する。2026-07-12）
     df = df[df["race_key"].isin({rk for rk, ne in ne_map.items() if ne and int(ne) == 7})].copy()
-    df = df[df["finish_order"] >= 1].copy()
     if df.empty:
         return []
+    # 実精算方式（2026-07-15）: ランキングは発走前のオッズ盤面掲載車（欠車除く・落車失格含む）。
+    # 完走者絞り込み（旧 finish_order>=1）は未来情報リークのため廃止。
     df["pred_prob"] = model.predict_proba(prepare_X(df))[:, 1]
 
     trio_bd, tri_bd = load_boards(df["race_key"].unique().tolist())
     rows = []
     for rk, g in df.groupby("race_key"):
+        board = set()
+        for _combo in trio_bd.get(rk, {}):
+            board |= set(_combo)
+        if not board:
+            continue  # オッズなし（中止等）
+        g = g[g["frame_no"].astype(int).isin(board)]
         g = g.sort_values("pred_prob", ascending=False).reset_index(drop=True)
         if len(g) < 5:
             continue
