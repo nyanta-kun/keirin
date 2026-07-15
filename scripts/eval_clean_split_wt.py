@@ -96,7 +96,10 @@ def collect(model, date_from, date_to):
             continue
         fin = {}
         for _, row in g.iterrows():
-            fo = int(row["finish_order"])
+            fo = row["finish_order"]
+            if fo != fo or fo is None:  # NaN（結果未取得・中止等）はスキップ
+                continue
+            fo = int(fo)
             if fo in (1, 2, 3):
                 fin[fo] = int(row["frame_no"])
         if len(fin) < 3:
