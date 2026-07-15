@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    SS_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
+    M_STAKE, SS_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
     line_score_features, ss_policy,
 )
 
@@ -653,6 +653,282 @@ def _process_u_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
     return messages, newly_done
 
 
+# ── M（◎不一致×システム◎・ペーパートレード検証 2026-07-16〜）─────────────────
+# 朝の wave-picks-wt が m_candidates JSON（entropy≥U_ENTROPY_MIN・WT◎≠システム◎・
+# 同ライン逃相方あり）を出力し、ここで発走15分前のライブオッズにより最終判定する。
+# 実際の賭けは行わない（記録 + Discord 通知のみ）。
+# U と同一ペア集合で U が buy のレースは U 優先で M を記録しない（重複排除）。
+
+def judge_m(pair: dict, trio_lookup: dict,
+            u_decision: dict | None = None) -> tuple[str, dict]:
+    """M戦略の発走前ライブオッズ判定（純関数・DB非依存）。
+
+    pair:        朝のM候補 JSON の pair（{"m1","mate"}・朝時点で1件に確定済み）
+    trio_lookup: _build_odds_lookup(odds_data, "trio") が返す {frozenset: odds} 辞書
+    u_decision:  同一レースの decisions {rk}#U 記録（あれば）。U が buy かつ
+                 同一ペア集合なら U 優先で M は見送る。
+
+    判定順（judge_u との相違: 市場順位条件なし・ペア選定なし・U重複排除あり）:
+      ① 盤面（有効オッズ 0<ov<9000 の掲載車）が7車 — 欠車発生なら見送り
+      ② 盤面min三連複オッズ(mto) >= U_MTO_MIN（Uと同じ凍結値）
+      ③ U優先の重複排除: {rk}#U が buy ∧ (dark,mate) と (m1,mate) が同一集合 → 見送り
+      ④ 買い目 = {m1, mate, t}（t=残り5車）のうちオッズ >= U_LEG_MIN_ODDS のみ
+
+    returns (decision, detail)
+      decision: "buy" / "skip" / "不明"（盤面なし→次分再試行）
+      detail:   m1 / mate / mto / combos（"a-b-c" 昇順文字列）
+                / leg_odds（全5目 {label: odds}）/ skip_reason
+    """
+    detail: dict = {"m1": None, "mate": None, "mto": None,
+                    "combos": [], "leg_odds": {}, "skip_reason": None}
+    try:
+        m1 = int(pair["m1"])
+        mate = int(pair["mate"])
+    except (KeyError, TypeError, ValueError):
+        detail["skip_reason"] = "ペア情報不正"
+        return "skip", detail
+    detail["m1"] = m1
+    detail["mate"] = mate
+
+    if not trio_lookup:
+        return "不明", detail
+
+    # 有効オッズのみ採用（0以下=無効、9000以上=placeholder。judge_u と同基準）
+    valid: dict[frozenset, float] = {}
+    for k, ov in trio_lookup.items():
+        try:
+            fv = float(ov)
+        except (TypeError, ValueError):
+            continue
+        if 0 < fv < 9000:
+            valid[k] = fv
+    if not valid:
+        return "不明", detail
+
+    board: set[int] = set()
+    for k in valid:
+        board |= set(k)
+
+    # ① 盤面7車判定（欠車発生なら見送り記録）
+    if len(board) != 7:
+        detail["skip_reason"] = f"盤面{len(board)}車（欠車）"
+        return "skip", detail
+
+    # ② 盤面min三連複オッズ（Uと同じ凍結値）
+    mto = min(valid.values())
+    detail["mto"] = round(mto, 2)
+    if mto < U_MTO_MIN:
+        detail["skip_reason"] = f"mto不足（{mto:.1f} < {U_MTO_MIN}）"
+        return "skip", detail
+
+    # ③ U優先の重複排除: 同一レースの U が buy かつ同一ペア集合なら M は記録しない
+    if u_decision and u_decision.get("decision") == "buy":
+        try:
+            u_pair = {int(u_decision.get("dark")), int(u_decision.get("mate"))}
+        except (TypeError, ValueError):
+            u_pair = set()
+        if u_pair == {m1, mate}:
+            detail["skip_reason"] = "U重複（同一ペア・U優先）"
+            return "skip", detail
+
+    # ④ 買い目 = {m1, mate, t} の三連複のうちオッズ >= U_LEG_MIN_ODDS の目のみ
+    leg_odds: dict[str, float | None] = {}
+    combos: list[str] = []
+    for t in sorted(board - {m1, mate}):
+        label = "-".join(map(str, sorted((m1, mate, t))))
+        ov = valid.get(frozenset({m1, mate, t}))
+        leg_odds[label] = ov
+        if ov is not None and ov >= U_LEG_MIN_ODDS:
+            combos.append(label)
+    detail["leg_odds"] = leg_odds
+    detail["combos"] = combos
+    if not combos:
+        detail["skip_reason"] = f"{U_LEG_MIN_ODDS:.0f}倍以上の目なし"
+        return "skip", detail
+
+    return "buy", detail
+
+
+def _load_m_candidates(today: str) -> list[dict]:
+    """当日のM候補 JSON（昼 + 夜）を読み込む。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_m_candidates.json",
+                  f"wave_picks_wt_{today}_night_m_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("M候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
+
+
+def _insert_m_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """M（ペーパー）の記録行 {base}#7M を picks_history に即時反映する（SQLite + VPS PG）。
+
+    実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
+    （n_combos × M_STAKE）で記録する。翌朝の notify_results_wt.py が
+    decisions（{rk}#M）に基づき最終確定（採点）する。
+    """
+    store_key = race_key + "#7M"
+    bet = n_combos * M_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "7PLUS_M", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("M pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "7PLUS_M", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("M pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """M（ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    m1 = detail.get("m1")
+    mate = detail.get("mate")
+    wt_mark = cand.get("wt_mark")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    ent = cand.get("entropy")
+    ent_str = f"{float(ent):.2f}" if ent is not None else "—"
+    mto = detail.get("mto")
+    mto_str = f"{float(mto):.1f}" if mto is not None else "—"
+    return (
+        f"🧲 **[M・不一致波乱検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸2車: システム◎ {m1} × 相方 {mate}（同ライン・逃）  ※WT◎={wt_mark} と不一致\n"
+        f"  3連複({n_pts}点 / 名目{n_pts * M_STAKE:,}円): "
+        f"`{m1}={mate} 流し（{U_LEG_MIN_ODDS:.0f}倍以上の目のみ）`\n"
+        f"  **条件: entropy={ent_str}(≥{U_ENTROPY_MIN}) mto={mto_str}(≥{U_MTO_MIN})**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
+        + "\n".join(lines) + "\n"
+        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+    )
+
+
+def _process_m_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """M候補の発走前判定・記録・通知メッセージ生成。
+
+    ※ main() では必ず _process_u_candidates の後に呼ぶこと。
+      U優先の重複排除のため、同分に U が保存した decisions（{rk}#U）を
+      _load_decisions で読み直して judge_m に渡す。
+
+    returns (messages, newly_done)
+      messages:   [(m_key, msg)]（buy 成立分のみ）
+      newly_done: 処理完了キー {race_key}#M の集合（オッズ取得失敗は含めない=再試行）
+    """
+    cands = _load_m_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#M" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    # U優先の重複排除用（同分に U が保存した {rk}#U buy を含む最新の decisions）
+    decisions = _load_decisions(today)
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        m_key = f"{rk}#M"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(M) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            # オッズ取得失敗 → notified に入れず次分の実行で再試行
+            print(f"[prerace] {rk} M候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_m(
+            cand.get("pair") or {}, trio_lookup, decisions.get(f"{rk}#U"))
+        if decision == "不明":
+            print(f"[prerace] {rk} M候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
+        _save_decision(today, m_key, {
+            "decision": decision,
+            "rank": "7PLUS_M",
+            "paper": True,
+            "stake": M_STAKE,
+            "entropy": cand.get("entropy"),
+            "wt_mark": cand.get("wt_mark"),
+            **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["m1"], detail["mate"])
+            pred = (f"{detail['m1']}-{detail['mate']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_m_pick(rk, today, pred, len(combos))
+            messages.append((m_key, _build_m_message(cand, ri, detail)))
+            print(f"[prerace] {rk} M候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            print(f"[prerace] {rk} M候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(m_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 # ── 通知メッセージ生成 ────────────────────────────────────────────────────────
 
 def _get_min_trio_odds(pick: dict, odds_data: dict | None) -> float | None:
@@ -1148,6 +1424,16 @@ def main():
         newly_done |= u_done
     except Exception as e:
         logger.exception("U候補処理失敗（SS通知には影響しない）: %s", e)
+
+    # ── M候補（◎不一致×システム◎・ペーパー）処理 ──
+    # 必ず U処理の後に呼ぶ（同分に保存された {rk}#U buy を見て同一ペアの M を
+    # U優先で重複排除するため）。try/except で SS/U 通知を絶対に阻害しない。
+    try:
+        m_messages, m_done = _process_m_candidates(today, now_unix, notified)
+        messages += m_messages
+        newly_done |= m_done
+    except Exception as e:
+        logger.exception("M候補処理失敗（SS/U通知には影響しない）: %s", e)
 
     # 推奨がある場合のみ Discord 送信（ヘッダーなし・詳細メッセージのみ）
     if messages:

@@ -1676,6 +1676,98 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(u_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
 
+    # ── M候補（◎不一致×システム◎・ペーパートレード検証 2026-07-16〜）──────────
+    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致の波乱見込み
+    # レースで、システム◎と同ライン「逃」相方を2車軸にする
+    # （検証: exp_mismatch_m1_wt.py テスト48R 121.8% / VAL 244R 120.9%）。
+    # オッズ判定（盤面7車・mto・15倍以上の目・U重複排除）は発走15分前に
+    # notify_prerace_wt.judge_m が確定する。市場順位条件はなし（Uとの相違点）。
+    if include_7plus:
+        m_candidates = []
+        # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
+        pm_fallback = None
+        if "prediction_mark" not in df.columns:
+            pm_fallback = {}
+            with get_connection() as conn_m:
+                for _rk_m, _fno_m, _pm_m in conn_m.execute(
+                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
+                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
+                    "WHERE r.race_date = ?", (target_date,)
+                ).fetchall():
+                    if _pm_m is not None:
+                        pm_fallback.setdefault(_rk_m, {})[int(_fno_m)] = int(_pm_m)
+
+        for race_key, grp in df.groupby("race_key"):
+            if n_entries_map.get(race_key, 0) != 7:
+                continue
+            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+            if len(grp_sorted) != 7:
+                continue
+            if _hour_skip(_hour_of(grp_sorted)):
+                continue
+            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
+            if ent < U_ENTROPY_MIN:  # Uと同じ凍結値を再利用
+                continue
+
+            def _m_int(v):
+                return None if v is None or pd.isna(v) else int(v)
+
+            rows_m = list(grp_sorted.itertuples(index=False))
+
+            # WT◎（prediction_mark==1）の存在確認
+            if pm_fallback is None:
+                wt_marks = [int(r_m.frame_no) for r_m in rows_m
+                            if _m_int(getattr(r_m, "prediction_mark", None)) == 1]
+            else:
+                wt_marks = [fno for fno, pm_v in pm_fallback.get(race_key, {}).items()
+                            if pm_v == 1]
+            if not wt_marks:
+                continue
+            wt_fno = min(wt_marks)
+
+            # システム◎ = pred_prob 1位。WT◎と不一致のレースのみ対象
+            r1_m = rows_m[0]
+            m1_fno = int(r1_m.frame_no)
+            if m1_fno == wt_fno:
+                continue
+
+            # 相方 = システム◎と同 line_group ∧ 脚質「逃」∧ 別人。
+            # 複数該当は line_pos 相補（◎が番手なら先頭/先頭なら番手）を優先、
+            # 無ければ車番最小の同ライン逃。
+            lg1_m = _m_int(getattr(r1_m, "line_group", None))
+            if lg1_m is None:
+                continue  # ラインなし → 同ラインの相方なし
+            lp1_m = _m_int(getattr(r1_m, "line_pos", None))
+            want_lp_m = 1 if lp1_m == 2 else 2
+            mates_m = []
+            for r_m in rows_m:
+                fno_m = int(r_m.frame_no)
+                lg_m = _m_int(getattr(r_m, "line_group", None))
+                style_m = r_m.style if isinstance(getattr(r_m, "style", None), str) else ""
+                if fno_m == m1_fno or lg_m is None or lg_m != lg1_m or style_m != "逃":
+                    continue
+                mates_m.append((fno_m, _m_int(getattr(r_m, "line_pos", None))))
+            if not mates_m:
+                continue
+            mates_m.sort()  # 車番昇順（フォールバック時の決定性）
+            mate_fno = next((f for f, lp in mates_m if lp == want_lp_m), mates_m[0][0])
+
+            m_candidates.append({
+                "race_key":   race_key,
+                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                "start_time": grp_sorted["start_time"].iloc[0],
+                "entropy":    round(float(ent), 4),
+                "pair":       {"m1": m1_fno, "mate": mate_fno},
+                "wt_mark":    wt_fno,
+            })
+
+        m_suffix = "_night_m_candidates.json" if out_stem.endswith("_night") else "_m_candidates.json"
+        m_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{m_suffix}"
+        with open(m_path, "w", encoding="utf-8") as f:
+            json.dump(m_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {m_path}  (M候補 {len(m_candidates)}件・◎不一致×システム◎/ペーパー検証)")
+
 
 @cli.command("backtest-wt")
 @click.option("--from", "from_date", default="2025-01-01", help="評価開始日")
