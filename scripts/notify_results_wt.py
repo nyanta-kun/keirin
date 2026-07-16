@@ -69,6 +69,8 @@ def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
         cur = pg_conn.cursor()
 
         # パターン1: 同一base_keyに購入済みエントリが存在する#CAND
+        # ※ ペーパー行（#7U/#7M/#7A）は「購入済み」とみなさない（同一レースの
+        #    S1系 #CAND 追跡を巻き込み削除しないため・2026-07-16）
         cur.execute("""
             DELETE FROM keirin.picks_history
             WHERE race_date = %s
@@ -78,10 +80,14 @@ def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
                   FROM keirin.picks_history
                   WHERE race_date = %s
                     AND race_key NOT LIKE %s
+                    AND race_key NOT LIKE %s
+                    AND race_key NOT LIKE %s
+                    AND race_key NOT LIKE %s
                     AND route = %s
               )
               AND route = %s
-        """, (target_date, '%#CAND', target_date, '%#CAND', 'wt', 'wt'))
+        """, (target_date, '%#CAND', target_date, '%#CAND',
+              '%#7U', '%#7M', '%#7A', 'wt', 'wt'))
         deleted1 = cur.rowcount
 
         # パターン2: ローカルSQLiteに存在しない孤立#CAND
@@ -978,6 +984,17 @@ def _main_inner(date, _db_url):
         n_backfill = _backfill_miwokuri_trio_payout(conn)
         if n_backfill:
             print(f"[notify_results_wt] 見送り trio_payout バックフィル {n_backfill} 件", flush=True)
+
+        # ペーパー候補（A/S2/S3）で15分前判定に到達しなかった行（bet_amount=0・
+        # miwokuri=False のまま残存）を見送りに倒す（オッズ取得失敗・候補生成後の中止等）
+        cur_paper = conn.execute(
+            "UPDATE picks_history SET miwokuri = True "
+            "WHERE race_date = ? AND route='wt' AND bet_amount = 0 "
+            "AND NOT miwokuri "
+            "AND (race_key LIKE '%#7U' OR race_key LIKE '%#7M' OR race_key LIKE '%#7A')",
+            (target_date,))
+        if cur_paper.rowcount and cur_paper.rowcount > 0:
+            print(f"[notify_results_wt] ペーパー候補 未判定→見送り {cur_paper.rowcount} 件", flush=True)
 
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r
     if not total_7plus and not results_7plus_u and not results_7plus_m and not results_7plus_a:

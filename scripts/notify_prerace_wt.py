@@ -648,6 +648,7 @@ def _process_u_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
             messages.append((u_key, _build_u_message(cand, ri, detail)))
             print(f"[prerace] {rk} U候補 → buy（ペーパー・{len(combos)}点）", flush=True)
         else:
+            _mark_paper_miwokuri(rk, "#7U")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} U候補 → skip: {detail.get('skip_reason')}", flush=True)
         newly_done.add(u_key)
         time.sleep(0.3)
@@ -924,10 +925,45 @@ def _process_m_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
             messages.append((m_key, _build_m_message(cand, ri, detail)))
             print(f"[prerace] {rk} M候補 → buy（ペーパー・{len(combos)}点）", flush=True)
         else:
+            _mark_paper_miwokuri(rk, "#7M")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} M候補 → skip: {detail.get('skip_reason')}", flush=True)
         newly_done.add(m_key)
         time.sleep(0.3)
     return messages, newly_done
+
+
+def _mark_paper_miwokuri(race_key: str, suffix: str) -> None:
+    """ペーパー候補行（{rk}#7U/#7M/#7A・bet_amount=0）をオッズ見送りに更新する。
+
+    発走15分前判定が skip のとき、write_candidates_wt が朝に書いた候補行を
+    miwokuri=True にして「オッズ見送り」として Web に表示する。
+    buy 済み行（bet_amount>0）は対象外（上書きしない）。
+    """
+    store_key = race_key + suffix
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE picks_history SET miwokuri = True "
+                "WHERE race_key = ? AND bet_amount = 0",
+                (store_key,),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("ペーパー見送り更新 SQLite 失敗 %s: %s", store_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE keirin.picks_history SET miwokuri = TRUE "
+                        "WHERE race_key = %s AND bet_amount = 0",
+                        (store_key,),
+                    )
+        except Exception as e:
+            logger.warning("ペーパー見送り更新 VPS 失敗 %s: %s", store_key, e)
 
 
 # ── A（◎一致×波乱×別ライン先頭・二連単・ペーパートレード検証 2026-07-16〜）────
@@ -1176,6 +1212,7 @@ def _process_a_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
             messages.append((a_key, _build_a_message(cand, ri, detail)))
             print(f"[prerace] {rk} A候補 → buy（ペーパー・{len(combos)}点）", flush=True)
         else:
+            _mark_paper_miwokuri(rk, "#7A")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} A候補 → skip: {detail.get('skip_reason')}", flush=True)
         newly_done.add(a_key)
         time.sleep(0.3)
@@ -1220,8 +1257,12 @@ def _save_picks_history_state(
     cand_key = race_key + "#CAND"
     try:
         with get_connection() as conn:
+            # ペーパー行（#7U/#7M/#7A）は各自の15分前判定が miwokuri を管理するため
+            # S1系のガミ落ち/昇格の一括更新に巻き込まない（2026-07-16）
             conn.execute(
-                "UPDATE picks_history SET miwokuri = ? WHERE race_key LIKE ? AND route = 'wt'",
+                "UPDATE picks_history SET miwokuri = ? WHERE race_key LIKE ? AND route = 'wt' "
+                "AND race_key NOT LIKE '%#7U' AND race_key NOT LIKE '%#7M' "
+                "AND race_key NOT LIKE '%#7A'",
                 (miwokuri, pattern),
             )
             if new_rank is not None:
@@ -1247,7 +1288,9 @@ def _save_picks_history_state(
                 with pg_conn.cursor() as cur:
                     cur.execute(
                         "UPDATE keirin.picks_history SET miwokuri = %s"
-                        " WHERE race_key LIKE %s AND route = 'wt'",
+                        " WHERE race_key LIKE %s AND route = 'wt'"
+                        " AND race_key NOT LIKE '%%#7U' AND race_key NOT LIKE '%%#7M'"
+                        " AND race_key NOT LIKE '%%#7A'",
                         (miwokuri, pattern),
                     )
                     if new_rank is not None:

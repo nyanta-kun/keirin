@@ -324,7 +324,8 @@ def main():
     if total > 0:
         sections = []
         if picks_by_rank.get("SS"):
-            sections.append(_fmt_rank_block("SS", picks_by_rank["SS"], "全目min≥7倍+gap12≥0.10+gap23≥1pt  的中29%/ROI148%(2025)"))
+            # 表示名は S1（2026-07-16 名称整理。内部キー"SS"はtxtパース互換のため不変）
+            sections.append(_fmt_rank_block("S1", picks_by_rank["SS"], "全目min≥7倍+gap12≥0.10+gap23≥1pt  的中29%/ROI148%(2025)"))
         for section in sections:
             msg = f"```\n{section}\n```"
             if len(msg) > 1900:

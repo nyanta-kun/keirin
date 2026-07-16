@@ -254,6 +254,90 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
         time.sleep(0.5)
 
 
+def _write_paper_candidates(target_date: str) -> None:
+    """A/S2/S3（ペーパー検証ランク）の候補レースを picks_history に書き込む。
+
+    2026-07-16〜: 候補時点で {rk}#7U/#7M/#7A 行（bet_amount=0・miwokuri=False・
+    pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
+    発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
+    miwokuri=True（オッズ見送り）に更新する。既存行（判定済み）は上書きしない。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+
+    def _load(suffixes: tuple[str, str]) -> list[dict]:
+        out: list[dict] = []
+        for fname in suffixes:
+            p = picks_dir / fname
+            if p.exists():
+                try:
+                    out += json.loads(p.read_text(encoding="utf-8"))
+                except Exception as e:
+                    print(f"[write_candidates_wt] {fname} 読み込み失敗: {e}", flush=True)
+        return out
+
+    rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder)
+    for c in _load((f"wave_picks_wt_{target_date}_u_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_u_candidates.json")):
+        rk = c.get("race_key")
+        pairs = c.get("pairs") or []
+        if not rk or not pairs:
+            continue
+        pr = pairs[0]
+        rows.append((f"{rk}#7U", "7PLUS_U", f"{pr.get('dark')}={pr.get('mate')}流し"))
+    for c in _load((f"wave_picks_wt_{target_date}_m_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_m_candidates.json")):
+        rk = c.get("race_key")
+        pair = c.get("pair") or {}
+        if not rk or not pair:
+            continue
+        rows.append((f"{rk}#7M", "7PLUS_M", f"{pair.get('m1')}={pair.get('mate')}流し"))
+    for c in _load((f"wave_picks_wt_{target_date}_a_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_a_candidates.json")):
+        rk = c.get("race_key")
+        pair = c.get("pair") or {}
+        if not rk or not pair:
+            continue
+        rows.append((f"{rk}#7A", "7PLUS_A", f"{pair.get('axis')}>全"))
+
+    if not rows:
+        return
+    inserted = 0
+    try:
+        with get_connection() as conn:
+            for store_key, rank, pred in rows:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO picks_history "
+                    "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                    "VALUES (?,?,?,?,0,0,0,0,0,'wt',False)",
+                    (target_date, store_key, rank, pred),
+                )
+                inserted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            conn.commit()
+    except Exception as e:
+        print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
+        return
+    print(f"[write_candidates_wt] ペーパー候補(A/S2/S3) {inserted}/{len(rows)} 件書き込み", flush=True)
+
+    # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if not db_url:
+        return
+    try:
+        import psycopg2  # noqa: PLC0415
+        with psycopg2.connect(db_url) as pg_conn:
+            with pg_conn.cursor() as cur:
+                for store_key, rank, pred in rows:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,0,0,0,0,0,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO NOTHING",
+                        (target_date, store_key, rank, pred),
+                    )
+    except Exception as e:
+        print(f"[write_candidates_wt] ペーパー候補 VPS ミラー失敗: {e}", flush=True)
+
+
 def main() -> None:
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target_date = pos[0] if pos else date.today().strftime("%Y-%m-%d")
@@ -327,6 +411,12 @@ def main() -> None:
         f"[write_candidates_wt] {target_date}: {inserted}/{len(rows)} 件書き込み完了",
         flush=True,
     )
+
+    # ペーパー検証ランク（A/S2/S3）の候補行も書き込む（失敗しても継続）
+    try:
+        _write_paper_candidates(target_date)
+    except Exception as e:
+        print(f"[write_candidates_wt] ペーパー候補処理エラー（継続）: {e}", flush=True)
 
     # 初回ガミ判定（INSERT 後に実行・失敗してもメイン処理には影響しない）
     try:
