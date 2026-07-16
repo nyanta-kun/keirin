@@ -44,8 +44,16 @@ from src.models.trainer import load_model
 from src.strategy_wt import line_score_features, ss_policy
 
 # ── バックテスト対象期間 ──────────────────────────────────────────────
+# HOLD = 検証期間（kiseki Web「検証期間」サマリーの表示対象）。
+# 2026-07-16〜: 検証期間は 2026-06-30 以前で固定（2026-07〜 は本番フォワード=
+# 当日/当月/当年サマリー側で表示するため HOLD には含めない）。
 VAL  = ("2025-07-01", "2026-02-28")
-HOLD = ("2026-03-01", "2026-06-16")
+HOLD = ("2026-03-01", "2026-06-30")
+
+# ペーパーランク（S2/S3/A）の検証期間集計対象（picks_history バックフィル済み範囲。
+# lgbm_wt_eval の OOS 開始 2026-04-13 〜 検証期間末 2026-06-30）
+PAPER_HOLD = ("2026-04-13", "2026-06-30")
+PAPER_RANKS = [("U", "7PLUS_U", "#7U"), ("M", "7PLUS_M", "#7M"), ("A", "7PLUS_A", "#7A")]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
 # VAL評価:  lgbm_wt_train_only（TRAIN 2022-12〜2025-06-30のみ学習・VALを汚染していない）
@@ -261,6 +269,38 @@ def run_7plus_backtest(
     return result
 
 
+def paper_rank_stats() -> dict:
+    """picks_history から S2/S3/A（ペーパー）の検証期間集計を返す。
+
+    バックフィル済みの picks_history（#7U/#7M/#7A・実精算）を PAPER_HOLD 期間で
+    集計する。候補行（bet_amount=0）・見送り行は含めない。
+    """
+    out: dict[str, dict] = {}
+    pfrom, pto = PAPER_HOLD
+    with get_connection() as conn:
+        for rank_key, rank_val, suffix in PAPER_RANKS:
+            # 集約列は必ずエイリアスを付ける（PG RealDict は無名集約列名が重複し
+            # row[i] 位置アクセスが崩れるため）
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(hit),0) AS h, "
+                "COALESCE(SUM(bet_amount),0) AS b, "
+                "COALESCE(SUM(CASE WHEN hit=1 THEN payout ELSE 0 END),0) AS p "
+                "FROM picks_history WHERE rank = ? AND route='wt' "
+                "AND race_date BETWEEN ? AND ? AND bet_amount > 0 AND NOT miwokuri "
+                "AND race_key LIKE ?",
+                (rank_val, pfrom, pto, f"%{suffix}"),
+            ).fetchone()
+            n, h, b, p = (int(row["n"] or 0), int(row["h"] or 0),
+                          int(row["b"] or 0), int(row["p"] or 0))
+            if n == 0:
+                continue
+            out[rank_key] = {
+                "n_picks": n, "n_hits": h, "total_bet": b, "total_payout": p,
+                "roi": round(p / b, 4) if b else None,
+            }
+    return out
+
+
 def save_to_db(
     model_name: str,
     period_type: str,
@@ -268,7 +308,13 @@ def save_to_db(
     period_to: str,
     result: dict,
 ) -> None:
-    """model_evaluation テーブルに UPSERT する（全体 + ランク別）。"""
+    """model_evaluation テーブルに UPSERT する（全体 + ランク別）。
+
+    MIRROR_PG_URL 環境変数が設定されている場合は VPS PG にも同内容をミラーする
+    （Mac＝完全オッズデータで計算し PG＝Web 表示用に反映する運用。
+    KEIRIN_DB_URL を使うと get_connection がデータ読みごと PG に切り替わり
+    PG のオッズ保持期間（2026-06〜）しか評価できないため別変数にしている）。
+    """
     rows = [
         (model_name, period_from, period_to, period_type,
          result["n_picks"], result["n_hits"], result["total_bet"],
@@ -298,6 +344,29 @@ def save_to_db(
         f"{len(rows)}行)",
         flush=True,
     )
+
+    mirror_url = os.environ.get("MIRROR_PG_URL")
+    if mirror_url and not os.environ.get("KEIRIN_DB_URL"):
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(mirror_url) as pg:
+                with pg.cursor() as cur:
+                    for row in rows:
+                        cur.execute(
+                            "INSERT INTO keirin.model_evaluation "
+                            "(model_name, period_from, period_to, period_type, "
+                            " n_picks, n_hits, total_bet, total_payout, roi, evaluated_at) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW()) "
+                            "ON CONFLICT (model_name, period_type) DO UPDATE SET "
+                            "period_from=EXCLUDED.period_from, period_to=EXCLUDED.period_to, "
+                            "n_picks=EXCLUDED.n_picks, n_hits=EXCLUDED.n_hits, "
+                            "total_bet=EXCLUDED.total_bet, total_payout=EXCLUDED.total_payout, "
+                            "roi=EXCLUDED.roi, evaluated_at=NOW()",
+                            row,
+                        )
+            print(f"  → VPS PG ミラー完了 ({len(rows)}行)", flush=True)
+        except Exception as e:
+            print(f"  → VPS PG ミラー失敗（継続）: {e}", flush=True)
 
 
 def main() -> None:
@@ -336,6 +405,21 @@ def main() -> None:
     # 保存フェーズ: KEIRIN_DB_URL を復元して VPS に書き込む
     if save_db_url:
         os.environ["KEIRIN_DB_URL"] = save_db_url
+
+    # HOLD にペーパーランク（S2/S3/A）の検証期間集計を付与する。
+    # picks_history のバックフィル済み実精算行（PAPER_HOLD 期間）から集計する。
+    # KEIRIN_DB_URL 復元後 = Web 表示と同じ VPS PG の picks_history を参照する。
+    try:
+        paper = paper_rank_stats()
+        if paper:
+            results["HOLD"][1]["by_rank"].update(paper)
+            for k, v in paper.items():
+                roi_disp = f"{v['roi']:.1%}" if v["roi"] is not None else "—"
+                print(f"    {k}(paper): {v['n_picks']:,}R  的中={v['n_hits']:,}  "
+                      f"ROI={roi_disp}  [{PAPER_HOLD[0]}〜{PAPER_HOLD[1]}]", flush=True)
+    except Exception as e:
+        print(f"  ペーパーランク集計失敗（継続）: {e}", flush=True)
+
     for period_type, period in [("VAL", VAL), ("HOLD", HOLD)]:
         pfrom, pto = period
         model_name, result = results[period_type]
