@@ -207,6 +207,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # ks流ローリング特徴（point-in-time。履歴 wt_entries から計算）
     df = add_rolling_features_wt(df)
 
+    # 競走得点トレンド（point-in-time。履歴 wt_entries の得点時系列から計算）
+    df = add_rp_trend_features_wt(df)
+
     # M-1: 学習(train_lgbm dropna)・推論(prepare_X fillna)・バックテストで
     # 同一の特徴表現になるよう、ソースで FEATURE_COLS_WT の NaN を 0 に統一保証する
     # （現状 build 過程で各特徴は補完済＝実質no-op だが、将来の fill 漏れによる
@@ -311,6 +314,99 @@ def add_rolling_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+RP_TREND_COLS_WT = [
+    "rp_prev_delta", "rp_delta_90", "rp_delta_180", "rp_trend",
+]
+
+
+def add_rp_trend_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None) -> pd.DataFrame:
+    """選手単位の競走得点トレンド特徴を付与する（point-in-time）。
+
+    df は player_id / race_date / race_point 列を持つ前提
+    （race_point は build_features_wt で補完済みの当日発表値）。
+
+    - rp_prev_delta : 今回得点 − 前回出走時（前回の異なる race_date）の得点
+    - rp_delta_90   : 今回得点 − 過去90日の平均得点（当日を含まない）
+    - rp_delta_180  : 同180日
+    - rp_trend      : 過去90日平均 − 過去180日平均（中期トレンド）
+
+    履歴の rolling は closed="left" で当日を除外（リークなし）。同一選手・
+    同一日の複数走は median で1点に集約（得点は節内で不変）。当日・未確定
+    レースの行も wt_entries に存在するため merge で解決できる。履歴不足
+    （新人等）は 0.0 で補完する。
+
+    汚染対策: finish_order IS NULL の過去行は wave-picks の AIスコア上書き
+    （pred_prob_pct=0〜100）が恒久残存し得るため、race_point 値を NaN 化して
+    集計（rolling 平均・median・rp_prev）から除外する。行自体は当日・未確定
+    レースの merge キーとして残す（closed="left" のため当日の自値は元々窓に
+    入らない）。SQL の race_point > 20 はゼロ・欠損系の除外として維持。
+
+    Args:
+        df: 特徴量付与対象の DataFrame。
+        history: テスト用に注入する履歴
+            （player_id/race_point/race_date/finish_order 列）。
+            None の場合は DB（wt_entries × wt_races）から読む。
+    """
+    df = df.copy()
+    if "player_id" not in df.columns or "race_date" not in df.columns:
+        # 必要列が無ければ既定値で埋める（後方互換）
+        for c in RP_TREND_COLS_WT:
+            df[c] = 0.0
+        return df
+
+    if history is None:
+        rp_sql = (
+            "SELECT e.player_id, e.race_point, r.race_date, e.finish_order "
+            "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key "
+            "WHERE e.race_point IS NOT NULL AND e.race_point > 20"
+        )
+        db_url = os.environ.get("KEIRIN_DB_URL")
+        if db_url:
+            from sqlalchemy import create_engine, text as sa_text
+            engine = create_engine(db_url)
+            pg_sql = rp_sql.replace("wt_entries", "keirin.wt_entries") \
+                            .replace("wt_races", "keirin.wt_races")
+            with engine.connect() as sa_conn:
+                H = pd.read_sql_query(sa_text(pg_sql), sa_conn)
+            engine.dispose()
+        else:
+            with get_connection() as conn:
+                H = pd.read_sql_query(rp_sql, conn)
+    else:
+        H = history.copy()
+
+    H["_dt"] = pd.to_datetime(H["race_date"])
+    # finish_order 未確定（NULL）の過去行は AIスコア上書きが恒久残存し得るため
+    # 値のみ NaN 化（行は merge キーとして残す。median/rolling/ffill は NaN を除外）
+    H.loc[H["finish_order"].isna(), "race_point"] = np.nan
+    # 同一選手・同一日の重複（同節複数走）は1点に集約（得点は節内で不変）
+    H = (H.groupby(["player_id", "race_date"], as_index=False)
+           .agg(race_point=("race_point", "median"), _dt=("_dt", "first")))
+    H = H.sort_values(["player_id", "_dt"]).reset_index(drop=True)
+
+    def _rm(w: str) -> np.ndarray:
+        return (H.set_index("_dt").groupby("player_id")["race_point"]
+                .rolling(w, closed="left").mean()
+                .reset_index(level=0, drop=True).values)
+
+    H["rp_ma90"] = _rm("90D")
+    H["rp_ma180"] = _rm("180D")
+    # 前回値は「直前の非NaN値」（NaN行の直後でも最後の実値を引く・選手境界は跨がない）
+    H["rp_prev"] = H.groupby("player_id")["race_point"].transform(
+        lambda s: s.ffill().shift(1))
+
+    key = H[["player_id", "race_date", "rp_ma90", "rp_ma180", "rp_prev"]]
+    out = df.merge(key, on=["player_id", "race_date"], how="left")
+    out["rp_prev_delta"] = out["race_point"] - out["rp_prev"]
+    out["rp_delta_90"] = out["race_point"] - out["rp_ma90"]
+    out["rp_delta_180"] = out["race_point"] - out["rp_ma180"]
+    out["rp_trend"] = out["rp_ma90"] - out["rp_ma180"]
+    # 履歴不足（新人等）は 0.0（学習/予測で同一）
+    for c in RP_TREND_COLS_WT:
+        out[c] = out[c].fillna(0.0)
+    return out.drop(columns=["rp_ma90", "rp_ma180", "rp_prev"], errors="ignore")
+
+
 FEATURE_COLS_WT = [
     # コア得点
     "race_point",
@@ -356,6 +452,8 @@ FEATURE_COLS_WT = [
     # ks流ローリング特徴（point-in-time・add_rolling_features_wt で付与）
     "win_3m", "top3_3m", "quin_3m", "win_6m", "top3_6m", "quin_6m",
     "venue_wr", "days_since", "wr_trend",
+    # 競走得点トレンド（2026-07-16追加・選手の成長/好不調）
+    *RP_TREND_COLS_WT,
 ]
 
 TARGET_COL_WT = "top3_flag"

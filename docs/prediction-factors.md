@@ -1,7 +1,7 @@
 # 予想ファクター仕様書
 
 > **最終更新**: 2026-07-16  
-> **本番モデル（winticket）**: `lgbm_wt` / **40特徴量** / TRAIN+VAL 2022-12-01〜2026-02-28 / 88,769R学習 / AUC 0.7717  
+> **本番モデル（winticket）**: `lgbm_wt` / **44特徴量** / TRAIN+VAL 2022-12-01〜2026-02-28 / 88,769R学習 / AUC 0.7717  
 > **評価専用モデル**: `lgbm_wt_train_only` / TRAINのみ 2022-12-01〜2025-06-30 / 70,540R / AUC 0.7774（VAL期間評価用・HOLD汚染なし）  
 > **モデル設計方針**: TRAIN(〜2025-06-30) / VAL(2025-07〜2026-02-28) / HOLD(2026-03〜現在) の3分割。VAL評価=train_only、HOLD評価+live予想=lgbm_wt(TRAIN+VAL)。いずれも評価期間を学習に含まない。  
 > **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
@@ -118,7 +118,7 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 
 ## 2. winticket ルート（★本番稼働中 / 2026-06-08〜）
 
-### 2-1. 特徴量一覧（FEATURE_COLS_WT / 40特徴量）
+### 2-1. 特徴量一覧（FEATURE_COLS_WT / 44特徴量）
 
 モデルファイル:
 - `data/models/lgbm_wt.pkl`（**本番・live予想用** / TRAIN+VAL 2022-12-01〜2026-02-28 / AUC 0.7717 / 88,769R / 2026-06-17学習）
@@ -174,6 +174,17 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 | `venue_wr` | 当該会場での過去勝率 |
 | `days_since` | 前走からの日数 |
 | `wr_trend` | 勝率トレンド（win_3m − win_6m） |
+
+#### 競走得点トレンド特徴（4項目・2026-07-16追加 / `add_rp_trend_features_wt`）
+
+選手の競走得点の時系列変化（成長/好不調）を捉える。履歴は `wt_entries.race_point` × `wt_races.race_date`。**`finish_order` 未確定（NULL）の過去行は値を集計から除外**（wave-picks の AIスコア上書きが恒久残存する行の汚染対策・行自体は当日レースの merge キーとして保持）。`> 20` はゼロ・欠損系の除外。同一選手・同一日の複数走は median で1点に集約（得点は節内で不変）。rolling は `closed="left"` で当日を除外＝point-in-time保証。rp_prev は直前の非NaN実値。履歴不足（新人等）は 0.0 補完。
+
+| 変数名 | 説明 | DBカラム/計算元 |
+|--------|------|----------------|
+| `rp_prev_delta` | 今回得点 − 前回出走時（前回の異なる race_date）の得点 | `wt_entries.race_point` の選手別 shift(1) |
+| `rp_delta_90` | 今回得点 − 過去90日の平均得点（当日を含まない） | 同 rolling("90D", closed="left") 平均との差 |
+| `rp_delta_180` | 今回得点 − 過去180日の平均得点 | 同 rolling("180D") |
+| `rp_trend` | 過去90日平均 − 過去180日平均（中期トレンド） | 上記2平均の差 |
 
 ---
 
@@ -261,6 +272,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-07-16 | **特徴追加: 競走得点トレンド4特徴（rp_prev_delta / rp_delta_90 / rp_delta_180 / rp_trend）**。選手単位の得点時系列変化＝成長/好不調シグナル（`add_rp_trend_features_wt`・point-in-time・closed="left" で当日除外）。A/B検証: ΔAUC +0.0009〜0.001 / 1位勝率 +0.15pt・2独立窓で方向一致。FEATURE_COLS_WT 40→44。 |
 | 2026-06-17 | **モデル設計刷新（3分割・汚染なし）**: lgbm_wt を TRAIN+VAL（2022-12-01〜2026-02-28）で再学習（AUC 0.7717・88,769R）。lgbm_wt_train_only（TRAINのみ）を VAL評価専用に分離。旧lgbm_wt（HOLD汚染あり）を lgbm_wt_v2 として退避。現行戦略を **7+車専用**（6車立て以下は使用しない）に明記。HOLD バックテスト結果: SS 137.8%★ / S 138.8%★ / A 99.4% / 合計 134.3%★（2026-03〜06-16・3,076R）。 |
 | 2026-06-13 | **ドキュメント同期（G08）**: G01〜G07完了に伴い各ドキュメントを更新。venue_info に `straight_len`/`cant_deg` 追加記録（`docs/analysis/20-web-logic-audit.md` 副産物・宇都宮500等48行誤記訂正済）。FEATURE_COLS_WT への変更なし（G06風特徴 Phase1 不通過・無情報）。新規スクリプト（G02〜G07）を `docs/system-architecture.md` に追記。|
 | 2026-06-12 | **バックテスト3バイアス修正（G01 移植）**: `backtest_wt.py` 本体に①欠車生存バイアス（全エントリーでランキング）②≤6車フィルタ位置（pred_prob付与前=出走表基準）③欠車void（DNS含む組の不計上）を移植。`src/evaluation/void_rules.py` 新設。`--eval-model` オプション追加。スポットチェック ROI 80.4%（doc18 の~84% と同オーダー）。|
