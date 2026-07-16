@@ -113,7 +113,8 @@ def test_parse_picks_full_excludes_b_rank(fixture_picks_file):
 
 
 # ── _parse_picks_full: SS と S が別 slot で並立し、Aランクは無視される ──
-_WIDE_DATE = "2099-12-29"
+# 7PLUS_R 時代（2026-07-10〜07-15）の日付。2026-07-16 以降は旧S1全廃で SS セクションを無視する
+_WIDE_DATE = "2026-07-12"
 _WIDE_FIXTURE = """\
 ======================================================================
  競輪AI予想PICK [wt]  2099-12-29  (7+車 三連複・SSランク/Sランク)
@@ -128,7 +129,7 @@ _WIDE_FIXTURE = """\
 
 
 def test_parse_picks_full_wide_coexists_with_main():
-    """新日付(2026-07-10〜)のSSランクは 7PLUS_R。廃止済みS/Aランクは無視。"""
+    """7PLUS_R時代の日付(2026-07-10〜07-15)のSSランクは 7PLUS_R。廃止済みS/Aランクは無視。"""
     path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{_WIDE_DATE}.txt"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_WIDE_FIXTURE, encoding="utf-8")
@@ -141,6 +142,19 @@ def test_parse_picks_full_wide_coexists_with_main():
     assert ("京王閣", 7, "7plus_a") not in picks   # Aランク廃止 → 無視
     assert picks[("京王閣", 3, "7plus_r")][0] == "7PLUS_R"
     assert len(picks) == 1, "7plus_r のみ1エントリ"
+
+
+def test_parse_picks_full_abolished_after_20260716():
+    """旧S1全廃日(2026-07-16)以降の日付では SS セクションを無視する。"""
+    date = "2099-12-29"
+    path = Path(nr.__file__).resolve().parent.parent / "data" / "picks" / f"wave_picks_wt_{date}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_WIDE_FIXTURE.replace(_WIDE_DATE, date), encoding="utf-8")
+    try:
+        picks = nr._parse_picks_full(date)
+    finally:
+        path.unlink(missing_ok=True)
+    assert picks == {}, "全廃日以降は旧S1をパースしない"
 
 
 def test_parse_picks_full_old_date_ss_is_legacy():
