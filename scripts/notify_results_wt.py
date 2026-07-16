@@ -83,11 +83,12 @@ def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
                     AND race_key NOT LIKE %s
                     AND race_key NOT LIKE %s
                     AND race_key NOT LIKE %s
+                    AND race_key NOT LIKE %s
                     AND route = %s
               )
               AND route = %s
         """, (target_date, '%#CAND', target_date, '%#CAND',
-              '%#7U', '%#7M', '%#7A', 'wt', 'wt'))
+              '%#7U', '%#7M', '%#7A', '%#6S1', 'wt', 'wt'))
         deleted1 = cur.rowcount
 
         # パターン2: ローカルSQLiteに存在しない孤立#CAND
@@ -159,9 +160,13 @@ def _parse_picks_full(target_date: str) -> dict:
         rank = None
         for line in p.read_text(encoding="utf-8").splitlines():
             if "【7+車 SSランク】" in line:
-                # 2026-07-10〜 の「SSランク」は内部rank 7PLUS_R（レース単位・全目購入）。
-                # それ以前の txt は旧SS（買い目カット）= 7PLUS_SS として過去日再採点の互換を保つ。
-                rank = "7PLUS_R" if target_date >= "2026-07-10" else "7PLUS_SS"
+                # 旧S1(7PLUS_R)は 2026-07-16 全廃。全廃日以降の txt に残る SS セクション
+                # （移行日の旧コード生成分）は採点しない（アーカイブ済み行の再作成防止）。
+                # 2026-07-10〜07-15 は 7PLUS_R、それ以前は旧SS（過去日再採点の互換）。
+                if target_date >= "2026-07-16":
+                    rank = None
+                else:
+                    rank = "7PLUS_R" if target_date >= "2026-07-10" else "7PLUS_SS"
             elif "【7+車 Rランク】" in line: rank = "7PLUS_R"   # 移行期の旧表記互換
             elif "【7+車 Sランク】" in line:
                 rank = None   # S/S+（三連単F）は 2026-07-15 全廃・過去分も採点対象外
@@ -230,6 +235,10 @@ def _write_miwokuri(target_date: str, purchased_base_keys: set[str], conn, pm: d
     payout は 0 固定（見送りなので賭け金なし）。
     purchased_base_keys: 購入済み race_key の "#" 前の base 部分の集合。
     """
+    # 旧S1(7PLUS_R)全廃日以降は candidates.json 由来の見送り行を書かない
+    # （2026-07-16 の移行日分が旧コード生成の candidates を残しているため）
+    if target_date >= "2026-07-16":
+        return 0
     if pm is None:
         pm = {}
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
@@ -593,6 +602,25 @@ def _main_inner(date, _db_url):
         if _pk not in picks:
             picks[_pk] = ("7PLUS_A", "", "")
 
+    # S1（6車三連単・ペーパートレード検証・旧S1置換）: decisions キー {rk}#S1
+    # （decision=buy）を picks に注入する（slot="six_s1"）。decisions が唯一の正本。
+    for _key, _dec in decisions.items():
+        if not _key.endswith("#S1") or _dec.get("decision") != "buy" or not _dec.get("combos"):
+            continue
+        _rk = _key[:-3]
+        if not _rk.startswith(dc):
+            continue
+        try:
+            _, _code, _rno = _rk.split("_")
+        except ValueError:
+            continue
+        _venue = code2name.get(_code)
+        if _venue is None:
+            continue
+        _pk = (_venue, int(_rno), "six_s1")
+        if _pk not in picks:
+            picks[_pk] = ("SIX_S1", "", "")
+
     # miwokuri採点用に candidates.json のレース分も先読みする
     # （gap12/gap34 もここから取得して picks_history に永続化する）
     _cand_keys_extra: set[str] = set()
@@ -644,12 +672,14 @@ def _main_inner(date, _db_url):
     results_7plus_u = []      # S2=U（波乱ライン連れ込み・ペーパー）行 — 合計には含めない
     results_7plus_m = []      # S3=M（◎不一致×システム◎・ペーパー）行 — 合計には含めない
     results_7plus_a = []      # A（◎一致×波乱×別L先頭・二連単・ペーパー）行 — 合計には含めない
+    results_six_s1 = []       # S1（6車三連単・ペーパー・旧S1置換）行 — 合計には含めない
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 旧Sランク 合計
-    p7rb = p7rr = p7rh = 0    # 7+車 S1ランク（内部R・レース単位gami・全目購入）合計
+    p7rb = p7rr = p7rh = 0    # 旧S1（7PLUS_R・2026-07-16全廃・過去日再採点互換）合計
     p7ub = p7ur = p7uh = 0    # 7+車 S2=U（ペーパー・名目値。ヘッダー合計には不算入）
     p7mb = p7mr = p7mh = 0    # 7+車 S3=M（ペーパー・名目値。ヘッダー合計には不算入）
     p7ab = p7ar = p7ah = 0    # 7+車 A（ペーパー・名目値。ヘッダー合計には不算入）
+    ps1b = ps1r = ps1h = 0    # 6車 S1（ペーパー・名目値。ヘッダー合計には不算入）
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -833,6 +863,67 @@ def _main_inner(date, _db_url):
                                 *gap_map.get(rk, (None, None, None))))
                 continue
 
+            if _slot == "six_s1":
+                # ── S1（6車三連単・ペーパートレード検証・旧S1置換）採点 ──
+                # 正本は decisions の {rk}#S1。実精算（三連単版）:
+                #   m1/m2 が最終盤面外（欠車）→レース返還（不計上）
+                #   3着候補（m3/m4）の欠車→当該目のみ返還・落車失格は外れ計上
+                dec_s1 = decisions.get(rk + "#S1")
+                if not (dec_s1 and dec_s1.get("decision") == "buy" and dec_s1.get("combos")):
+                    print(f"[notify_results_wt] S1判定記録なし {rk}: 不計上", flush=True)
+                    continue
+                s1_rows = conn.execute(
+                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
+                    "ORDER BY finish_order", (rk,)).fetchall()
+                s1_order = [int(r[0]) for r in s1_rows]
+                if len(s1_order) < 3:
+                    continue
+                s1_stake = int(dec_s1.get("stake") or 100)
+                try:
+                    s1_o = [int(x) for x in dec_s1.get("order")[:4]]
+                except (TypeError, ValueError):
+                    continue
+                s1_board = _board_frames(conn, rk)
+                if not s1_board:
+                    s1_board = {int(r[0]) for r in conn.execute(
+                        "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order >= 1",
+                        (rk,)).fetchall()}
+                if s1_o[0] not in s1_board or s1_o[1] not in s1_board:
+                    skipped_dns += 1  # 1-2着軸の欠車 → レース返還（不計上）
+                    continue
+                s1_thirds = [t for t in (s1_o[2], s1_o[3]) if t in s1_board]
+                if not s1_thirds:
+                    skipped_dns += 1
+                    continue
+                s1_buy = {(s1_o[0], s1_o[1], t) for t in s1_thirds}
+                s1_actual = tuple(s1_order[:3])
+                s1_hit = s1_actual in s1_buy
+                s1_tri_pay = pm.get(rk, {}).get(("trifecta", s1_actual), 0)
+                s1_pay = s1_tri_pay * s1_stake // 100 if s1_hit else 0
+                s1_bet = len(s1_buy) * s1_stake
+                s1_pred = f"{s1_o[0]}>{s1_o[1]}>" + ",".join(map(str, s1_thirds))
+                s1_trio_pay = pm.get(rk, {}).get(("trio", frozenset(s1_actual)), 0)
+                s1_tstr = ptime
+                _s1_stt = start_map.get(rk)
+                if _s1_stt:
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        s1_tstr = _dt.fromtimestamp(int(_s1_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
+                    except (ValueError, TypeError):
+                        pass
+                s1_mark = f"◎ ¥{s1_pay:,}" if s1_hit else "×"
+                results_six_s1.append(
+                    f"[S1] {venue} {race_no}R {s1_tstr}  予:{s1_pred}"
+                    f"  実:{'-'.join(map(str, s1_actual))}  {s1_mark}（ペーパー）")
+                ps1b += s1_bet
+                if s1_hit:
+                    ps1r += s1_pay
+                    ps1h += 1
+                history.append((target_date, f"{rk}#6S1", "SIX_S1", s1_pred, len(s1_buy),
+                                int(s1_hit), s1_pay, s1_trio_pay, s1_tri_pay, s1_bet, False, None,
+                                *gap_map.get(rk, (None, None, None))))
+                continue
+
             # 発走前判定があるレースは判定時のランク・購入買い目（ガミ目カット済み）で採点する
             dec = decisions.get(rk)
             r_stake = 100  # doc53: ライン格差増額時は decisions.stake=200
@@ -952,14 +1043,14 @@ def _main_inner(date, _db_url):
             # 日中スコア済みエントリが消えてしまうため。
             # S2（#7U）/ S3（#7M）/ A（#7A）のペーパー行は自キーのみ削除する。bk#% で消すと
             # 同一レースの S1 系記録（#CAND 見送り等）を巻き込んで S1 集計が変わってしまうため。
-            _PAPER_SUFFIXES = ("#7U", "#7M", "#7A")
+            _PAPER_SUFFIXES = ("#7U", "#7M", "#7A", "#6S1")
             base_keys = {h[1].split("#")[0] for h in history
                          if not h[1].endswith(_PAPER_SUFFIXES)}
             for bk in base_keys:
                 conn.execute(
                     "DELETE FROM picks_history WHERE race_key LIKE ? AND route='wt' "
                     "AND race_key NOT LIKE '%#7U' AND race_key NOT LIKE '%#7M' "
-                    "AND race_key NOT LIKE '%#7A'",
+                    "AND race_key NOT LIKE '%#7A' AND race_key NOT LIKE '%#6S1'",
                     (bk + "#%",),
                 )
             for h in history:
@@ -975,7 +1066,7 @@ def _main_inner(date, _db_url):
 
         # S2/S3/A（ペーパー）は S1 系の見送り集計に影響させない（#7U/#7M/#7A を購入扱いにしない）
         purchased_base_keys = {h[1].split("#")[0] for h in history
-                               if not h[1].endswith(("#7U", "#7M", "#7A"))}
+                               if not h[1].endswith(("#7U", "#7M", "#7A", "#6S1"))}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)
         if n_miwokuri:
             print(f"[notify_results_wt] {target_date} 見送り {n_miwokuri} 件書き込み", flush=True)
@@ -991,13 +1082,13 @@ def _main_inner(date, _db_url):
             "UPDATE picks_history SET miwokuri = True "
             "WHERE race_date = ? AND route='wt' AND bet_amount = 0 "
             "AND NOT miwokuri "
-            "AND (race_key LIKE '%#7U' OR race_key LIKE '%#7M' OR race_key LIKE '%#7A')",
+            "AND (race_key LIKE '%#7U' OR race_key LIKE '%#7M' OR race_key LIKE '%#7A' OR race_key LIKE '%#6S1')",
             (target_date,))
         if cur_paper.rowcount and cur_paper.rowcount > 0:
             print(f"[notify_results_wt] ペーパー候補 未判定→見送り {cur_paper.rowcount} 件", flush=True)
 
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r
-    if not total_7plus and not results_7plus_u and not results_7plus_m and not results_7plus_a:
+    if not total_7plus and not results_7plus_u and not results_7plus_m and not results_7plus_a and not results_six_s1:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         _sync_vps(_db_url, target_date)
         return
@@ -1028,10 +1119,11 @@ def _main_inner(date, _db_url):
     ss_line = _rank_line("SS*", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 廃止済み旧方式（過去日再採点時のみ）
     s_line  = _rank_line("S*",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
     # S2/S3/A（ペーパー）は S1 の後に独立行で表示（ヘッダー合計には不算入）
+    s1_line = _rank_line("S1(6車三連単・検証/ペーパー)", len(results_six_s1), ps1b, ps1r, ps1h)
     u_line  = _rank_line("S2(波乱・検証/ペーパー)", len(results_7plus_u), p7ub, p7ur, p7uh)
     m_line  = _rank_line("S3(不一致波乱・検証/ペーパー)", len(results_7plus_m), p7mb, p7mr, p7mh)
     a_line  = _rank_line("A(一致波乱二連単・検証/ペーパー)", len(results_7plus_a), p7ab, p7ar, p7ah)
-    for _l in (r_line, u_line, m_line, a_line, ss_line, s_line):
+    for _l in (s1_line, u_line, m_line, a_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1039,7 +1131,7 @@ def _main_inner(date, _db_url):
     if rank_lines:
         msg += "\n" + "\n".join(rank_lines)
     msg += "\n```\n" + "\n".join(
-        total_7plus + results_7plus_u + results_7plus_m + results_7plus_a) + "\n```"
+        total_7plus + results_six_s1 + results_7plus_u + results_7plus_m + results_7plus_a) + "\n```"
 
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"
@@ -1049,7 +1141,7 @@ def _main_inner(date, _db_url):
     msg += f"\n{'─'*28}\n📅 {target_date[:7]}: {_stats_line('月', month)}\n🗓 {target_date[:4]}年: {_stats_line('年', year)}"
 
     emit(msg[:1900])
-    print(f"[notify_results_wt] {target_date} 7+車S1 {len(results_7plus_r)}R 的中{p7rh} / "
+    print(f"[notify_results_wt] {target_date} S1(6車ペーパー) {len(results_six_s1)}R 的中{ps1h} / "
           f"S2(ペーパー) {len(results_7plus_u)}R 的中{p7uh} / "
           f"S3(ペーパー) {len(results_7plus_m)}R 的中{p7mh} / "
           f"A(ペーパー) {len(results_7plus_a)}R 的中{p7ah} / "

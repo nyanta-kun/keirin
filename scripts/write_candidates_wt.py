@@ -298,6 +298,14 @@ def _write_paper_candidates(target_date: str) -> None:
         if not rk or not pair:
             continue
         rows.append((f"{rk}#7A", "7PLUS_A", f"{pair.get('axis')}>全"))
+    for c in _load((f"wave_picks_wt_{target_date}_s1_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s1_candidates.json")):
+        rk = c.get("race_key")
+        order = c.get("order") or []
+        if not rk or len(order) < 4:
+            continue
+        rows.append((f"{rk}#6S1", "SIX_S1",
+                     f"{order[0]}>{order[1]}>{order[2]},{order[3]}"))
 
     if not rows:
         return

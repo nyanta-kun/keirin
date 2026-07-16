@@ -50,10 +50,12 @@ from src.strategy_wt import line_score_features, ss_policy
 VAL  = ("2025-07-01", "2026-02-28")
 HOLD = ("2026-03-01", "2026-06-30")
 
-# ペーパーランク（S2/S3/A）の検証期間集計対象（picks_history バックフィル済み範囲。
+# ペーパーランク（S1/S2/S3/A）の検証期間集計対象（picks_history バックフィル済み範囲。
 # lgbm_wt_eval の OOS 開始 2026-04-13 〜 検証期間末 2026-06-30）
+# 2026-07-16: 旧S1（7PLUS_R・実賭け）全廃 → 全ランクがペーパー。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
-PAPER_RANKS = [("U", "7PLUS_U", "#7U"), ("M", "7PLUS_M", "#7M"), ("A", "7PLUS_A", "#7A")]
+PAPER_RANKS = [("S1", "SIX_S1", "#6S1"), ("U", "7PLUS_U", "#7U"),
+               ("M", "7PLUS_M", "#7M"), ("A", "7PLUS_A", "#7A")]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
 # VAL評価:  lgbm_wt_train_only（TRAIN 2022-12〜2025-06-30のみ学習・VALを汚染していない）
@@ -321,7 +323,9 @@ def save_to_db(
          result["total_payout"], result["roi"]),
     ]
     for rank_key, rd in result.get("by_rank", {}).items():
-        rank_model = f"{model_name}#7{rank_key}"
+        # 新S1（6車）は suffix #6S1・それ以外は従来規約 #7{key}
+        rank_model = (f"{model_name}#6S1" if rank_key == "S1"
+                      else f"{model_name}#7{rank_key}")
         rows.append((
             rank_model, period_from, period_to, period_type,
             rd["n_picks"], rd["n_hits"], rd["total_bet"],
@@ -370,65 +374,46 @@ def save_to_db(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="7車限定Rランクバックテスト結果をDBに保存")
+    parser = argparse.ArgumentParser(
+        description="ペーパーランク（S1/S2/S3/A）集計を model_evaluation に保存")
     parser.add_argument("--dry-run", action="store_true", help="DB書き込みなし（数値確認のみ）")
     args = parser.parse_args()
 
-    # 期間別にモデルを読み込む（VAL: train_only / HOLD: lgbm_wt）
-    models = {}
-    for period_type, model_name in [("VAL", VAL_MODEL_NAME), ("HOLD", HOLD_MODEL_NAME)]:
-        print(f"モデル読み込み [{period_type}]: {model_name}", flush=True)
-        try:
-            models[period_type] = (model_name, load_model(model_name))
-        except FileNotFoundError:
-            print(f"ERROR: モデル '{model_name}' が見つかりません。train-wt を先に実行してください。")
-            sys.exit(1)
+    # 2026-07-16〜: 旧S1（7PLUS_R・実賭け）全廃に伴い、モデル読み込み・
+    # run_7plus_backtest（VAL/HOLD の R 戦略バックテスト）は廃止した。
+    # 集計元は picks_history（バックフィル済み実精算行）のみ。
+    # KEIRIN_DB_URL 設定時は get_connection が PG 直結（Web 表示と同一ソース）。
 
-    # データ読み込みはローカル SQLite から（KEIRIN_DB_URL は保存専用）
-    save_db_url = os.environ.pop("KEIRIN_DB_URL", None)
-    print("データ読み込み中 ...", flush=True)
-    df_raw = load_raw_data_wt(min_date=VAL[0], max_date=HOLD[1])
-    if df_raw.empty:
-        print("ERROR: データがありません。collect-wt を先に実行してください。")
-        sys.exit(1)
-    df = build_features_wt(df_raw)
-
-    # バックテスト（wt_odds / wt_races 参照もローカル SQLite）
-    # 保存フェーズで KEIRIN_DB_URL を復元
-    results = {}
-    for period_type, period in [("VAL", VAL), ("HOLD", HOLD)]:
-        pfrom, pto = period
-        model_name, model = models[period_type]
-        print(f"\n--- {period_type}: {pfrom}〜{pto}  [{model_name}] ---", flush=True)
-        results[period_type] = (model_name, run_7plus_backtest(df, model, pfrom, pto))
-
-    # 保存フェーズ: KEIRIN_DB_URL を復元して VPS に書き込む
-    if save_db_url:
-        os.environ["KEIRIN_DB_URL"] = save_db_url
-
-    # HOLD にペーパーランク（S2/S3/A）の検証期間集計を付与する。
-    # picks_history のバックフィル済み実精算行（PAPER_HOLD 期間）から集計する。
-    # KEIRIN_DB_URL 復元後 = Web 表示と同じ VPS PG の picks_history を参照する。
+    # 2026-07-16〜: 旧S1（7PLUS_R）全廃により R バックテスト結果は保存しない。
+    # HOLD = ペーパーランク（S1/S2/S3/A）の picks_history 集計に一本化する。
+    # メイン行 = 4ランクのプール合算（VAL は旧S1専用だったため廃止・行も削除）。
     try:
         paper = paper_rank_stats()
-        if paper:
-            results["HOLD"][1]["by_rank"].update(paper)
-            for k, v in paper.items():
-                roi_disp = f"{v['roi']:.1%}" if v["roi"] is not None else "—"
-                print(f"    {k}(paper): {v['n_picks']:,}R  的中={v['n_hits']:,}  "
-                      f"ROI={roi_disp}  [{PAPER_HOLD[0]}〜{PAPER_HOLD[1]}]", flush=True)
     except Exception as e:
-        print(f"  ペーパーランク集計失敗（継続）: {e}", flush=True)
+        print(f"  ペーパーランク集計失敗: {e}", flush=True)
+        sys.exit(1)
+    pooled = {
+        "n_picks": sum(v["n_picks"] for v in paper.values()),
+        "n_hits": sum(v["n_hits"] for v in paper.values()),
+        "total_bet": sum(v["total_bet"] for v in paper.values()),
+        "total_payout": sum(v["total_payout"] for v in paper.values()),
+        "by_rank": paper,
+    }
+    pooled["roi"] = (round(pooled["total_payout"] / pooled["total_bet"], 4)
+                     if pooled["total_bet"] else None)
+    for k, v in paper.items():
+        roi_disp = f"{v['roi']:.1%}" if v["roi"] is not None else "—"
+        print(f"    {k}(paper): {v['n_picks']:,}R  的中={v['n_hits']:,}  "
+              f"ROI={roi_disp}  [{PAPER_HOLD[0]}〜{PAPER_HOLD[1]}]", flush=True)
 
-    for period_type, period in [("VAL", VAL), ("HOLD", HOLD)]:
-        pfrom, pto = period
-        model_name, result = results[period_type]
-        if not args.dry_run and result["n_picks"] > 0:
-            save_to_db(model_name, period_type, pfrom, pto, result)
-        elif args.dry_run:
-            print(f"  (dry-run: {period_type} DB書き込みスキップ)", flush=True)
-        else:
-            print(f"  ({period_type} n_picks=0: スキップ)", flush=True)
+    if not args.dry_run:
+        # 旧S1（#7R）・旧VAL 行の掃除（表示に古い体系が混ざらないように）
+        with get_connection() as conn:
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7R'")
+            conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
+        save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
+    else:
+        print("  (dry-run: DB書き込みスキップ)", flush=True)
 
     print("\n完了", flush=True)
 

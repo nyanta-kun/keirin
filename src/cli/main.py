@@ -1157,7 +1157,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        U_ENTROPY_MIN,
+        S1_GAP12_MIN, S1_NE, U_ENTROPY_MIN,
         line_score_features, race_signals, ss_policy, u_entropy,
     )
     from pathlib import Path
@@ -1450,15 +1450,13 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "bet_type":    "3連複",
             })
 
-    if not plus7_r_races:
-        # 推奨0件でもファイルは書き切る（exit 1で中断しない）。
-        # notify_picks.py が「推奨はありません」通知＋全レース指数PDF送付の0件正常系を持っており、
-        # ここで中断するとファイル欠如→「⚠️ picksファイルが見つかりません」となり
-        # 本物の障害（cron不発・収集失敗）と区別できなくなるため（2026-06-12修正）。
-        msg = f"本日は7+車の対象レース（gap12≥{min_gap12:.2f}）がありません。"
-        if skipped_7plus_gami > 0:
-            msg += f"（SSランク gami不足スキップ:{skipped_7plus_gami}件）"
-        click.echo(msg, err=True)
+    # ── 旧S1(7PLUS_R・7車三連複)は 2026-07-16 全廃 ─────────────────────────────
+    # 候補生成コードは上に残置し、ここで出力を無効化する（新S1=6車三連単へ置換）。
+    # candidates JSON は空リストを書き出す（ファイル存在契約を維持し、
+    # notify_prerace_wt / write_candidates_wt の読み込みを壊さない）。
+    plus7_r_races = []
+    plus7_candidates = []
+    click.echo("旧S1(7PLUS_R)は2026-07-16全廃（候補・推奨は出力しません）。", err=True)
 
     sort_key = lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"])
     plus7_r_races.sort(key=sort_key)
@@ -1477,35 +1475,18 @@ def wave_picks_wt(target_date, output_path, model_name,
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append("=" * 70)
-    lines.append(f" 競輪AI予想PICK [wt]  {target_date}  (7+車 SS=三連複)")
+    lines.append(f" 競輪AI予想PICK [wt]  {target_date}")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
-    lines.append(f" 7+車(gap12≥{seven_plus_s_gap12:.2f}): SS:{len(plus7_r_races)}件"
-                 f"  (SS gami不足:{skipped_7plus_gami}件"
-                 f" 選抜:{skipped_7plus_policy}件)")
+    lines.append(" 旧S1(7PLUS_R・7車三連複)は2026-07-16全廃。")
+    lines.append(f" 新S1: 6車三連単 モデル1位→2位→{{3位,4位}} 2点（gap12≥{S1_GAP12_MIN:.2f}・ペーパー）")
+    lines.append("   → 候補は s1_candidates.json / 発走前判定・通知は notify_prerace_wt.py 参照")
     lines.append("=" * 70)
-    lines.append(f" SSランク: 三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}+gap23≥1pt  全目購入")
-    lines.append("   選抜レースは見送り（実精算検証で選抜ROI 26-39%・2026-07-16〜は選抜カットのみ）")
-    lines.append("=" * 70)
-    lines.append("")
 
-    # 2026-07-10〜: 旧SS/S(買い目カット)は廃止。SS = 内部rank 7PLUS_R（三連複・全目購入）。
-    # S/S+（7PLUS_ST/STP・三連単F）は 2026-07-15 に全廃。
-    # notify_results_wt._parse_picks_full が日付で新旧を判別する。
-    for p7_rank, p7_list, p7_desc in [
-        ("SS", plus7_r_races, f"三連複 全目min≥{GAMI_THRESHOLD:.0f}倍+gap12≥{seven_plus_s_gap12:.2f}  全目購入"),
-    ]:
-        lines.append(f"【7+車 {p7_rank}ランク】 {len(p7_list)}件  ※{p7_desc}")
-        lines.append("─" * 60)
-        lines.append("  (該当なし)" if not p7_list else "")
-        for e in p7_list:
-            lines.append(_fmt(e))
-        lines.append("")
+    # 旧S1(7PLUS_R)の「【7+車 SSランク】」txtセクションは 2026-07-16 全廃により出力しない
+    # （notify_results_wt._parse_picks_full は過去日 txt の後方互換のためパース処理を残置）。
 
     lines.append("=" * 70)
-    _cost = lambda lst: sum(int(e.get("stake", 300)) for e in lst)
-    p7r_cost = _cost(plus7_r_races)
-    lines.append(f"  7+車 SSランク: {len(plus7_r_races)}件 = {p7r_cost:,}円")
-    lines.append(f"  推奨合計投資額: {p7r_cost:,}円  (7+車)")
+    lines.append("  実賭け推奨なし（旧S1全廃・新S1/S2/S3/A は全てペーパー検証）")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)
@@ -1541,7 +1522,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     cands_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{cands_suffix}"
     with open(cands_path, "w", encoding="utf-8") as f:
         json.dump(plus7_candidates, f, ensure_ascii=False, indent=2)
-    click.echo(f"[保存先] {cands_path}  (発走前再検証用候補 {len(plus7_candidates)}件)")
+    click.echo(f"[保存先] {cands_path}  (旧S1全廃につき空リスト固定・ファイル存在契約のみ維持)")
 
     # 全レース指数 JSON（全レース。推奨レースは rank/買い目を付与）。
     # notify_picks.py がこれを読み「全レース指数PDF」を朝のDiscordに添付する。
@@ -1859,6 +1840,46 @@ def wave_picks_wt(target_date, output_path, model_name,
         with open(a_path, "w", encoding="utf-8") as f:
             json.dump(a_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {a_path}  (A候補 {len(a_candidates)}件・◎一致×波乱×別L先頭/ペーパー検証)")
+
+    # ── S1候補（6車三連単・ペーパートレード検証 2026-07-16〜）──────────────────
+    # 旧S1(7PLUS_R・7車三連複)の置き換え。対象: 6車ちょうど ∧ gap12 >= S1_GAP12_MIN
+    # （モデル予測確率 1位−2位・rawスケール・凍結値）。
+    # 買い目（三連単 m1→m2→{m3,m4} の2点）は発走15分前に notify_prerace_wt.judge_s1
+    # が盤面6車・モデル1-4位の在籍を確認して確定する（オッズゲートなし）。
+    s1_candidates = []
+    with get_connection() as conn_s1:
+        n_entries_map_s1 = dict(conn_s1.execute(
+            "SELECT race_key, n_entries FROM wt_races WHERE race_date=?",
+            (target_date,)
+        ).fetchall())
+    for race_key, grp in df.groupby("race_key"):
+        n_ent_s1 = n_entries_map_s1.get(race_key, 0)
+        if n_ent_s1 != S1_NE:
+            continue
+        grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+        if len(grp_sorted) != S1_NE:
+            continue
+        if _hour_skip(_hour_of(grp_sorted)):
+            continue
+        p_s1 = grp_sorted["pred_prob"].tolist()
+        gap12_s1 = float(p_s1[0] - p_s1[1])
+        if gap12_s1 < S1_GAP12_MIN:
+            continue
+        frames_s1 = grp_sorted["frame_no"].astype(int).tolist()  # モデル順位順
+        s1_candidates.append({
+            "race_key":   race_key,
+            "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+            "race_no":    int(grp_sorted["race_no"].iloc[0]),
+            "start_time": grp_sorted["start_time"].iloc[0],
+            "gap12":      round(gap12_s1, 4),
+            "order":      frames_s1[:4],  # [m1, m2, m3, m4]
+        })
+
+    s1_suffix = "_night_s1_candidates.json" if out_stem.endswith("_night") else "_s1_candidates.json"
+    s1_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s1_suffix}"
+    with open(s1_path, "w", encoding="utf-8") as f:
+        json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
+    click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・6車三連単/ペーパー検証)")
 
 
 @cli.command("backtest-wt")

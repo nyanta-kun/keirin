@@ -67,7 +67,7 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
         # （snapshot_morning_odds_wt.py の INSERT OR IGNORE ... SELECT FROM wt_odds が
         #   未変換で relation "wt_odds" does not exist になっていた・2026-07-16 修正）
         rest = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds_snapshot|wt_odds"
-                      r"|wt_weather|venue_info|picks_history)\b",
+                      r"|wt_weather|venue_info|picks_history|model_evaluation)\b",
                       r"keirin.\1", rest, flags=re.IGNORECASE)
 
         if action == "IGNORE":
@@ -94,8 +94,8 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
 
     # 通常の SQL: keirin スキーマ付与 + パラメータ変換
     # テーブル名に keirin. プレフィックスを付ける（既についている場合はスキップ）
-    sql = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds|wt_odds_snapshot"
-                 r"|wt_weather|venue_info|picks_history)\b",
+    sql = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds_snapshot|wt_odds"
+                 r"|wt_weather|venue_info|picks_history|model_evaluation)\b",
                  r"keirin.\1", sql, flags=re.IGNORECASE)
     # psycopg2 は % をフォーマット文字として扱う。
     # LIKE '7PLUS%' 等リテラル % を先に %% にエスケープしてから :name / ? を変換する。
