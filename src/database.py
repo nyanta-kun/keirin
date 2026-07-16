@@ -63,6 +63,12 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
         rest = rest.replace("?", "%s")
         # datetime('now') → NOW()
         rest = re.sub(r"datetime\('now'\)", "NOW()", rest, flags=re.IGNORECASE)
+        # INSERT ... SELECT の SELECT 本体にもスキーマを付与する
+        # （snapshot_morning_odds_wt.py の INSERT OR IGNORE ... SELECT FROM wt_odds が
+        #   未変換で relation "wt_odds" does not exist になっていた・2026-07-16 修正）
+        rest = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds_snapshot|wt_odds"
+                      r"|wt_weather|venue_info|picks_history)\b",
+                      r"keirin.\1", rest, flags=re.IGNORECASE)
 
         if action == "IGNORE":
             sql = f"INSERT INTO keirin.{table} ({', '.join(cols)}) {rest} ON CONFLICT DO NOTHING"
