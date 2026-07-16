@@ -216,8 +216,8 @@ def _write_race(conn, data: dict):
              ex_spurt_pct, ex_thrust_pct, ex_left_behind_pct,
              ex_split_line_pct, ex_snatch_pct,
              line_group, line_size, line_pos, is_line_leader, n_lines,
-             finish_order, factor)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             finish_order, factor, res_standing, res_back, final_half)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             data["race_key"], e["frame_no"], e["player_id"],
             e["name"], e["prefecture"], e["player_class"], e["term"],
@@ -231,6 +231,7 @@ def _write_race(conn, data: dict):
             e["line_group"], e["line_size"], e["line_pos"],
             e["is_line_leader"], e["n_lines"],
             e["finish_order"], e["factor"],
+            e.get("res_standing"), e.get("res_back"), e.get("final_half"),
         ))
 
     # 欠車ガード: スクレイパーは absent(欠車)選手を除外する（winticket.py で continue）。

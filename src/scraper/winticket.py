@@ -90,6 +90,16 @@ _HEADERS = {
 _BASE = "https://www.winticket.jp"
 
 
+def _parse_float(v: Any) -> float | None:
+    """文字列/数値を float に変換する（空・変換不可は None）。"""
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_state(html: str) -> dict:
     """HTML から window.__PRELOADED_STATE__ の JSON を抽出する。"""
     marker = "window.__PRELOADED_STATE__ = "
@@ -309,6 +319,14 @@ class WinticketScraper:
                 "n_lines":         n_lines,
                 "finish_order":    result.get("order"),
                 "factor":          result.get("factor", ""),
+                # レース単位の記録（結果確定後のみ・展開予測モデル用 2026-07-17）
+                # standing/back はこのレースで S/B を取ったかの bool、
+                # finalHalfRecord は上がりタイム（例 "11.9"）。未確定レースは None。
+                "res_standing":    (int(bool(result["standing"]))
+                                    if result.get("standing") is not None else None),
+                "res_back":        (int(bool(result["back"]))
+                                    if result.get("back") is not None else None),
+                "final_half":      _parse_float(result.get("finalHalfRecord")),
             })
 
         return {

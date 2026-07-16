@@ -470,6 +470,14 @@ def migrate_db():
                 conn.execute(f"ALTER TABLE picks_history ADD COLUMN {_col}")
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        # レース単位の S/B 取得・上がりタイム（展開予測モデル用・2026-07-17）。
+        # PG 側は kiseki alembic で追加（スキーマ管理ルール: 両側必須）
+        for _col in ("res_standing INTEGER", "res_back INTEGER", "final_half REAL"):
+            try:
+                conn.execute(f"ALTER TABLE wt_entries ADD COLUMN {_col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_picks_history_date ON picks_history(race_date)"
         )
@@ -544,6 +552,9 @@ def migrate_db():
                 n_lines         INTEGER,
                 finish_order    INTEGER,
                 factor          TEXT,
+                res_standing    INTEGER,
+                res_back        INTEGER,
+                final_half      REAL,
                 UNIQUE(race_key, frame_no)
             )
         """)
