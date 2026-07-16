@@ -53,8 +53,7 @@ def archive_sqlite(dry_run: bool) -> None:
         conn.commit()
 
 
-def archive_pg(dry_run: bool) -> None:
-    db_url = os.environ.get("KEIRIN_DB_URL")
+def archive_pg(dry_run: bool, db_url: str | None) -> None:
     if not db_url:
         print("[archive] KEIRIN_DB_URL 未設定 → VPS PG スキップ")
         return
@@ -88,8 +87,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    # KEIRIN_DB_URL が設定されていると get_connection が PG 直結になり
+    # SQLite 側の退避ができないため、env から退避して SQLite → PG の順に処理する
+    db_url = os.environ.pop("KEIRIN_DB_URL", None)
     archive_sqlite(args.dry_run)
-    archive_pg(args.dry_run)
+    archive_pg(args.dry_run, db_url)
     print("[archive] 完了")
 
 
