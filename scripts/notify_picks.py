@@ -270,17 +270,8 @@ def main():
         text = ""
 
     ss_n = len(picks_by_rank["SS"])  # 旧S1(7PLUS_R)・2026-07-16全廃につき常に0
-
-    # 新S1（6車三連単・ペーパー）: s1_candidates JSON の件数を朝通知に出す
-    s1_suffix = "_night_s1_candidates.json" if night else "_s1_candidates.json"
-    s1_path = picks_path.parent / f"{prefix}_{target_date}{s1_suffix}"
-    s1_n = 0
-    if s1_path.exists():
-        try:
-            s1_n = len(json.loads(s1_path.read_text(encoding="utf-8")))
-        except Exception:
-            s1_n = 0
-    total = ss_n + s1_n
+    # 新S1（6車三連単）は 2026-07-17 全廃（現行ペーパーランクは S2/S3 のみ）
+    total = ss_n
 
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
 
@@ -300,24 +291,17 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}  S1:{s1_n}")
+            send_file(str(pdf), caption=f"📊 {label} {md}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
 
     # ── ヘッダー送信 ──────────────────────────────────────────────────────────
-    # 2026-07-16〜: 旧S1（7車三連複・実賭け）全廃。全ランクがペーパー検証。
-    if total == 0:
-        header = (
-            f"🚲 **{title_label} {target_date}**\n"
-            f"S1(6車三連単)候補なし　※S2/S3/Aは発走15分前に個別通知（全てペーパー）"
-        )
-    else:
-        header = (
-            f"🚲 **{title_label} {target_date}**\n"
-            f"S1(6車三連単・ペーパー)候補: {s1_n}件\n"
-            f"※S2/S3/A は発走15分前に個別通知（全ランク ペーパー検証中）"
-        )
+    # 2026-07-17〜: 現行ランクは S2/S3 の2ペーパーのみ（S1/A は全廃）。
+    header = (
+        f"🚲 **{title_label} {target_date}**\n"
+        f"※S2/S3 は発走15分前に個別通知（全ランク ペーパー検証中）"
+    )
     send(header)
 
     # ── 推奨ランク詳細ブロック（SS/S/Aある場合のみ） ──────────────────────────

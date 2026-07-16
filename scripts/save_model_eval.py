@@ -50,12 +50,12 @@ from src.strategy_wt import line_score_features, ss_policy
 VAL  = ("2025-07-01", "2026-02-28")
 HOLD = ("2026-03-01", "2026-06-30")
 
-# ペーパーランク（S1/S2/S3/A）の検証期間集計対象（picks_history バックフィル済み範囲。
+# ペーパーランク（S2/S3）の検証期間集計対象（picks_history バックフィル済み範囲。
 # lgbm_wt_eval の OOS 開始 2026-04-13 〜 検証期間末 2026-06-30）
 # 2026-07-16: 旧S1（7PLUS_R・実賭け）全廃 → 全ランクがペーパー。
+# 2026-07-17: S1(SIX_S1)/A(7PLUS_A) 全廃・S3(7PLUS_M) は新定義（不一致×gap12≥0.10）。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
-PAPER_RANKS = [("S1", "SIX_S1", "#6S1"), ("U", "7PLUS_U", "#7U"),
-               ("M", "7PLUS_M", "#7M"), ("A", "7PLUS_A", "#7A")]
+PAPER_RANKS = [("U", "7PLUS_U", "#7U"), ("M", "7PLUS_M", "#7M")]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
 # VAL評価:  lgbm_wt_train_only（TRAIN 2022-12〜2025-06-30のみ学習・VALを汚染していない）
@@ -272,9 +272,9 @@ def run_7plus_backtest(
 
 
 def paper_rank_stats() -> dict:
-    """picks_history から S2/S3/A（ペーパー）の検証期間集計を返す。
+    """picks_history から S2/S3（ペーパー）の検証期間集計を返す。
 
-    バックフィル済みの picks_history（#7U/#7M/#7A・実精算）を PAPER_HOLD 期間で
+    バックフィル済みの picks_history（#7U/#7M・実精算）を PAPER_HOLD 期間で
     集計する。候補行（bet_amount=0）・見送り行は含めない。
     """
     out: dict[str, dict] = {}
@@ -323,9 +323,8 @@ def save_to_db(
          result["total_payout"], result["roi"]),
     ]
     for rank_key, rd in result.get("by_rank", {}).items():
-        # 新S1（6車）は suffix #6S1・それ以外は従来規約 #7{key}
-        rank_model = (f"{model_name}#6S1" if rank_key == "S1"
-                      else f"{model_name}#7{rank_key}")
+        # suffix 規約: {model}#7{key}（例 lgbm_wt#7U / lgbm_wt#7M）
+        rank_model = f"{model_name}#7{rank_key}"
         rows.append((
             rank_model, period_from, period_to, period_type,
             rd["n_picks"], rd["n_hits"], rd["total_bet"],
@@ -375,7 +374,7 @@ def save_to_db(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="ペーパーランク（S1/S2/S3/A）集計を model_evaluation に保存")
+        description="ペーパーランク（S2/S3）集計を model_evaluation に保存")
     parser.add_argument("--dry-run", action="store_true", help="DB書き込みなし（数値確認のみ）")
     args = parser.parse_args()
 
@@ -385,8 +384,8 @@ def main() -> None:
     # KEIRIN_DB_URL 設定時は get_connection が PG 直結（Web 表示と同一ソース）。
 
     # 2026-07-16〜: 旧S1（7PLUS_R）全廃により R バックテスト結果は保存しない。
-    # HOLD = ペーパーランク（S1/S2/S3/A）の picks_history 集計に一本化する。
-    # メイン行 = 4ランクのプール合算（VAL は旧S1専用だったため廃止・行も削除）。
+    # HOLD = ペーパーランク（S2/S3）の picks_history 集計に一本化する。
+    # メイン行 = 2ランクのプール合算（VAL は旧S1専用だったため廃止・行も削除）。
     try:
         paper = paper_rank_stats()
     except Exception as e:
@@ -407,9 +406,12 @@ def main() -> None:
               f"ROI={roi_disp}  [{PAPER_HOLD[0]}〜{PAPER_HOLD[1]}]", flush=True)
 
     if not args.dry_run:
-        # 旧S1（#7R）・旧VAL 行の掃除（表示に古い体系が混ざらないように）
+        # 廃止ランク行の掃除（表示に古い体系が混ざらないように）:
+        # 旧S1(#7R)・旧VAL、2026-07-17 全廃の S1(#6S1)/A(#7A)
         with get_connection() as conn:
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7R'")
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#6S1'")
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7A'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:

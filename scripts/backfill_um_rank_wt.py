@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
 """S2（旧U・7PLUS_U）/ S3（旧M・7PLUS_M）の過去分バックフィル。
 
-2026-07-16 のランク体系整理に伴い、S2/S3 の検証期間実績を picks_history
-（SQLite + VPS PG）に構築する。判定は本番（wave-picks-wt の候補選定 +
-notify_prerace_wt.judge_u / judge_m）と同一条件を最終オッズ盤面で再現する:
+S2/S3 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
+判定は本番（wave-picks-wt の候補選定 + notify_prerace_wt.judge_u / judge_m）と
+同一条件を最終オッズ盤面で再現する:
 
-  共通: 7車ちょうど ∧ 盤面(trio)7車 ∧ entropy>=U_ENTROPY_MIN ∧ mto>=U_MTO_MIN
-  S2(U): 穴=モデル3位内 ∧ (単騎 or ライン先頭/番手) ∧ 市場順位4-7位、
+  共通: 7車ちょうど ∧ 盤面(trio)7車
+  S2(U): entropy>=U_ENTROPY_MIN ∧ mto>=U_MTO_MIN ∧
+         穴=モデル3位内 ∧ (単騎 or ライン先頭/番手) ∧ 市場順位4-7位、
          相方=同ライン「逃」。複数成立は (モデル順位, 車番) 最小の1ペア。
          買い目 = 三連複 {穴,相方,t} のうちオッズ>=U_LEG_MIN_ODDS のみ
-  S3(M): WT◎≠システム◎ ∧ 相方=システム◎と同ライン「逃」（lp相補優先→車番最小）。
+  S3(M): WT◎≠システム◎ ∧ gap12>=M_GAP12_MIN（2026-07-17 新定義・軸信頼ゲート。
+         旧定義の entropy/mto 波乱ゲートは廃止）∧
+         相方=システム◎と同ライン「逃」（lp相補優先→車番最小）。
          S2(buy) と同一ペア集合のレースは S2 優先で S3 は記録しない。
          買い目 = 三連複 {システム◎,相方,t} のうちオッズ>=U_LEG_MIN_ODDS のみ
 
 採点は実精算方式（U/M live 採点と同一）: 盤面7車レースのみ対象・返還処理なし
 （買い目確定後の落車・失格は外れ計上）。払戻 = 的中時 trio 最終オッズ×100。
 
+--wipe-m を付けると、書き込み前に対象期間の既存 #7M 行を削除する
+（S3 新定義への置き換え時、旧定義でしか成立しない行を残さないため）。
+
 使い方:
     PYTHONPATH=. .venv/bin/python scripts/backfill_um_rank_wt.py \
-        --start 2026-04-13 --end 2026-07-15 [--model lgbm_wt_eval] [--dry-run]
+        --start 2026-04-13 --end 2026-07-15 [--model lgbm_wt_eval] \
+        [--wipe-m] [--dry-run]
 """
 from __future__ import annotations
 
@@ -36,7 +43,9 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE, M_STAKE
+from src.strategy_wt import (
+    M_GAP12_MIN, M_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
+)
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
@@ -117,12 +126,10 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
             board |= set(k)
         if len(board) != 7 or not trio:
             continue
+        # 波乱ゲート（S2のみ・2026-07-17〜 S3には適用しない）
         ent = _entropy([float(x) for x in g["pred_prob"].tolist()])
-        if ent < U_ENTROPY_MIN:
-            continue
         mto = min(trio.values())
-        if mto < U_MTO_MIN:
-            continue
+        u_gate_ok = ent >= U_ENTROPY_MIN and mto >= U_MTO_MIN
 
         g = g.sort_values("pred_prob", ascending=False).reset_index(drop=True)
         mk = marks.get(rk, {})
@@ -155,10 +162,10 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
                     thirds.append(t)
             return combos, thirds
 
-        # ── S2(U): 穴候補ペア列挙 → 判定 ──
+        # ── S2(U): 波乱ゲート充足時のみ・穴候補ペア列挙 → 判定 ──
         u_pair: tuple[int, int] | None = None
         eligible: list[tuple[int, int, int]] = []
-        for rank_idx, r in enumerate(rows_g[:3], start=1):
+        for rank_idx, r in enumerate(rows_g[:3] if u_gate_ok else [], start=1):
             lg = _int(getattr(r, "line_group", None))
             ls = _int(getattr(r, "line_size", None))
             lp = _int(getattr(r, "line_pos", None))
@@ -191,7 +198,10 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
                     "bet_amount": len(combos) * U_STAKE,
                 })
 
-        # ── S3(M): ◎不一致 × システム◎同ライン逃相方 ──
+        # ── S3(M): ◎不一致 × gap12≥M_GAP12_MIN × システム◎同ライン逃相方 ──
+        probs_m = [float(x) for x in g["pred_prob"].tolist()]
+        if probs_m[0] - probs_m[1] < M_GAP12_MIN:
+            continue  # 軸信頼ゲート（2026-07-17 新定義）
         wt_tops = [fno for fno, (pm_v, _) in mk.items() if pm_v == 1]
         if not wt_tops:
             continue
@@ -199,7 +209,7 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
         r1 = rows_g[0]
         m1 = int(r1.frame_no)
         if m1 == wt_top:
-            continue  # 一致レースは対象外（Aランク側）
+            continue  # 一致レースは対象外
         lg1 = _int(getattr(r1, "line_group", None))
         if lg1 is None:
             continue
@@ -234,6 +244,42 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
             "bet_amount": len(combos) * M_STAKE,
         })
     return rows
+
+
+def wipe_m_rows(date_from: str, date_to: str, dry_run: bool) -> None:
+    """対象期間の既存 #7M 行を削除する（S3 新定義への置き換え用）。
+
+    旧定義（波乱ゲート）でのみ成立していた行は新定義の INSERT では
+    上書きされない（race_key が同じでも成立レース集合が異なる）ため、
+    書き込み前に期間内の #7M を消して新定義の結果だけを残す。
+    """
+    cond = "rank='7PLUS_M' AND race_key LIKE '%#7M' AND race_date BETWEEN ? AND ?"
+    with get_connection() as conn:
+        n = conn.execute(
+            f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
+            (date_from, date_to)).fetchone()[0]
+        print(f"[backfill] 既存 #7M 行（{date_from}〜{date_to}）: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+        if not dry_run and n:
+            conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
+            conn.commit()
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if not db_url:
+        return
+    import psycopg2
+    with psycopg2.connect(db_url) as pg:
+        with pg.cursor() as cur:
+            cond_pg = ("rank='7PLUS_M' AND race_key LIKE '%%#7M' "
+                       "AND race_date BETWEEN %s AND %s")
+            cur.execute(
+                f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
+                (date_from, date_to))
+            n = cur.fetchone()[0]
+            print(f"[backfill] VPS PG 既存 #7M 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            if not dry_run and n:
+                cur.execute(
+                    f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
+                    (date_from, date_to))
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
@@ -282,6 +328,8 @@ def main() -> None:
     ap.add_argument("--start", default="2026-04-13")
     ap.add_argument("--end", required=False)
     ap.add_argument("--model", default="lgbm_wt_eval")
+    ap.add_argument("--wipe-m", action="store_true",
+                    help="書き込み前に対象期間の既存 #7M 行を削除（S3新定義への置換用）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     if not args.end:
@@ -289,6 +337,8 @@ def main() -> None:
         args.end = (date.today() - timedelta(days=1)).isoformat()
 
     print(f"[backfill] model={args.model} {args.start}〜{args.end}")
+    if args.wipe_m:
+        wipe_m_rows(args.start, args.end, args.dry_run)
     rows = build_rows(args.model, args.start, args.end)
     for rank, label in (("7PLUS_U", "S2(U)"), ("7PLUS_M", "S3(M)")):
         sel = [r for r in rows if r["rank"] == rank]

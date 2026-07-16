@@ -1,13 +1,14 @@
-"""notify_prerace_wt.judge_m（M・◎不一致×システム◎/ペーパートレード）の純関数テスト。
+"""notify_prerace_wt.judge_m（M=S3・◎不一致×システム◎/ペーパートレード）の純関数テスト。
 
 judge_m はライブ三連複盤面（{frozenset: odds}）とM候補ペア（朝確定済み1件）、
 同一レースの U 判定記録（あれば）のみで判定する:
   ① 盤面7車（有効オッズ 0<ov<9000 の掲載車）— 欠車なら見送り
-  ② 盤面min三連複オッズ(mto) >= U_MTO_MIN(4.3)（Uと同じ凍結値）
-  ③ U優先の重複排除: {rk}#U が buy ∧ ペアが同一集合 → 見送り（skip_reason="U重複"）
-  ④ 買い目 = 軸2車 + 残り5車 のうちオッズ >= U_LEG_MIN_ODDS(15.0) のみ。0点なら見送り
+  ② U優先の重複排除: {rk}#U が buy ∧ ペアが同一集合 → 見送り（skip_reason="U重複"）
+  ③ 買い目 = 軸2車 + 残り5車 のうちオッズ >= U_LEG_MIN_ODDS(15.0) のみ。0点なら見送り
 
-judge_u との相違点: 市場順位条件なし・ペア選定なし（朝に1件確定済み）・U重複排除あり。
+2026-07-17 新定義: 旧mtoゲート（mto>=U_MTO_MIN）は廃止（mto は記録のみ）。
+gap12>=M_GAP12_MIN の軸信頼ゲートは朝の候補選定（wave-picks-wt）で確定済み。
+judge_u との相違点: 波乱ゲートなし・市場順位条件なし・ペア選定なし・U重複排除あり。
 """
 from itertools import combinations
 
@@ -25,7 +26,7 @@ PAIR = {"m1": 4, "mate": 5}
 
 
 def test_buy_basic():
-    """盤面7車・mto充足・全目15倍以上 → buy 成立（市場順位条件はなし）。"""
+    """盤面7車・全目15倍以上 → buy 成立（市場順位条件はなし）。"""
     dec, det = np_wt.judge_m(PAIR, _lookup(20.0))
     assert dec == "buy"
     assert det["m1"] == 4
@@ -43,16 +44,20 @@ def test_skip_board_not_7cars():
     assert "欠車" in det["skip_reason"]
 
 
-def test_skip_mto_below_threshold():
-    """盤面min三連複オッズ < U_MTO_MIN(4.3) → 見送り。"""
-    dec, det = np_wt.judge_m(PAIR, _lookup(4.0))
-    assert dec == "skip"
-    assert det["mto"] == 4.0
-    assert "mto" in det["skip_reason"]
+def test_low_mto_no_longer_blocks():
+    """旧mtoゲート廃止（2026-07-17）: mto<4.3 でも軸目が15倍以上なら buy 成立。
+
+    盤面minは 4.0（軸外の目）だが、軸2車 {4,5} を含む5目は全て20倍 → 5点買い。
+    """
+    overrides = {frozenset({1, 2, 3}): 4.0}  # 軸を含まない目だけ低オッズ
+    dec, det = np_wt.judge_m(PAIR, _lookup(20.0, overrides=overrides))
+    assert dec == "buy"
+    assert det["mto"] == 4.0  # mto は記録される（ゲートではない）
+    assert len(det["combos"]) == 5
 
 
 def test_skip_no_leg_above_15():
-    """15倍以上の買い目が0点 → 見送り（mto=14.0≥4.3 は通過するが全目<15倍）。"""
+    """15倍以上の買い目が0点 → 見送り（全目<15倍）。"""
     dec, det = np_wt.judge_m(PAIR, _lookup(14.0))
     assert dec == "skip"
     assert det["mto"] == 14.0

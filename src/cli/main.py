@@ -1024,15 +1024,52 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
 
     df = build_features_wt(df_raw)
     # M-2: 学習母集団は finish_order が確定済みの全行（NaN=未確定のみ除外）。
-    # finish_order=0（欠車/失格）は top3_flag=0 の負例として含める。
     # 予測時・バックテスト(_apply_pred_prob_wt)は全エントリーで確率付与するため
     # 学習も同一母集団にしないと train/serve skew（欠車楽観バイアス）が生じる。
     # ローリング特徴の履歴計算は引き続き finish_order>=1 のみを参照（仕様変更なし）。
     df_train = df[df["finish_order"].notna()].copy()
+
+    # 落車・失格を含むレースの学習除外（2026-07-16 検証済み・既定OFF）。
+    # A/B検証の結果、除外すると「事故が起きなかった」という事後情報で学習母集団を
+    # 選別することになり、実運用（事故込み）との較正がズレて S1 テストROIが
+    # 122.8%→87.9% に劣化した。落車者のモデル事前順位分布はほぼ一様＝個人レベルの
+    # 落車予測（リーク）は存在しないことも確認済み。よって既定は含めて学習する。
+    # 再検証したい場合のみ環境変数 WT_EXCLUDE_DNF_RACES=1 で有効化。
+    import os as _os_dnf
+    _exclude_dnf = _os_dnf.environ.get("WT_EXCLUDE_DNF_RACES") == "1"
+    from src.database import get_connection as _gc_dnf
+    _dnf0 = (df_train[df_train["finish_order"] == 0][["race_key", "frame_no"]]
+             if _exclude_dnf else df_train.iloc[0:0][["race_key", "frame_no"]])
+    _dnf_races: set[str] = set()
+    if len(_dnf0):
+        import re as _re_dnf
+        _rk0 = _dnf0["race_key"].unique().tolist()
+        _boards: dict[str, set[int]] = {}
+        with _gc_dnf() as _c_dnf:
+            for _i in range(0, len(_rk0), 900):
+                _chunk = _rk0[_i:_i + 900]
+                _q = ("SELECT race_key, combination FROM wt_odds "
+                      "WHERE bet_type='trio' AND race_key IN (%s)"
+                      % ",".join("?" * len(_chunk)))
+                for _rk_d, _comb in _c_dnf.execute(_q, _chunk):
+                    try:
+                        _parts = {int(x) for x in _re_dnf.split(r"[-=→]", str(_comb))}
+                    except ValueError:
+                        continue
+                    _boards.setdefault(_rk_d, set()).update(_parts)
+        for _row in _dnf0.itertuples(index=False):
+            if int(_row.frame_no) in _boards.get(_row.race_key, set()):
+                _dnf_races.add(_row.race_key)
+        if _dnf_races:
+            _before = df_train["race_key"].nunique()
+            df_train = df_train[~df_train["race_key"].isin(_dnf_races)].copy()
+            click.echo(f"落車・失格レース除外: {len(_dnf_races):,}レースを学習から除外 "
+                       f"({_before:,} → {df_train['race_key'].nunique():,}レース)")
+
     n_dns = (df_train["finish_order"] == 0).sum()
     click.echo(f"Training samples: {len(df_train):,} entries / "
                f"{df_train['race_key'].nunique():,} races  "
-               f"(finish_order!=NaN; DNS/DNF={n_dns:,}件を負例に含む)")
+               f"(finish_order!=NaN; DNS/DNF={n_dns:,}件を負例に含む{'・落車失格レース除外' if _exclude_dnf else ''})")
 
     if len(df_train) < 100:
         click.echo("学習データが不足しています（100行未満）。", err=True)
@@ -1157,7 +1194,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        S1_GAP12_MIN, S1_NE, U_ENTROPY_MIN,
+        M_GAP12_MIN, U_ENTROPY_MIN,
         line_score_features, race_signals, ss_policy, u_entropy,
     )
     from pathlib import Path
@@ -1657,11 +1694,12 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(u_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
 
-    # ── M候補（◎不一致×システム◎・ペーパートレード検証 2026-07-16〜）──────────
-    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致の波乱見込み
+    # ── M候補（S3・◎不一致×システム◎×gap12≥0.10・2026-07-17 新定義）──────────
+    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致で、
+    # gap12 >= M_GAP12_MIN（軸信頼ゲート・旧の波乱ゲート entropy/mto は廃止）の
     # レースで、システム◎と同ライン「逃」相方を2車軸にする
-    # （検証: exp_mismatch_m1_wt.py テスト48R 121.8% / VAL 244R 120.9%）。
-    # オッズ判定（盤面7車・mto・15倍以上の目・U重複排除）は発走15分前に
+    # （検証: exp_axis_redesign.py 検証1年 111.8% → テスト 104.4%）。
+    # オッズ判定（盤面7車・15倍以上の目・U重複排除）は発走15分前に
     # notify_prerace_wt.judge_m が確定する。市場順位条件はなし（Uとの相違点）。
     if include_7plus:
         m_candidates = []
@@ -1686,8 +1724,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                 continue
             if _hour_skip(_hour_of(grp_sorted)):
                 continue
-            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
-            if ent < U_ENTROPY_MIN:  # Uと同じ凍結値を再利用
+            p_m = grp_sorted["pred_prob"].tolist()
+            gap12_m = float(p_m[0] - p_m[1])
+            if gap12_m < M_GAP12_MIN:  # 軸信頼ゲート（2026-07-17 新定義）
                 continue
 
             def _m_int(v):
@@ -1738,7 +1777,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                 "race_no":    int(grp_sorted["race_no"].iloc[0]),
                 "start_time": grp_sorted["start_time"].iloc[0],
-                "entropy":    round(float(ent), 4),
+                "gap12":      round(gap12_m, 4),
                 "pair":       {"m1": m1_fno, "mate": mate_fno},
                 "wt_mark":    wt_fno,
             })
@@ -1749,137 +1788,10 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(m_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {m_path}  (M候補 {len(m_candidates)}件・◎不一致×システム◎/ペーパー検証)")
 
-    # ── A候補（◎一致×波乱×別ライン先頭・二連単・ペーパートレード検証 2026-07-16〜）──
-    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が一致した波乱見込み
-    # レースで、◎と別ラインの「先頭」のうち競走得点最上位の1車を軸にする
-    # （検証: kiseki scratchpad wt_match_hitrate_frontier.py 窓1 ROI100.2%/窓2 96.7%）。
-    # オッズ判定（盤面7車・二連単 目5〜50倍）は発走15分前に
-    # notify_prerace_wt.judge_a が確定する。mto 条件はなし（U/M との相違点）。
-    if include_7plus:
-        a_candidates = []
-        # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
-        pm_fallback_a = None
-        if "prediction_mark" not in df.columns:
-            pm_fallback_a = {}
-            with get_connection() as conn_a:
-                for _rk_a, _fno_a, _pm_a in conn_a.execute(
-                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
-                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
-                    "WHERE r.race_date = ?", (target_date,)
-                ).fetchall():
-                    if _pm_a is not None:
-                        pm_fallback_a.setdefault(_rk_a, {})[int(_fno_a)] = int(_pm_a)
-
-        for race_key, grp in df.groupby("race_key"):
-            if n_entries_map.get(race_key, 0) != 7:
-                continue
-            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
-            if len(grp_sorted) != 7:
-                continue
-            if _hour_skip(_hour_of(grp_sorted)):
-                continue
-            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
-            if ent < U_ENTROPY_MIN:  # Uと同じ凍結値を再利用
-                continue
-
-            def _a_int(v):
-                return None if v is None or pd.isna(v) else int(v)
-
-            rows_a = list(grp_sorted.itertuples(index=False))
-
-            # WT◎（prediction_mark==1）の存在確認
-            if pm_fallback_a is None:
-                wt_marks_a = [int(r_a.frame_no) for r_a in rows_a
-                              if _a_int(getattr(r_a, "prediction_mark", None)) == 1]
-            else:
-                wt_marks_a = [fno for fno, pm_v in pm_fallback_a.get(race_key, {}).items()
-                              if pm_v == 1]
-            if not wt_marks_a:
-                continue
-            wt_fno_a = min(wt_marks_a)
-
-            # システム◎ = pred_prob 1位。WT◎と一致のレースのみ対象（Mと逆条件）
-            r1_a = rows_a[0]
-            top_fno_a = int(r1_a.frame_no)
-            if top_fno_a != wt_fno_a:
-                continue
-
-            # 軸 = ◎と別ラインの「先頭」（line_pos==1）のうち競走得点最上位。
-            # ◎のライン不明（単騎等）の場合は全ライン先頭が対象。
-            # 得点欠損は -1 扱い、同点は車番大きい方（検証スクリプトと同一の決定則）。
-            lg1_a = _a_int(getattr(r1_a, "line_group", None))
-            rivals_a = []
-            for r_a in rows_a:
-                fno_a = int(r_a.frame_no)
-                if fno_a == top_fno_a:
-                    continue
-                if _a_int(getattr(r_a, "line_pos", None)) != 1:
-                    continue
-                lg_a = _a_int(getattr(r_a, "line_group", None))
-                if lg1_a is not None and lg_a == lg1_a:
-                    continue
-                rp_a = getattr(r_a, "race_point", None)
-                rp_val = float(rp_a) if rp_a is not None and rp_a == rp_a else -1.0
-                rivals_a.append((rp_val, fno_a))
-            if not rivals_a:
-                continue
-            axis_rp_a, axis_fno_a = max(rivals_a)
-
-            a_candidates.append({
-                "race_key":   race_key,
-                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
-                "race_no":    int(grp_sorted["race_no"].iloc[0]),
-                "start_time": grp_sorted["start_time"].iloc[0],
-                "entropy":    round(float(ent), 4),
-                "pair":       {"axis": axis_fno_a, "top": top_fno_a},
-                "axis_rp":    round(axis_rp_a, 1) if axis_rp_a >= 0 else None,
-            })
-
-        a_suffix = "_night_a_candidates.json" if out_stem.endswith("_night") else "_a_candidates.json"
-        a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{a_suffix}"
-        with open(a_path, "w", encoding="utf-8") as f:
-            json.dump(a_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {a_path}  (A候補 {len(a_candidates)}件・◎一致×波乱×別L先頭/ペーパー検証)")
-
-    # ── S1候補（6車三連単・ペーパートレード検証 2026-07-16〜）──────────────────
-    # 旧S1(7PLUS_R・7車三連複)の置き換え。対象: 6車ちょうど ∧ gap12 >= S1_GAP12_MIN
-    # （モデル予測確率 1位−2位・rawスケール・凍結値）。
-    # 買い目（三連単 m1→m2→{m3,m4} の2点）は発走15分前に notify_prerace_wt.judge_s1
-    # が盤面6車・モデル1-4位の在籍を確認して確定する（オッズゲートなし）。
-    s1_candidates = []
-    with get_connection() as conn_s1:
-        n_entries_map_s1 = dict(conn_s1.execute(
-            "SELECT race_key, n_entries FROM wt_races WHERE race_date=?",
-            (target_date,)
-        ).fetchall())
-    for race_key, grp in df.groupby("race_key"):
-        n_ent_s1 = n_entries_map_s1.get(race_key, 0)
-        if n_ent_s1 != S1_NE:
-            continue
-        grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
-        if len(grp_sorted) != S1_NE:
-            continue
-        if _hour_skip(_hour_of(grp_sorted)):
-            continue
-        p_s1 = grp_sorted["pred_prob"].tolist()
-        gap12_s1 = float(p_s1[0] - p_s1[1])
-        if gap12_s1 < S1_GAP12_MIN:
-            continue
-        frames_s1 = grp_sorted["frame_no"].astype(int).tolist()  # モデル順位順
-        s1_candidates.append({
-            "race_key":   race_key,
-            "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
-            "race_no":    int(grp_sorted["race_no"].iloc[0]),
-            "start_time": grp_sorted["start_time"].iloc[0],
-            "gap12":      round(gap12_s1, 4),
-            "order":      frames_s1[:4],  # [m1, m2, m3, m4]
-        })
-
-    s1_suffix = "_night_s1_candidates.json" if out_stem.endswith("_night") else "_s1_candidates.json"
-    s1_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s1_suffix}"
-    with open(s1_path, "w", encoding="utf-8") as f:
-        json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
-    click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・6車三連単/ペーパー検証)")
+    # ── A候補（◎一致×波乱×別L先頭・二連単）・S1候補（6車三連単）は 2026-07-17 全廃 ──
+    # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の
+    # 再検証で両者とも検証ROI100%超なし → 候補生成を停止（src/strategy_wt.py 参照）。
+    # 現行のペーパーランクは S2(7PLUS_U) と S3(7PLUS_M) の2つのみ。
 
 
 @cli.command("backtest-wt")
