@@ -350,7 +350,14 @@ def main() -> None:
                 print(f"[write_candidates_wt] {fname} 読み込み失敗: {e}", flush=True)
 
     if not candidates:
-        print(f"[write_candidates_wt] {target_date}: candidates なし", flush=True)
+        # 旧S1(7PLUS_R)全廃（2026-07-16）以降 candidates.json は常に空リスト。
+        # ここで return すると S2/S3 のペーパー候補行まで書かれなくなるため、
+        # #CAND 処理だけスキップしてペーパー候補・初回ガミ判定は続行する。
+        print(f"[write_candidates_wt] {target_date}: candidates なし（#CANDスキップ）", flush=True)
+        try:
+            _write_paper_candidates(target_date)
+        except Exception as e:
+            print(f"[write_candidates_wt] ペーパー候補処理エラー（継続）: {e}", flush=True)
         return
 
     # 7車レースのみを対象（9車・8車は ROI 構造的に不利のため除外）
