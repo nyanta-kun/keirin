@@ -246,21 +246,22 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
     return rows
 
 
-def wipe_m_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    """対象期間の既存 #7M 行を削除する（S3 新定義への置き換え用）。
+def wipe_rank_rows(rank: str, suffix: str, date_from: str, date_to: str, dry_run: bool) -> None:
+    """対象期間の既存 #7U/#7M 行を削除する（定義変更・モデル更新時の置き換え用）。
 
-    旧定義（波乱ゲート）でのみ成立していた行は新定義の INSERT では
+    旧定義/旧モデルでのみ成立していた行は新定義/新モデルの INSERT では
     上書きされない（race_key が同じでも成立レース集合が異なる）ため、
-    書き込み前に期間内の #7M を消して新定義の結果だけを残す。
+    書き込み前に期間内の対象ランクを消して新しい結果だけを残す。
     """
-    cond = "rank='7PLUS_M' AND race_key LIKE '%#7M' AND race_date BETWEEN ? AND ?"
+    cond = "rank=? AND race_key LIKE ? AND race_date BETWEEN ? AND ?"
+    like = f"%{suffix}"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
-            (date_from, date_to)).fetchone()[0]
-        print(f"[backfill] 既存 #7M 行（{date_from}〜{date_to}）: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            (rank, like, date_from, date_to)).fetchone()[0]
+        print(f"[backfill] 既存 {suffix} 行（{date_from}〜{date_to}）: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
-            conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
+            conn.execute(f"DELETE FROM picks_history WHERE {cond}", (rank, like, date_from, date_to))
             conn.commit()
 
     db_url = os.environ.get("KEIRIN_DB_URL")
@@ -269,17 +270,26 @@ def wipe_m_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     import psycopg2
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
-            cond_pg = ("rank='7PLUS_M' AND race_key LIKE '%%#7M' "
-                       "AND race_date BETWEEN %s AND %s")
+            cond_pg = "rank=%s AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
             cur.execute(
                 f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
-                (date_from, date_to))
+                (rank, like, date_from, date_to))
             n = cur.fetchone()[0]
-            print(f"[backfill] VPS PG 既存 #7M 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            print(f"[backfill] VPS PG 既存 {suffix} 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(
                     f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
-                    (date_from, date_to))
+                    (rank, like, date_from, date_to))
+
+
+def wipe_m_rows(date_from: str, date_to: str, dry_run: bool) -> None:
+    """後方互換ラッパー（S3新定義置き換え時に使用）。"""
+    wipe_rank_rows("7PLUS_M", "#7M", date_from, date_to, dry_run)
+
+
+def wipe_u_rows(date_from: str, date_to: str, dry_run: bool) -> None:
+    """後方互換ラッパー（モデル更新時に使用）。"""
+    wipe_rank_rows("7PLUS_U", "#7U", date_from, date_to, dry_run)
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
@@ -330,6 +340,8 @@ def main() -> None:
     ap.add_argument("--model", default="lgbm_wt_eval")
     ap.add_argument("--wipe-m", action="store_true",
                     help="書き込み前に対象期間の既存 #7M 行を削除（S3新定義への置換用）")
+    ap.add_argument("--wipe-u", action="store_true",
+                    help="書き込み前に対象期間の既存 #7U 行を削除（モデル更新時の置換用）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     if not args.end:
@@ -339,6 +351,8 @@ def main() -> None:
     print(f"[backfill] model={args.model} {args.start}〜{args.end}")
     if args.wipe_m:
         wipe_m_rows(args.start, args.end, args.dry_run)
+    if args.wipe_u:
+        wipe_u_rows(args.start, args.end, args.dry_run)
     rows = build_rows(args.model, args.start, args.end)
     for rank, label in (("7PLUS_U", "S2(U)"), ("7PLUS_M", "S3(M)")):
         sel = [r for r in rows if r["rank"] == rank]
