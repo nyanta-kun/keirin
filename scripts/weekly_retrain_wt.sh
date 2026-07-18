@@ -26,8 +26,11 @@ echo "[$(date '+%H:%M:%S')] ① holdout評価（直近90日をテスト）..." |
 # 前回 eval の AUC を比較用に退避（初回は存在しなくてよい）
 PREV_EVAL_META="data/models/lgbm_wt_eval.meta.json"
 PREV_AUC=$(python3 -c "import json,sys; print(json.load(open('$PREV_EVAL_META')).get('test_auc_holdout') or '')" 2>/dev/null || echo "")
+# 学習開始 2024-04-01: sb_dyn 4特徴のラベル（S/B・上がり）が 2024-01〜のみ存在し、
+# それ以前の 0埋め行が信号を希釈するため（exp_window_ab_48f.py: 旧データ1.3年分は
+# 44f 基礎性能に寄与ゼロ・48f では ΔAUC+0.013 が +0.0005 に縮む。2026-07-18）
 .venv/bin/python3 -m src.cli.main train-wt \
-  --from 2023-07-01 --test-from "$TEST_FROM" --save-as lgbm_wt_eval --no-promote \
+  --from 2024-04-01 --test-from "$TEST_FROM" --save-as lgbm_wt_eval --no-promote \
   2>&1 | tee -a "$LOG"
 
 # ①' 品質ゲート: holdout AUC が絶対下限未満 or 前回比で大幅悪化なら本番昇格を中止
@@ -55,7 +58,7 @@ PYGATE
 # ② 配信モデル: 全データで再学習して lgbm_wt を更新（H-1）
 echo "[$(date '+%H:%M:%S')] ② 配信用: 全データ再学習 → lgbm_wt ..." | tee -a "$LOG"
 .venv/bin/python3 -m src.cli.main train-wt \
-  --from 2023-07-01 --full-refit --save-as lgbm_wt \
+  --from 2024-04-01 --full-refit --save-as lgbm_wt \
   2>&1 | tee -a "$LOG"
 
 # ③ 波乱ゲート top3_sum カット定数を配信モデルの分布で再計測（test期間除外）

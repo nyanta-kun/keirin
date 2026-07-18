@@ -143,7 +143,9 @@ def test_missing_columns_backward_compat():
         assert (out[c] == 0.0).all(), c
 
 
-def test_feature_cols_contains_rp_trend_at_tail():
-    """FEATURE_COLS_WT 末尾に4特徴が追加されている（既存40列の順序不変）。"""
-    assert FEATURE_COLS_WT[-4:] == RP_TREND_COLS_WT
-    assert len(FEATURE_COLS_WT) == 44
+def test_feature_cols_contains_rp_trend():
+    """FEATURE_COLS_WT に rp_trend 4特徴が含まれる（2026-07-18 の sb_dyn 4特徴追加で
+    末尾は sb_dyn になったため位置ではなく包含で検証・48特徴）。"""
+    for c in RP_TREND_COLS_WT:
+        assert c in FEATURE_COLS_WT
+    assert len(FEATURE_COLS_WT) == 48

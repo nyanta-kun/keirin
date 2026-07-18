@@ -210,6 +210,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # 競走得点トレンド（point-in-time。履歴 wt_entries の得点時系列から計算）
     df = add_rp_trend_features_wt(df)
 
+    # レース単位S/B・上がり由来のローリング特徴（point-in-time・2026-07-18追加）
+    df = add_sb_dyn_features_wt(df)
+
     # M-1: 学習(train_lgbm dropna)・推論(prepare_X fillna)・バックテストで
     # 同一の特徴表現になるよう、ソースで FEATURE_COLS_WT の NaN を 0 に統一保証する
     # （現状 build 過程で各特徴は補完済＝実質no-op だが、将来の fill 漏れによる
@@ -407,6 +410,97 @@ def add_rp_trend_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = No
     return out.drop(columns=["rp_ma90", "rp_ma180", "rp_prev"], errors="ignore")
 
 
+SB_DYN_COLS_WT = [
+    "b_rate_90", "s_rate_90", "fh_rel_90", "fh_best_rate_90",
+]
+
+
+def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None) -> pd.DataFrame:
+    """レース単位の S/B 取得・上がりタイム由来のローリング特徴を付与する（point-in-time）。
+
+    データ源はバックフィル済みの wt_entries.res_standing / res_back / final_half
+    （2024-01〜。[[keirin_sb_dynamics_pipeline]] 参照）。全て過去レースのみ・
+    closed="left" 90日窓・レース内相対化済み:
+
+    - b_rate_90       : 直近90日の B（バック先頭）取得率
+    - s_rate_90       : 直近90日の S（スタンディング先頭）取得率
+    - fh_rel_90       : 直近90日の上がり相対値平均（自上がり − レース中央値・負=速い）
+    - fh_best_rate_90 : 直近90日の「レース内上がり最速」率
+
+    A/B検証（exp_sb_dyn_ab.py・2独立窓×5seed）: ΔAUC +0.013/+0.011・
+    指数1位3着内率 +0.93pt/+1.10pt・重要度2〜9位/48（2026-07-18採用）。
+
+    実装上の要点:
+    - 履歴 H は wt_entries **全行**（未確定・ラベル欠損行を含む）。ラベル欠損は
+      NaN のままにし rolling 平均から自動除外される一方、行は (race_key, player_id)
+      merge キーとして残るため、当日・未確定レースの予測時も同一経路で as-of 値が
+      付く（train/serve skew なし・rp_trend と同じ設計）。
+    - 2024-01 以前はラベルが存在せず窓が空 → 0.0 補完（学習/予測で同一の既定値）。
+
+    Args:
+        df: 特徴量付与対象（race_key / player_id / race_date 列を持つ前提）。
+        history: テスト用に注入する履歴（race_key/player_id/res_standing/
+            res_back/final_half/race_date 列）。None の場合は DB から読む。
+    """
+    df = df.copy()
+    if "player_id" not in df.columns or "race_date" not in df.columns:
+        for c in SB_DYN_COLS_WT:
+            df[c] = 0.0
+        return df
+
+    if history is None:
+        sb_sql = (
+            "SELECT e.race_key, e.player_id, e.res_standing, e.res_back, "
+            "e.final_half, r.race_date "
+            "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key"
+        )
+        db_url = os.environ.get("KEIRIN_DB_URL")
+        if db_url:
+            from sqlalchemy import create_engine, text as sa_text
+            engine = create_engine(db_url)
+            pg_sql = sb_sql.replace("wt_entries", "keirin.wt_entries") \
+                            .replace("wt_races", "keirin.wt_races")
+            with engine.connect() as sa_conn:
+                H = pd.read_sql_query(sa_text(pg_sql), sa_conn)
+            engine.dispose()
+        else:
+            with get_connection() as conn:
+                H = pd.read_sql_query(sb_sql, conn)
+    else:
+        H = history.copy()
+
+    H["_dt"] = pd.to_datetime(H["race_date"])
+    # レース内相対化: fh_rel = 自上がり − レース中央値（負=速い）・fh_best = レース内最速。
+    # final_half<=0 や欠損は NaN（rolling から除外）。
+    fh = pd.to_numeric(H["final_half"], errors="coerce")
+    H["_fh"] = fh.where(fh > 0)
+    med = H.groupby("race_key")["_fh"].transform("median")
+    mn = H.groupby("race_key")["_fh"].transform("min")
+    H["_fh_rel"] = H["_fh"] - med
+    H["_fh_best"] = (H["_fh"] == mn).astype(float).where(H["_fh"].notna())
+    H["_b"] = pd.to_numeric(H["res_back"], errors="coerce")
+    H["_s"] = pd.to_numeric(H["res_standing"], errors="coerce")
+
+    H = H.sort_values(["player_id", "_dt"]).reset_index(drop=True)
+
+    def _rm(col: str) -> np.ndarray:
+        return (H.set_index("_dt").groupby("player_id")[col]
+                .rolling("90D", closed="left").mean()
+                .reset_index(level=0, drop=True).values)
+
+    H["b_rate_90"] = _rm("_b")
+    H["s_rate_90"] = _rm("_s")
+    H["fh_rel_90"] = _rm("_fh_rel")
+    H["fh_best_rate_90"] = _rm("_fh_best")
+
+    key = H[["race_key", "player_id"] + SB_DYN_COLS_WT]
+    out = df.merge(key, on=["race_key", "player_id"], how="left")
+    # 履歴不足（2024-01以前・新人等）は 0.0（学習/予測で同一の既定値）
+    for c in SB_DYN_COLS_WT:
+        out[c] = out[c].fillna(0.0)
+    return out
+
+
 FEATURE_COLS_WT = [
     # コア得点
     "race_point",
@@ -454,6 +548,8 @@ FEATURE_COLS_WT = [
     "venue_wr", "days_since", "wr_trend",
     # 競走得点トレンド（2026-07-16追加・選手の成長/好不調）
     *RP_TREND_COLS_WT,
+    # レース単位S/B・上がりローリング（2026-07-18追加・展開/脚力の直接測定）
+    *SB_DYN_COLS_WT,
 ]
 
 TARGET_COL_WT = "top3_flag"
