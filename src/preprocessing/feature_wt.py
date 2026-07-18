@@ -115,6 +115,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     df["top3_flag"] = (df["finish_order"].notna()
                        & (df["finish_order"] >= 1)
                        & (df["finish_order"] <= 3)).astype(int)
+    # 1着モデル用ターゲット（Phase B・2026-07-19〜。win_flag=1着のみ、DNF/2着以下は0）
+    df["win_flag"] = (df["finish_order"].notna()
+                      & (df["finish_order"] == 1)).astype(int)
 
     # レート正規化（winticket は % 表記、0-1 スケールへ変換）
     df["first_rate_norm"]  = df["first_rate"].fillna(0.0) / 100.0
@@ -561,6 +564,7 @@ FEATURE_COLS_WT = [
 ]
 
 TARGET_COL_WT = "top3_flag"
+WIN_TARGET_COL_WT = "win_flag"
 
 
 def prepare_X(df: pd.DataFrame) -> pd.DataFrame:

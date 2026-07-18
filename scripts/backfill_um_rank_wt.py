@@ -44,7 +44,7 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    M_GAP12_MIN, M_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
+    M_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE, m_axis_gate,
 )
 
 
@@ -83,11 +83,22 @@ def _entropy(probs: list[float]) -> float:
     return ent
 
 
-def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
-    """バックフィル対象の S2(#7U)/S3(#7M) 行（採点済み）を構築する。"""
+def build_rows(model_name: str, date_from: str, date_to: str,
+                win_model_name: str | None = "lgbm_wt_win") -> list[dict]:
+    """バックフィル対象の S2(#7U)/S3(#7M) 行（採点済み）を構築する。
+
+    win_model_name: S3のwin_rank OR条件に使う1着モデル名（2026-07-19〜）。
+        None または存在しない場合は gap12 単独ゲートにフォールバックする。
+    """
     import pandas as pd
 
     model = load_model(model_name)
+    win_model = None
+    if win_model_name:
+        try:
+            win_model = load_model(win_model_name)
+        except FileNotFoundError:
+            print(f"[backfill] {win_model_name} 未検出 → S3は gap12 単独ゲートで判定", flush=True)
     df = build_features_wt(load_raw_data_wt(min_date=date_from, max_date=date_to))
     if df.empty:
         return []
@@ -110,6 +121,8 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
     if df.empty:
         return []
     df["pred_prob"] = model.predict_proba(prepare_X(df))[:, 1]
+    if win_model is not None:
+        df["pred_win"] = win_model.predict_proba(prepare_X(df))[:, 1]
     trio_bd = _load_trio_boards(df["race_key"].unique().tolist())
     pm = _load_payouts_wt(df["race_key"].unique().tolist())
 
@@ -198,10 +211,10 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
                     "bet_amount": len(combos) * U_STAKE,
                 })
 
-        # ── S3(M): ◎不一致 × gap12≥M_GAP12_MIN × システム◎同ライン逃相方 ──
+        # ── S3(M): ◎不一致 × (gap12≥M_GAP12_MIN OR win_rank≥M_WIN_RANK_MIN) ──
+        # 2026-07-19: win_rank（システム◎の1着モデル内順位）ゲートをOR統合
         probs_m = [float(x) for x in g["pred_prob"].tolist()]
-        if probs_m[0] - probs_m[1] < M_GAP12_MIN:
-            continue  # 軸信頼ゲート（2026-07-17 新定義）
+        gap12_m = probs_m[0] - probs_m[1]
         wt_tops = [fno for fno, (pm_v, _) in mk.items() if pm_v == 1]
         if not wt_tops:
             continue
@@ -210,6 +223,14 @@ def build_rows(model_name: str, date_from: str, date_to: str) -> list[dict]:
         m1 = int(r1.frame_no)
         if m1 == wt_top:
             continue  # 一致レースは対象外
+        win_rank_m = None
+        if "pred_win" in g.columns:
+            g_by_win = g.sort_values("pred_win", ascending=False)
+            win_order = [int(f) for f in g_by_win["frame_no"].tolist()]
+            win_rank_m = win_order.index(m1) + 1
+        gate_ok, _gate_label = m_axis_gate(gap12_m, win_rank_m)
+        if not gate_ok:
+            continue  # 軸信頼ゲート（2026-07-19 OR拡張）
         lg1 = _int(getattr(r1, "line_group", None))
         if lg1 is None:
             continue
@@ -338,6 +359,8 @@ def main() -> None:
     ap.add_argument("--start", default="2026-04-13")
     ap.add_argument("--end", required=False)
     ap.add_argument("--model", default="lgbm_wt_eval")
+    ap.add_argument("--win-model", default="lgbm_wt_win",
+                    help="S3のwin_rank OR条件に使う1着モデル名（未検出時はgap12単独ゲート）")
     ap.add_argument("--wipe-m", action="store_true",
                     help="書き込み前に対象期間の既存 #7M 行を削除（S3新定義への置換用）")
     ap.add_argument("--wipe-u", action="store_true",
@@ -348,12 +371,12 @@ def main() -> None:
         from datetime import date, timedelta
         args.end = (date.today() - timedelta(days=1)).isoformat()
 
-    print(f"[backfill] model={args.model} {args.start}〜{args.end}")
+    print(f"[backfill] model={args.model} win_model={args.win_model} {args.start}〜{args.end}")
     if args.wipe_m:
         wipe_m_rows(args.start, args.end, args.dry_run)
     if args.wipe_u:
         wipe_u_rows(args.start, args.end, args.dry_run)
-    rows = build_rows(args.model, args.start, args.end)
+    rows = build_rows(args.model, args.start, args.end, win_model_name=args.win_model)
     for rank, label in (("7PLUS_U", "S2(U)"), ("7PLUS_M", "S3(M)")):
         sel = [r for r in rows if r["rank"] == rank]
         n_hit = sum(r["hit"] for r in sel)

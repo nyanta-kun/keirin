@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    M_GAP12_MIN, M_STAKE, SS_STAKE,
+    M_GAP12_MIN, M_STAKE, M_WIN_RANK_MIN, SS_STAKE,
     U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
     line_score_features, ss_policy,
 )
@@ -655,9 +655,10 @@ def _process_u_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
     return messages, newly_done
 
 
-# ── M=S3（◎不一致×システム◎×gap12≥0.10・2026-07-17 新定義／ペーパー検証）───────
-# 朝の wave-picks-wt が m_candidates JSON（gap12≥M_GAP12_MIN・WT◎≠システム◎・
-# 同ライン逃相方あり）を出力し、ここで発走15分前のライブオッズにより最終判定する。
+# ── M=S3（◎不一致×軸信頼ゲート(gap12 OR win_rank)・2026-07-19 OR拡張／ペーパー検証）─
+# 朝の wave-picks-wt が m_candidates JSON（gap12≥M_GAP12_MIN または
+# win_rank≥M_WIN_RANK_MIN・WT◎≠システム◎・同ライン逃相方あり）を出力し、
+# ここで発走15分前のライブオッズにより最終判定する。
 # 旧定義の波乱ゲート（entropy≥U_ENTROPY_MIN ∧ mto≥U_MTO_MIN）は 2026-07-17 に廃止。
 # 実際の賭けは行わない（記録 + Discord 通知のみ）。
 # U と同一ペア集合で U が buy のレースは U 優先で M を記録しない（重複排除）。
@@ -672,7 +673,7 @@ def judge_m(pair: dict, trio_lookup: dict,
                  同一ペア集合なら U 優先で M は見送る。
 
     判定順（judge_u との相違: 波乱ゲートなし・市場順位条件なし・ペア選定なし・
-    U重複排除あり。gap12≥M_GAP12_MIN は朝の候補選定で確定済み）:
+    U重複排除あり。gap12/win_rank の軸信頼ゲートは朝の候補選定で確定済み）:
       ① 盤面（有効オッズ 0<ov<9000 の掲載車）が7車 — 欠車発生なら見送り
       ② U優先の重複排除: {rk}#U が buy ∧ (dark,mate) と (m1,mate) が同一集合 → 見送り
       ③ 買い目 = {m1, mate, t}（t=残り5車）のうちオッズ >= U_LEG_MIN_ODDS のみ
@@ -821,12 +822,16 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
         lines.append(f"    {c}:  {ov_str}")
     g12 = cand.get("gap12")
     g12_str = f"{float(g12):.3f}" if g12 is not None else "—"
+    win_rank = cand.get("win_rank")
+    wr_str = str(win_rank) if win_rank is not None else "—"
+    gate = cand.get("gate", "gap12")
     return (
         f"🧲 **[S3・不一致×軸信頼検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸2車: システム◎ {m1} × 相方 {mate}（同ライン・逃）  ※WT◎={wt_mark} と不一致\n"
         f"  3連複({n_pts}点 / 名目{n_pts * M_STAKE:,}円): "
         f"`{m1}={mate} 流し（{U_LEG_MIN_ODDS:.0f}倍以上の目のみ）`\n"
-        f"  **条件: gap12={g12_str}(≥{M_GAP12_MIN})**\n"
+        f"  **条件(gate={gate}): gap12={g12_str}(≥{M_GAP12_MIN}) "
+        f"win_rank={wr_str}(≥{M_WIN_RANK_MIN})**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
         + "\n".join(lines) + "\n"
@@ -907,6 +912,8 @@ def _process_m_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
             "paper": True,
             "stake": M_STAKE,
             "gap12": cand.get("gap12"),
+            "win_rank": cand.get("win_rank"),
+            "gate": cand.get("gate"),
             "wt_mark": cand.get("wt_mark"),
             **detail,
         })

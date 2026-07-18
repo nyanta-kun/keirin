@@ -1000,22 +1000,35 @@ def status_wt():
                    "（H-1: holdout打切りモデルを本番配信しない）")
 @click.option("--promote/--no-promote", "promote", default=True,
               help="save-as≠lgbm_wt のとき lgbm_wt にも反映するか。--no-promote で評価runが本番を汚さない")
+@click.option("--target", "target_kind", default="top3", type=click.Choice(["top3", "win"]),
+              help="学習ターゲット。top3=3着内（既定・配信モデル）、"
+                   "win=1着のみ（Phase B・軸信頼度/相手選定シグナル用）")
 def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to: str | None,
-             save_as: str | None, full_refit: bool, promote: bool):
+             save_as: str | None, full_refit: bool, promote: bool, target_kind: str):
     """winticket データでモデルを学習して data/models/ に保存
 
     例: python -m src.cli.main train-wt --from 2025-01-01
         python -m src.cli.main train-wt --from 2025-01-01 --test-from 2026-01-01
         python -m src.cli.main train-wt --from 2022-12-01 --test-from 2026-04-01 --test-to 2026-06-30
+        python -m src.cli.main train-wt --from 2022-12-01 --target win --save-as lgbm_wt_win --no-promote
     """
     from src.preprocessing.feature_wt import (
-        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, TARGET_COL_WT, prepare_X,
+        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, TARGET_COL_WT,
+        WIN_TARGET_COL_WT, prepare_X,
     )
     from src.models.trainer import train_lgbm, save_model
+
+    target_col = WIN_TARGET_COL_WT if target_kind == "win" else TARGET_COL_WT
+    if target_kind == "win" and promote:
+        # 1着モデルが誤って配信用3着内モデル(lgbm_wt)を上書きしないための安全弁
+        # （--no-promote 付け忘れ対策）。
+        click.echo("[guard] --target win では --promote は無視します（lgbm_wt を汚染しないため）", err=True)
+        promote = False
 
     load_max = test_to if test_from else to_date
     click.echo(f"[wt] Loading {from_date} ~ {load_max or 'latest'} ...")
     click.echo(f"Features ({len(FEATURE_COLS_WT)}): {', '.join(FEATURE_COLS_WT)}")
+    click.echo(f"Target: {target_col}")
 
     df_raw = load_raw_data_wt(min_date=from_date, max_date=load_max)
     if df_raw.empty:
@@ -1094,14 +1107,14 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
                    f"(split: {split_date})")
 
     click.echo("Training LightGBM (winticket) ...")
-    model = train_lgbm(df_tr, feature_cols=FEATURE_COLS_WT, target_col=TARGET_COL_WT)
+    model = train_lgbm(df_tr, feature_cols=FEATURE_COLS_WT, target_col=target_col)
 
     # --- ホールドアウト評価（保存前に算出。配信モデルとは独立の監視指標）---
     test_auc = None
     if not df_te.empty:
         from sklearn.metrics import roc_auc_score
         X_te = prepare_X(df_te)
-        y_te = df_te[TARGET_COL_WT].values
+        y_te = df_te[target_col].values
         test_auc = float(roc_auc_score(y_te, model.predict_proba(X_te)[:, 1]))
         click.echo(f"\nHoldout Test AUC: {test_auc:.4f}  (n={len(df_te):,} entries)")
 
@@ -1109,7 +1122,7 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
     if full_refit:
         click.echo(f"[full-refit] 全データ {df_train['race_key'].nunique():,} races "
                    f"で配信用モデルを再学習 ...")
-        model = train_lgbm(df_train, feature_cols=FEATURE_COLS_WT, target_col=TARGET_COL_WT)
+        model = train_lgbm(df_train, feature_cols=FEATURE_COLS_WT, target_col=target_col)
 
     model_name = save_as or "lgbm_wt"
     save_model(model, model_name)
@@ -1124,6 +1137,7 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
     models_dir = Path(__file__).resolve().parent.parent.parent / "data" / "models"
     meta = {
         "model_name": model_name,
+        "target": target_col,
         "full_refit": bool(full_refit),
         "from": from_date,
         "to": to_date,
@@ -1194,8 +1208,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        M_GAP12_MIN, U_ENTROPY_MIN,
-        line_score_features, race_signals, ss_policy, u_entropy,
+        M_GAP12_MIN, M_WIN_RANK_MIN, U_ENTROPY_MIN,
+        line_score_features, m_axis_gate, race_signals, ss_policy, u_entropy,
     )
     from pathlib import Path
 
@@ -1289,6 +1303,16 @@ def wave_picks_wt(target_date, output_path, model_name,
     df = build_features_wt(df_raw)
     X = prepare_X(df)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
+
+    # 1着モデル（Phase B・2026-07-19〜）。M候補のwin_rankゲートに使う。
+    # 存在しなければ None のままにし、M候補生成側で gap12 単独ゲートにフォールバックする。
+    try:
+        win_model = load_model("lgbm_wt_win")
+        df["pred_win"] = win_model.predict_proba(X)[:, 1]
+    except FileNotFoundError:
+        df["pred_win"] = None
+        click.echo("[wt] lgbm_wt_win が見つかりません。M候補は gap12 単独ゲートで生成します。",
+                   err=True)
 
     df["race_no"] = df["race_key"].apply(
         lambda rk: int(rk.split("_")[2]) if len(rk.split("_")) >= 3 else 0
@@ -1694,11 +1718,12 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(u_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
 
-    # ── M候補（S3・◎不一致×システム◎×gap12≥0.10・2026-07-17 新定義）──────────
-    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致で、
-    # gap12 >= M_GAP12_MIN（軸信頼ゲート・旧の波乱ゲート entropy/mto は廃止）の
-    # レースで、システム◎と同ライン「逃」相方を2車軸にする
-    # （検証: exp_axis_redesign.py 検証1年 111.8% → テスト 104.4%）。
+    # ── M候補（S3・◎不一致×軸信頼ゲート(gap12 OR win_rank)・2026-07-19 OR拡張）────
+    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致で、以下いずれか:
+    #   (a) gap12 >= M_GAP12_MIN（3着内モデルの軸信頼ゲート）
+    #   (b) システム◎の1着モデル内レース順位 >= M_WIN_RANK_MIN（勝ちきれない評価ほど
+    #       ROIが上がる逆説的シグナル・exp_win_axis_sweep_wt.py で発見・ほぼ独立）
+    # を満たすレースで、システム◎と同ライン「逃」相方を2車軸にする。
     # オッズ判定（盤面7車・15倍以上の目・U重複排除）は発走15分前に
     # notify_prerace_wt.judge_m が確定する。市場順位条件はなし（Uとの相違点）。
     if include_7plus:
@@ -1724,10 +1749,6 @@ def wave_picks_wt(target_date, output_path, model_name,
                 continue
             if _hour_skip(_hour_of(grp_sorted)):
                 continue
-            p_m = grp_sorted["pred_prob"].tolist()
-            gap12_m = float(p_m[0] - p_m[1])
-            if gap12_m < M_GAP12_MIN:  # 軸信頼ゲート（2026-07-17 新定義）
-                continue
 
             def _m_int(v):
                 return None if v is None or pd.isna(v) else int(v)
@@ -1749,6 +1770,20 @@ def wave_picks_wt(target_date, output_path, model_name,
             r1_m = rows_m[0]
             m1_fno = int(r1_m.frame_no)
             if m1_fno == wt_fno:
+                continue
+
+            p_m = grp_sorted["pred_prob"].tolist()
+            gap12_m = float(p_m[0] - p_m[1])
+
+            # win_rank: システム◎(m1_fno) の1着モデル内レース順位（1着モデル未ロード時は None）
+            win_rank_m = None
+            if "pred_win" in grp_sorted.columns and grp_sorted["pred_win"].notna().all():
+                grp_by_win = grp_sorted.sort_values("pred_win", ascending=False).reset_index(drop=True)
+                win_order = [int(f) for f in grp_by_win["frame_no"].tolist()]
+                win_rank_m = win_order.index(m1_fno) + 1
+
+            gate_ok, gate_label = m_axis_gate(gap12_m, win_rank_m)  # 軸信頼ゲート（2026-07-19 OR拡張）
+            if not gate_ok:
                 continue
 
             # 相方 = システム◎と同 line_group ∧ 脚質「逃」∧ 別人。
@@ -1778,6 +1813,8 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "race_no":    int(grp_sorted["race_no"].iloc[0]),
                 "start_time": grp_sorted["start_time"].iloc[0],
                 "gap12":      round(gap12_m, 4),
+                "win_rank":   win_rank_m,
+                "gate":       gate_label,
                 "pair":       {"m1": m1_fno, "mate": mate_fno},
                 "wt_mark":    wt_fno,
             })
