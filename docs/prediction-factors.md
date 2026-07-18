@@ -1,11 +1,11 @@
 # 予想ファクター仕様書
 
-> **最終更新**: 2026-07-16  
+> **最終更新**: 2026-07-19  
 > **本番モデル（winticket）**: `lgbm_wt` / **44特徴量** / TRAIN+VAL 2022-12-01〜2026-02-28 / 88,769R学習 / AUC 0.7717  
 > **評価専用モデル**: `lgbm_wt_train_only` / TRAINのみ 2022-12-01〜2025-06-30 / 70,540R / AUC 0.7774（VAL期間評価用・HOLD汚染なし）  
 > **モデル設計方針**: TRAIN(〜2025-06-30) / VAL(2025-07〜2026-02-28) / HOLD(2026-03〜現在) の3分割。VAL評価=train_only、HOLD評価+live予想=lgbm_wt(TRAIN+VAL)。いずれも評価期間を学習に含まない。  
 > **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
-> **現行戦略（2026-07-17 再設計・S2/S3 の2ペーパーランクのみ）**: S2=波乱ライン連れ込み三連複（7車・ent≥1.84∧mto≥4.3×穴×同L逃相方×目≥15）、S3=**◎不一致×gap12≥0.10（軸信頼ゲート・新定義）**×システム◎×同L逃相方の三連複・目≥15（7車）。正規プロトコル（1年検証→テスト1回）で合格したのはこの2つのみ。**S1（6車三連単）・A（一致波乱二連単）は検証ROI100%超なしのため 2026-07-17 全廃**（行は picks_history_r_archive / picks_history_a_archive へ退避）。旧S1（7車三連複・7PLUS_R・実賭け）は 2026-07-16 全廃済み。詳細は CLAUDE.md「現行ランク体系」。
+> **現行戦略（2026-07-17 再設計・2026-07-19 Phase B/複合シグナル拡張・S2/S3 の2ペーパーランクのみ）**: S2=波乱ライン連れ込み三連複（7車・ent≥1.84∧mto≥4.3×穴×同L逃相方×目≥15）、S3=**◎不一致**×軸信頼ゲート（gap12≥0.10 OR 1着モデル内順位≥3 OR p_win/p_top3比≤0.30・3way OR）×システム◎×同L逃相方の三連複・目≥15（7車）。正規プロトコル（1年検証→テスト1回）で合格したのはこの2つのみ。**S1（6車三連単）・A（一致波乱二連単）は検証ROI100%超なしのため 2026-07-17 全廃**（行は picks_history_r_archive / picks_history_a_archive へ退避）。旧S1（7車三連複・7PLUS_R・実賭け）は 2026-07-16 全廃済み。詳細は CLAUDE.md「現行ランク体系」。
 
 ---
 
@@ -272,6 +272,7 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
+| 2026-07-19 | **S3(M)ゲート3way OR拡張**: システム◎の p_win/p_top3 比 ≤0.30（`M_RATIO_MAX`）を第3項としてOR追加（既存 gap12≥0.10 OR win_rank≥3 に統合）。win_rank（順位・離散量）の連続量版。加法差(diff=p_top3-p_win)は無判別力で不採用、乗法比(ratio)のみ有効と判明（`exp_composite_prob_diff_wt.py`）。正規プロトコル: 検証158.2%(531R)→158.6%(671R)・テスト149.5%(152R)→154.3%(186R)、母数さらに+22〜26%。`m_axis_gate`（`src/strategy_wt.py`）拡張・`src/cli/main.py`/`scripts/backfill_um_rank_wt.py`/`scripts/notify_prerace_wt.py` 対応。ペーパートレード継続（live実測フォロー中）。 |
 | 2026-07-16 | **特徴追加: 競走得点トレンド4特徴（rp_prev_delta / rp_delta_90 / rp_delta_180 / rp_trend）**。選手単位の得点時系列変化＝成長/好不調シグナル（`add_rp_trend_features_wt`・point-in-time・closed="left" で当日除外）。A/B検証: ΔAUC +0.0009〜0.001 / 1位勝率 +0.15pt・2独立窓で方向一致。FEATURE_COLS_WT 40→44。 |
 | 2026-06-17 | **モデル設計刷新（3分割・汚染なし）**: lgbm_wt を TRAIN+VAL（2022-12-01〜2026-02-28）で再学習（AUC 0.7717・88,769R）。lgbm_wt_train_only（TRAINのみ）を VAL評価専用に分離。旧lgbm_wt（HOLD汚染あり）を lgbm_wt_v2 として退避。現行戦略を **7+車専用**（6車立て以下は使用しない）に明記。HOLD バックテスト結果: SS 137.8%★ / S 138.8%★ / A 99.4% / 合計 134.3%★（2026-03〜06-16・3,076R）。 |
 | 2026-06-13 | **ドキュメント同期（G08）**: G01〜G07完了に伴い各ドキュメントを更新。venue_info に `straight_len`/`cant_deg` 追加記録（`docs/analysis/20-web-logic-audit.md` 副産物・宇都宮500等48行誤記訂正済）。FEATURE_COLS_WT への変更なし（G06風特徴 Phase1 不通過・無情報）。新規スクリプト（G02〜G07）を `docs/system-architecture.md` に追記。|

@@ -211,8 +211,9 @@ def build_rows(model_name: str, date_from: str, date_to: str,
                     "bet_amount": len(combos) * U_STAKE,
                 })
 
-        # ── S3(M): ◎不一致 × (gap12≥M_GAP12_MIN OR win_rank≥M_WIN_RANK_MIN) ──
+        # ── S3(M): ◎不一致 × (gap12≥M_GAP12_MIN OR win_rank≥M_WIN_RANK_MIN OR ratio≤M_RATIO_MAX) ──
         # 2026-07-19: win_rank（システム◎の1着モデル内順位）ゲートをOR統合
+        # 2026-07-19: ratio（システム◎のp_win/p_top3比・win_rankの連続量版）を第3項でOR統合
         probs_m = [float(x) for x in g["pred_prob"].tolist()]
         gap12_m = probs_m[0] - probs_m[1]
         wt_tops = [fno for fno, (pm_v, _) in mk.items() if pm_v == 1]
@@ -224,13 +225,18 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if m1 == wt_top:
             continue  # 一致レースは対象外
         win_rank_m = None
+        ratio_m = None
         if "pred_win" in g.columns:
             g_by_win = g.sort_values("pred_win", ascending=False)
             win_order = [int(f) for f in g_by_win["frame_no"].tolist()]
             win_rank_m = win_order.index(m1) + 1
-        gate_ok, _gate_label = m_axis_gate(gap12_m, win_rank_m)
+            p_win_axis = float(r1.pred_win)
+            p_top3_axis = float(r1.pred_prob)
+            if p_top3_axis > 0:
+                ratio_m = p_win_axis / p_top3_axis
+        gate_ok, _gate_label = m_axis_gate(gap12_m, win_rank_m, ratio_m)
         if not gate_ok:
-            continue  # 軸信頼ゲート（2026-07-19 OR拡張）
+            continue  # 軸信頼ゲート（2026-07-19 3way OR拡張）
         lg1 = _int(getattr(r1, "line_group", None))
         if lg1 is None:
             continue

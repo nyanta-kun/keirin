@@ -167,7 +167,7 @@ def u_entropy(pred_probs: list[float]) -> float:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# M=S3（◎不一致×システム◎×軸信頼ゲート）戦略 — 2026-07-19 OR拡張（ペーパー検証中）
+# M=S3（◎不一致×システム◎×軸信頼ゲート）戦略 — 2026-07-19 3way OR拡張（ペーパー検証中）
 #
 # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致のレースのうち、
 # 以下いずれかの軸信頼シグナルを満たすレースで、システム◎と同ライン脚質「逃」の
@@ -176,6 +176,9 @@ def u_entropy(pred_probs: list[float]) -> float:
 #   (b) システム◎の1着モデル（lgbm_wt_win）内でのレース内順位 >= M_WIN_RANK_MIN
 #       （＝1着モデル視点では「勝ちきれない」と評価されている軸ほど、実際の
 #       3着内的中率は下がるが市場オッズがそれ以上に甘くなりROIが上がる逆説的シグナル）
+#   (c) ratio（システム◎の p_win / p_top3・乗法比）<= M_RATIO_MAX
+#       （＝1着モデル確率が3着内モデル確率に対して相対的に低いほど「勝ちきれない」
+#       度合いが強い、という(b)の連続量版。win_rank(離散順位)とは別のシグナル）
 #
 # 2026-07-17: 旧定義の波乱ゲート（entropy≥U_ENTROPY_MIN ∧ mto≥U_MTO_MIN）を廃止し
 # 軸信頼ゲート gap12≥0.10 へ転換（不一致システム◎の3着内率 68.3%→73.1%）。
@@ -183,31 +186,43 @@ def u_entropy(pred_probs: list[float]) -> float:
 # (a)(b) はほぼ独立（重複率5%・相関-0.265）で、統合すると母数が約2倍
 # （0.6R/日→1.2R/日相当）に増えつつROIも維持（exp_win_axis_sweep_wt.py・
 # 正規プロトコル: 検証158.2%(531R)→テスト149.5%(152R・目≥15限定)）。
+# 2026-07-19: 複合シグナル追加探索（win_rankの連続量版）で、加法差
+# diff=p_top3-p_winは無判別力（母数ほぼ不変）だったが、乗法比ratioは有効と判明。
+# (a)(b)への第3項OR追加として評価（閾値スイープでなく事前仮説としての評価）:
+# 母数が更に+22〜26%増えつつROI維持〜微増（exp_composite_prob_diff_wt.py・
+# 正規プロトコル: 検証158.2%(531R)→158.6%(671R)、テスト149.5%(152R)→154.3%(186R)）。
 # 買い目オッズ閾値は U と同一値（U_LEG_MIN_ODDS）を再利用する。
 # 同一レースで U（buy）と同一ペア集合になった場合は U 優先で M は記録しない。
 # ═══════════════════════════════════════════════════════════════════════════
 
 M_GAP12_MIN = 0.10         # gap12 下限（rawスケール・軸信頼ゲート・凍結値）
 M_WIN_RANK_MIN = 3         # システム◎の1着モデル内レース順位 下限（凍結値・2026-07-19）
+M_RATIO_MAX = 0.30         # システム◎の p_win/p_top3 比 上限（凍結値・2026-07-19）
 M_STAKE = 100              # 円/点（ペーパー）
 
 
-def m_axis_gate(gap12: float, win_rank: int | None) -> tuple[bool, str | None]:
-    """S3(M) の軸信頼ゲート判定（gap12 OR win_rank・2026-07-19 OR拡張）。
+def m_axis_gate(
+    gap12: float, win_rank: int | None, ratio: float | None = None,
+) -> tuple[bool, str | None]:
+    """S3(M) の軸信頼ゲート判定（gap12 OR win_rank OR ratio・2026-07-19 3way OR拡張）。
 
     gap12:    システム◎(モデル1位)の gap12（1位-2位・rawスケール）。
     win_rank: システム◎の1着モデル（lgbm_wt_win）内レース順位（1-indexed）。
               1着モデル未ロード時は None（gap12単独ゲートにフォールバック）。
+    ratio:    システム◎の p_win/p_top3 比（1着モデル確率 ÷ 3着内モデル確率）。
+              いずれか未算出時は None。
 
     returns (passed, gate_label)
       passed:     いずれかのゲートを満たせば True
-      gate_label: "gap12" / "win_rank" / None（両方不成立）。
-                  両方成立時は "gap12" を優先表示する。
+      gate_label: "gap12" / "win_rank" / "ratio" / None（すべて不成立）。
+                  複数成立時は gap12 > win_rank > ratio の順で優先表示する。
     """
     if gap12 >= M_GAP12_MIN:
         return True, "gap12"
     if win_rank is not None and win_rank >= M_WIN_RANK_MIN:
         return True, "win_rank"
+    if ratio is not None and ratio <= M_RATIO_MAX:
+        return True, "ratio"
     return False, None
 
 

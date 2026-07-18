@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    M_GAP12_MIN, M_STAKE, M_WIN_RANK_MIN, SS_STAKE,
+    M_GAP12_MIN, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, SS_STAKE,
     U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
     line_score_features, ss_policy,
 )
@@ -824,6 +824,8 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
     g12_str = f"{float(g12):.3f}" if g12 is not None else "—"
     win_rank = cand.get("win_rank")
     wr_str = str(win_rank) if win_rank is not None else "—"
+    ratio = cand.get("ratio")
+    ratio_str = f"{float(ratio):.3f}" if ratio is not None else "—"
     gate = cand.get("gate", "gap12")
     return (
         f"🧲 **[S3・不一致×軸信頼検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
@@ -831,7 +833,8 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"  3連複({n_pts}点 / 名目{n_pts * M_STAKE:,}円): "
         f"`{m1}={mate} 流し（{U_LEG_MIN_ODDS:.0f}倍以上の目のみ）`\n"
         f"  **条件(gate={gate}): gap12={g12_str}(≥{M_GAP12_MIN}) "
-        f"win_rank={wr_str}(≥{M_WIN_RANK_MIN})**\n"
+        f"win_rank={wr_str}(≥{M_WIN_RANK_MIN}) "
+        f"ratio={ratio_str}(≤{M_RATIO_MAX})**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
         + "\n".join(lines) + "\n"
@@ -913,6 +916,7 @@ def _process_m_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
             "stake": M_STAKE,
             "gap12": cand.get("gap12"),
             "win_rank": cand.get("win_rank"),
+            "ratio": cand.get("ratio"),
             "gate": cand.get("gate"),
             "wt_mark": cand.get("wt_mark"),
             **detail,

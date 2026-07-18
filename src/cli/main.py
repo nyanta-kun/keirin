@@ -1208,7 +1208,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        M_GAP12_MIN, M_WIN_RANK_MIN, U_ENTROPY_MIN,
+        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, U_ENTROPY_MIN,
         line_score_features, m_axis_gate, race_signals, ss_policy, u_entropy,
     )
     from pathlib import Path
@@ -1718,11 +1718,13 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(u_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
 
-    # ── M候補（S3・◎不一致×軸信頼ゲート(gap12 OR win_rank)・2026-07-19 OR拡張）────
+    # ── M候補（S3・◎不一致×軸信頼ゲート(gap12 OR win_rank OR ratio)・2026-07-19 3way OR拡張）─
     # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致で、以下いずれか:
     #   (a) gap12 >= M_GAP12_MIN（3着内モデルの軸信頼ゲート）
     #   (b) システム◎の1着モデル内レース順位 >= M_WIN_RANK_MIN（勝ちきれない評価ほど
     #       ROIが上がる逆説的シグナル・exp_win_axis_sweep_wt.py で発見・ほぼ独立）
+    #   (c) システム◎の p_win/p_top3 比 <= M_RATIO_MAX（(b)の連続量版・
+    #       exp_composite_prob_diff_wt.py で発見・母数を更に+22〜26%拡張）
     # を満たすレースで、システム◎と同ライン「逃」相方を2車軸にする。
     # オッズ判定（盤面7車・15倍以上の目・U重複排除）は発走15分前に
     # notify_prerace_wt.judge_m が確定する。市場順位条件はなし（Uとの相違点）。
@@ -1776,13 +1778,19 @@ def wave_picks_wt(target_date, output_path, model_name,
             gap12_m = float(p_m[0] - p_m[1])
 
             # win_rank: システム◎(m1_fno) の1着モデル内レース順位（1着モデル未ロード時は None）
+            # ratio: システム◎の p_win/p_top3 比（1着モデル未ロード時は None）
             win_rank_m = None
+            ratio_m = None
             if "pred_win" in grp_sorted.columns and grp_sorted["pred_win"].notna().all():
                 grp_by_win = grp_sorted.sort_values("pred_win", ascending=False).reset_index(drop=True)
                 win_order = [int(f) for f in grp_by_win["frame_no"].tolist()]
                 win_rank_m = win_order.index(m1_fno) + 1
+                p_win_axis = float(r1_m.pred_win)
+                p_top3_axis = float(r1_m.pred_prob)
+                if p_top3_axis > 0:
+                    ratio_m = p_win_axis / p_top3_axis
 
-            gate_ok, gate_label = m_axis_gate(gap12_m, win_rank_m)  # 軸信頼ゲート（2026-07-19 OR拡張）
+            gate_ok, gate_label = m_axis_gate(gap12_m, win_rank_m, ratio_m)  # 軸信頼ゲート（2026-07-19 3way OR拡張）
             if not gate_ok:
                 continue
 
@@ -1814,6 +1822,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 "start_time": grp_sorted["start_time"].iloc[0],
                 "gap12":      round(gap12_m, 4),
                 "win_rank":   win_rank_m,
+                "ratio":      round(ratio_m, 4) if ratio_m is not None else None,
                 "gate":       gate_label,
                 "pair":       {"m1": m1_fno, "mate": mate_fno},
                 "wt_mark":    wt_fno,
