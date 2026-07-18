@@ -451,7 +451,7 @@ def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None
     if history is None:
         sb_sql = (
             "SELECT e.race_key, e.player_id, e.res_standing, e.res_back, "
-            "e.final_half, r.race_date "
+            "e.final_half, e.finish_order, r.race_date "
             "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key"
         )
         db_url = os.environ.get("KEIRIN_DB_URL")
@@ -468,6 +468,14 @@ def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None
                 H = pd.read_sql_query(sb_sql, conn)
     else:
         H = history.copy()
+
+    # DNS/DNF（finish_order<1・欠車や途中棄権）は res_back/standing/final_half が
+    # 完走者と同じ意味を持たない（完走できず途中終了しただけの record）ため、
+    # 履歴からもレース内中央値/最速判定からも除外する（元検証 exp_sb_dyn_ab.py の
+    # SQL WHERE finish_order>=1 と同等。この除外漏れが2026-07-18に本番投入直後の
+    # A/B効果ΔAUC+0.013をΔAUC+0.0006へ縮小させていたことが判明・修正）。
+    if "finish_order" in H.columns:
+        H = H[H["finish_order"] >= 1].copy()
 
     H["_dt"] = pd.to_datetime(H["race_date"])
     # レース内相対化: fh_rel = 自上がり − レース中央値（負=速い）・fh_best = レース内最速。

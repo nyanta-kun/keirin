@@ -15,10 +15,12 @@ from src.preprocessing.feature_wt import (
 
 
 def _hist(rows: list[tuple]) -> pd.DataFrame:
-    """(race_key, player_id, res_standing, res_back, final_half, race_date) から履歴を作る。"""
-    return pd.DataFrame(rows, columns=[
+    """(race_key, player_id, res_standing, res_back, final_half, race_date[, finish_order])
+    から履歴を作る。finish_order 省略時は 1（完走・確定済み）。"""
+    norm = [(r + (1,))[:7] for r in rows]
+    return pd.DataFrame(norm, columns=[
         "race_key", "player_id", "res_standing", "res_back",
-        "final_half", "race_date"])
+        "final_half", "race_date", "finish_order"])
 
 
 def test_rates_and_fh_computed_from_past_races_only():
@@ -64,6 +66,25 @@ def test_current_day_excluded_closed_left():
     row = out.iloc[0]
     assert row["b_rate_90"] == pytest.approx(0.0)   # 過去走 r1 のみ（B取りなし）
     assert row["fh_best_rate_90"] == pytest.approx(0.0)  # r1 は X が最速
+
+
+def test_dnf_race_excluded_from_history():
+    """DNS/DNF（finish_order<1）の過去走は res_back=True でも履歴から除外される
+    （完走できず途中終了しただけの record は完走者と同じ意味を持たないため）。"""
+    history = _hist([
+        # r1: A は落車したが res_back=True が記録されている（DNF・finish_order=0）
+        ("r1", "A", 1, 1, 10.0, "2026-04-01", 0),
+        ("r1", "X", 0, 0, 12.0, "2026-04-01", 1),
+        # r2: A の正常な完走レース（B取りなし）
+        ("r2", "A", 0, 0, 12.5, "2026-05-01", 1),
+    ])
+    df = pd.DataFrame({
+        "race_key": ["r3"], "player_id": ["A"], "race_date": ["2026-06-01"],
+    })
+    out = add_sb_dyn_features_wt(df, history=history)
+    row = out.iloc[0]
+    # r1（DNF）を数えれば b_rate_90=0.5 になってしまうが、除外されるため r2 のみ→0.0
+    assert row["b_rate_90"] == pytest.approx(0.0)
 
 
 def test_rookie_and_prelabel_default_zero():
