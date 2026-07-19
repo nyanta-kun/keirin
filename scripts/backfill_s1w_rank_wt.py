@@ -160,16 +160,16 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='SEVEN_S1' AND race_key LIKE '%#7S1' AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='SEVEN_S1' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
-                        (date_from, date_to))
+                        ("%#7S1", date_from, date_to))
             n = cur.fetchone()[0]
             print(f"[backfill] VPS PG 既存 #7S1 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
-                            (date_from, date_to))
+                            ("%#7S1", date_from, date_to))
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
