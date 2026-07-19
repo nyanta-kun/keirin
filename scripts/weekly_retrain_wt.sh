@@ -63,6 +63,49 @@ echo "[$(date '+%H:%M:%S')] ② 配信用: 全データ再学習 → lgbm_wt ...
   --from 2022-12-01 --full-refit --save-as lgbm_wt \
   2>&1 | tee -a "$LOG"
 
+# ②' 1着専用モデル(lgbm_wt_win)再学習（2026-07-19導入・S1軸選定/S3 win_rank・ratioゲート用）
+# 週次再学習の対象外だと lgbm_wt だけが進化し lgbm_wt_win が陳腐化するため追加。
+# lgbm_wt と同じ①holdout評価→AUCゲート→②全データ再学習の手順を踏む。
+echo "[$(date '+%H:%M:%S')] ②' 1着モデル: holdout評価 → lgbm_wt_win_eval ..." | tee -a "$LOG"
+PREV_WIN_EVAL_META="data/models/lgbm_wt_win_eval.meta.json"
+PREV_WIN_AUC=$(python3 -c "import json,sys; print(json.load(open('$PREV_WIN_EVAL_META')).get('test_auc_holdout') or '')" 2>/dev/null || echo "")
+.venv/bin/python3 -m src.cli.main train-wt \
+  --from 2022-12-01 --test-from "$TEST_FROM" --target win --save-as lgbm_wt_win_eval --no-promote \
+  2>&1 | tee -a "$LOG"
+
+# 1着モデルの品質ゲート（下限は観測AUC~0.82-0.83より低めに設定。top3より高精度な特性を踏まえた値）
+WIN_AUC_GATE_MIN="${WIN_AUC_GATE_MIN:-0.78}"
+WIN_AUC_GATE_MAX_DROP="${WIN_AUC_GATE_MAX_DROP:-0.02}"
+WIN_GATE_OK=1
+python3 - "$WIN_AUC_GATE_MIN" "$WIN_AUC_GATE_MAX_DROP" "$PREV_WIN_AUC" <<'PYGATE' 2>&1 | tee -a "$LOG" || WIN_GATE_OK=0
+import json, sys
+auc_min, max_drop = float(sys.argv[1]), float(sys.argv[2])
+prev = float(sys.argv[3]) if sys.argv[3] else None
+meta = json.load(open("data/models/lgbm_wt_win_eval.meta.json"))
+auc = meta.get("test_auc_holdout")
+if auc is None:
+    print(f"[gate] 1着モデル holdout AUC が meta に無い → 昇格中止")
+    sys.exit(1)
+if auc < auc_min:
+    print(f"[gate] 1着モデル AUC {auc:.4f} < 下限 {auc_min} → 昇格中止")
+    sys.exit(1)
+if prev is not None and prev - auc > max_drop:
+    print(f"[gate] 1着モデル AUC {auc:.4f} が前回 {prev:.4f} から {prev-auc:.4f} 悪化 (> {max_drop}) → 昇格中止")
+    sys.exit(1)
+print(f"[gate] 1着モデル AUC {auc:.4f} OK (下限 {auc_min} / 前回 {prev})")
+PYGATE
+
+if [[ "$WIN_GATE_OK" == "1" ]]; then
+  echo "[$(date '+%H:%M:%S')] ②' 1着モデル: 配信用 全データ再学習 → lgbm_wt_win ..." | tee -a "$LOG"
+  .venv/bin/python3 -m src.cli.main train-wt \
+    --from 2022-12-01 --full-refit --target win --save-as lgbm_wt_win --no-promote \
+    2>&1 | tee -a "$LOG"
+  cp -f data/models/lgbm_wt_win.pkl        "data/models/archive/lgbm_wt_win_${DATE}.pkl"        2>/dev/null || true
+  cp -f data/models/lgbm_wt_win.meta.json  "data/models/archive/lgbm_wt_win_${DATE}.meta.json"  2>/dev/null || true
+else
+  echo "[$(date '+%H:%M:%S')] ②' 1着モデル品質ゲート不合格 → lgbm_wt_win 更新スキップ（旧モデル維持）" | tee -a "$LOG"
+fi
+
 # ③ 波乱ゲート top3_sum カット定数を配信モデルの分布で再計測（test期間除外）
 echo "[$(date '+%H:%M:%S')] ③ 波乱カット定数を再計測..." | tee -a "$LOG"
 .venv/bin/python3 scripts/recompute_upset_cuts_wt.py --to "$TEST_FROM" \
