@@ -471,6 +471,14 @@ def migrate_db():
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        # S3(M) の3-way ORゲート（gap12/win_rank/ratio）のうちどれで成立したかを記録（2026-07-19）。
+        # 既存のgap12列はS3行では常にNULLで事後にどのゲート由来か分析できなかったための追加
+        for _col in ("gate_label TEXT", "win_rank INTEGER", "ratio REAL"):
+            try:
+                conn.execute(f"ALTER TABLE picks_history ADD COLUMN {_col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
         # レース単位の S/B 取得・上がりタイム（展開予測モデル用・2026-07-17）。
         # PG 側は kiseki alembic で追加（スキーマ管理ルール: 両側必須）
         for _col in ("res_standing INTEGER", "res_back INTEGER", "final_half REAL"):

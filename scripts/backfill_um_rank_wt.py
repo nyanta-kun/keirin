@@ -269,6 +269,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "n_combos": len(combos), "hit": int(hit), "payout": pay,
             "trio_payout": trio_pay, "trifecta_payout": trifecta_pay,
             "bet_amount": len(combos) * M_STAKE,
+            "gate_label": _gate_label, "win_rank": win_rank_m, "ratio": ratio_m,
+            "gap12": gap12_m,
         })
     return rows
 
@@ -322,14 +324,20 @@ def wipe_u_rows(date_from: str, date_to: str, dry_run: bool) -> None:
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
     if dry_run or not rows:
         return
-    rows_ins = [{**r, "miwokuri": False} for r in rows]
+    # S3(M)行のみ gate_label/win_rank/ratio/gap12 を持つ。S2(U)行は欠けるためNone補完。
+    rows_ins = [{
+        "gate_label": None, "win_rank": None, "ratio": None, "gap12": None,
+        **r, "miwokuri": False,
+    } for r in rows]
     with get_connection() as conn:
         conn.executemany(
             "INSERT OR REPLACE INTO picks_history "
             "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
-            " trio_payout,trifecta_payout,bet_amount,route,miwokuri) "
+            " trio_payout,trifecta_payout,bet_amount,route,miwokuri,"
+            " gate_label,win_rank,ratio,gap12) "
             "VALUES (:race_date,:race_key,:rank,:pred_combo,:n_combos,:hit,"
-            " :payout,:trio_payout,:trifecta_payout,:bet_amount,'wt',:miwokuri)",
+            " :payout,:trio_payout,:trifecta_payout,:bet_amount,'wt',:miwokuri,"
+            " :gate_label,:win_rank,:ratio,:gap12)",
             rows_ins)
         conn.commit()
     print(f"[backfill] get_connection先 {len(rows)}件 書き込み完了")
@@ -345,18 +353,22 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
             execute_batch(cur, """
                 INSERT INTO keirin.picks_history
                   (race_date,race_key,rank,pred_combo,n_combos,hit,payout,
-                   trio_payout,trifecta_payout,bet_amount,route,miwokuri)
+                   trio_payout,trifecta_payout,bet_amount,route,miwokuri,
+                   gate_label,win_rank,ratio,gap12)
                 VALUES (%(race_date)s,%(race_key)s,%(rank)s,%(pred_combo)s,
                         %(n_combos)s,%(hit)s,%(payout)s,%(trio_payout)s,
-                        %(trifecta_payout)s,%(bet_amount)s,'wt',FALSE)
+                        %(trifecta_payout)s,%(bet_amount)s,'wt',FALSE,
+                        %(gate_label)s,%(win_rank)s,%(ratio)s,%(gap12)s)
                 ON CONFLICT (race_key) DO UPDATE SET
                   race_date=EXCLUDED.race_date, rank=EXCLUDED.rank,
                   pred_combo=EXCLUDED.pred_combo, n_combos=EXCLUDED.n_combos,
                   hit=EXCLUDED.hit, payout=EXCLUDED.payout,
                   trio_payout=EXCLUDED.trio_payout,
                   trifecta_payout=EXCLUDED.trifecta_payout,
-                  bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE
-            """, rows, page_size=200)
+                  bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE,
+                  gate_label=EXCLUDED.gate_label, win_rank=EXCLUDED.win_rank,
+                  ratio=EXCLUDED.ratio, gap12=EXCLUDED.gap12
+            """, rows_ins, page_size=200)
     print(f"[backfill] VPS PG {len(rows)}件 書き込み完了")
 
 
