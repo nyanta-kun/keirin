@@ -38,7 +38,8 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    M_GAP12_MIN, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, SS_STAKE,
+    M_GAP12_MIN, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, S1W_STAKE,
+    S1W_TOP3_GAP_MIN, SS_STAKE,
     U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
     line_score_features, ss_policy,
 )
@@ -842,6 +843,250 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
     )
 
 
+def judge_s1(cand: dict, trifecta_lookup: dict) -> tuple[str, dict]:
+    """S1(新設計・win軸1着固定)の発走前ライブオッズ判定（純関数・DB非依存）。
+
+    cand:            朝のS1候補JSON行（axis/p1/p2/top3_gap・朝時点で確定済み）
+    trifecta_lookup: _build_odds_lookup(odds_data, "trifecta") が返す {tuple: odds} 辞書
+
+    判定（judge_m との相違: 重複排除なし・目オッズ下限なし＝S1W_TOP3_GAP_MINは
+    朝の候補選定で確定済み）:
+      ① 盤面（有効オッズ 0<ov<9000 の掲載車）が7車 — 欠車発生なら見送り
+      ② 軸/相手が盤面に在籍しているか
+      ③ 買い目 = 軸→p1→p2, 軸→p2→p1 の2点（常に両方買う。オッズ未取得の目は除外）
+
+    returns (decision, detail)
+      decision: "buy" / "skip" / "不明"（盤面なし→次分再試行）
+      detail:   axis/p1/p2 / combos（"a-b-c" 形式） / leg_odds（対象2目のみ）/ skip_reason
+    """
+    detail: dict = {"axis": None, "p1": None, "p2": None,
+                     "combos": [], "leg_odds": {}, "skip_reason": None}
+    try:
+        axis = int(cand["axis"])
+        p1 = int(cand["p1"])
+        p2 = int(cand["p2"])
+    except (KeyError, TypeError, ValueError):
+        detail["skip_reason"] = "候補情報不正"
+        return "skip", detail
+    detail["axis"], detail["p1"], detail["p2"] = axis, p1, p2
+
+    if not trifecta_lookup:
+        return "不明", detail
+
+    valid: dict[tuple, float] = {}
+    for k, ov in trifecta_lookup.items():
+        try:
+            fv = float(ov)
+        except (TypeError, ValueError):
+            continue
+        if 0 < fv < 9000:
+            valid[k] = fv
+    if not valid:
+        return "不明", detail
+
+    board: set[int] = set()
+    for k in valid:
+        board |= set(k)
+
+    # ① 盤面7車判定（欠車発生なら見送り記録）
+    if len(board) != 7:
+        detail["skip_reason"] = f"盤面{len(board)}車（欠車）"
+        return "skip", detail
+
+    # ② 軸/相手が盤面に在籍しているか
+    if axis not in board or p1 not in board or p2 not in board:
+        detail["skip_reason"] = "軸/相手が盤面に不在"
+        return "skip", detail
+
+    # ③ 買い目 = 軸→p1→p2, 軸→p2→p1 の2点（目オッズ下限なし）
+    combo_a = (axis, p1, p2)
+    combo_b = (axis, p2, p1)
+    ov_a = valid.get(combo_a)
+    ov_b = valid.get(combo_b)
+    label_a = "-".join(map(str, combo_a))
+    label_b = "-".join(map(str, combo_b))
+    detail["leg_odds"] = {label_a: ov_a, label_b: ov_b}
+    combos = []
+    if ov_a is not None:
+        combos.append(label_a)
+    if ov_b is not None:
+        combos.append(label_b)
+    detail["combos"] = combos
+    if not combos:
+        detail["skip_reason"] = "対象2目のオッズなし"
+        return "skip", detail
+
+    return "buy", detail
+
+
+def _load_s1_candidates(today: str) -> list[dict]:
+    """当日のS1候補 JSON（昼 + 夜）を読み込む。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s1_candidates.json",
+                  f"wave_picks_wt_{today}_night_s1_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("S1候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
+
+
+def _insert_s1_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """S1（新設計・ペーパー）の記録行 {base}#7S1 を picks_history に即時反映する（SQLite + VPS PG）。
+
+    実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
+    （n_combos × S1W_STAKE）で記録する。三連単のため trifecta_payout を使う
+    （U/Mの trio_payout とは別列）。翌朝の notify_results_wt.py が
+    decisions（{rk}#S1）に基づき最終確定（採点）する。
+    """
+    store_key = race_key + "#7S1"
+    bet = n_combos * S1W_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trifecta_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "SEVEN_S1", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("S1 pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trifecta_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "SEVEN_S1", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("S1 pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_s1_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """S1（新設計・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis = detail.get("axis")
+    p1 = detail.get("p1")
+    p2 = detail.get("p2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    tg = cand.get("top3_gap")
+    tg_str = f"{float(tg):.3f}" if tg is not None else "—"
+    return (
+        f"🎯 **[S1・win軸固定検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 1着モデル1位 {axis}  相手: 3着内モデル上位2車 {p1}/{p2}\n"
+        f"  3連単({n_pts}点 / 名目{n_pts * S1W_STAKE:,}円): "
+        f"`{axis}→{p1}→{p2}, {axis}→{p2}→{p1}`\n"
+        f"  **条件: top3_gap={tg_str}(≥{S1W_TOP3_GAP_MIN})**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines) + "\n"
+        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+    )
+
+
+def _process_s1_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """S1候補の発走前判定・記録・通知メッセージ生成。
+
+    returns (messages, newly_done)
+      messages:   [(s1_key, msg)]（buy 成立分のみ）
+      newly_done: 処理完了キー {race_key}#S1 の集合（オッズ取得失敗は含めない=再試行）
+    """
+    cands = _load_s1_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#S1" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        s1_key = f"{rk}#S1"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(S1) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} S1候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trifecta_lookup = _build_odds_lookup(odds_data, "trifecta")
+        decision, detail = judge_s1(cand, trifecta_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} S1候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
+        _save_decision(today, s1_key, {
+            "decision": decision,
+            "rank": "SEVEN_S1",
+            "paper": True,
+            "stake": S1W_STAKE,
+            "top3_gap": cand.get("top3_gap"),
+            **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            pred = ",".join(combos)
+            _insert_s1_pick(rk, today, pred, len(combos))
+            messages.append((s1_key, _build_s1_message(cand, ri, detail)))
+            print(f"[prerace] {rk} S1候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#7S1")  # 候補行をオッズ見送り表示に更新
+            print(f"[prerace] {rk} S1候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(s1_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 def _process_m_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
     """M候補の発走前判定・記録・通知メッセージ生成。
 
@@ -1490,7 +1735,16 @@ def main():
     except Exception as e:
         logger.exception("M候補処理失敗（SS/U通知には影響しない）: %s", e)
 
-    # A候補・S1候補の処理は 2026-07-17 全廃（現行ペーパーランクは S2/S3 のみ）
+    # ── S1候補（新設計・win軸1着固定・ペーパー）処理 ──────────────────────
+    # U/Mとの重複排除はない（独立戦略）。try/exceptで既存通知を阻害しない。
+    try:
+        s1_messages, s1_done = _process_s1_candidates(today, now_unix, notified)
+        messages += s1_messages
+        newly_done |= s1_done
+    except Exception as e:
+        logger.exception("S1候補処理失敗（SS/U/M通知には影響しない）: %s", e)
+
+    # 旧A候補・旧S1候補（6車三連単）の処理は 2026-07-17 全廃
 
     # 推奨がある場合のみ Discord 送信（ヘッダーなし・詳細メッセージのみ）
     if messages:

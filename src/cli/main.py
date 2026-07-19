@@ -1208,8 +1208,9 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, U_ENTROPY_MIN,
-        line_score_features, m_axis_gate, race_signals, ss_policy, u_entropy,
+        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, S1W_TOP3_GAP_MIN, U_ENTROPY_MIN,
+        line_score_features, m_axis_gate, race_signals, s1w_gate, s1w_select,
+        ss_policy, u_entropy,
     )
     from pathlib import Path
 
@@ -1834,10 +1835,54 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(m_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {m_path}  (M候補 {len(m_candidates)}件・◎不一致×システム◎/ペーパー検証)")
 
-    # ── A候補（◎一致×波乱×別L先頭・二連単）・S1候補（6車三連単）は 2026-07-17 全廃 ──
+    # ── S1候補（新設計・win軸1着固定×3着内モデル相手2車・三連単2点流し・2026-07-19導入）──
+    # WT◎/システム◎の一致・不一致は問わない。7車全レース対象。
+    #   軸 = win model(lgbm_wt_win) レース内1位
+    #   相手 = 3着内モデルで軸を除いた残り車の上位2頭(p1,p2)
+    #   ゲート: top3_gap(p1-p2の3着内確率差) >= S1W_TOP3_GAP_MIN
+    #   買い目: 三連単 軸→p1→p2, 軸→p2→p1 の2点流し（目オッズ下限なし）
+    if include_7plus:
+        s1_candidates = []
+        if "pred_win" in df.columns:
+            for race_key, grp in df.groupby("race_key"):
+                if n_entries_map.get(race_key, 0) != 7:
+                    continue
+                grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+                if len(grp_sorted) != 7 or grp_sorted["pred_win"].isna().any():
+                    continue
+                if _hour_skip(_hour_of(grp_sorted)):
+                    continue
+                win_probs = {int(r.frame_no): float(r.pred_win)
+                             for r in grp_sorted.itertuples(index=False)}
+                top3_probs = {int(r.frame_no): float(r.pred_prob)
+                              for r in grp_sorted.itertuples(index=False)}
+                sel = s1w_select(win_probs, top3_probs)
+                if sel is None:
+                    continue
+                axis, p1, p2, top3_gap = sel
+                if not s1w_gate(top3_gap):
+                    continue
+                s1_candidates.append({
+                    "race_key":   race_key,
+                    "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                    "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                    "start_time": grp_sorted["start_time"].iloc[0],
+                    "top3_gap":   round(top3_gap, 4),
+                    "axis": axis, "p1": p1, "p2": p2,
+                })
+        else:
+            click.echo("[wt] lgbm_wt_win が見つかりません。S1候補は生成しません。", err=True)
+
+        s1_suffix = "_night_s1_candidates.json" if out_stem.endswith("_night") else "_s1_candidates.json"
+        s1_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s1_suffix}"
+        with open(s1_path, "w", encoding="utf-8") as f:
+            json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・win軸1着固定/ペーパー検証)")
+
+    # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──
     # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の
     # 再検証で両者とも検証ROI100%超なし → 候補生成を停止（src/strategy_wt.py 参照）。
-    # 現行のペーパーランクは S2(7PLUS_U) と S3(7PLUS_M) の2つのみ。
+    # 現行のペーパーランクは S2(7PLUS_U)・S3(7PLUS_M)・S1(SEVEN_S1) の3つ。
 
 
 @cli.command("backtest-wt")

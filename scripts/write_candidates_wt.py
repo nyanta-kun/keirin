@@ -255,13 +255,13 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
 
 
 def _write_paper_candidates(target_date: str) -> None:
-    """S2/S3（ペーパー検証ランク）の候補レースを picks_history に書き込む。
+    """S1/S2/S3（ペーパー検証ランク）の候補レースを picks_history に書き込む。
 
-    2026-07-16〜: 候補時点で {rk}#7U/#7M 行（bet_amount=0・miwokuri=False・
+    2026-07-16〜: 候補時点で {rk}#7U/#7M/#7S1 行（bet_amount=0・miwokuri=False・
     pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
     発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
     miwokuri=True（オッズ見送り）に更新する。既存行（判定済み）は上書きしない。
-    A（#7A）・S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
+    A（#7A）・旧S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
     """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
 
@@ -292,6 +292,13 @@ def _write_paper_candidates(target_date: str) -> None:
         if not rk or not pair:
             continue
         rows.append((f"{rk}#7M", "7PLUS_M", f"{pair.get('m1')}={pair.get('mate')}流し"))
+    for c in _load((f"wave_picks_wt_{target_date}_s1_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s1_candidates.json")):
+        rk = c.get("race_key")
+        axis, p1, p2 = c.get("axis"), c.get("p1"), c.get("p2")
+        if not rk or axis is None or p1 is None or p2 is None:
+            continue
+        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}/{p2}流し"))
 
     if not rows:
         return
@@ -310,7 +317,7 @@ def _write_paper_candidates(target_date: str) -> None:
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S2/S3) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(S1/S2/S3) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")
