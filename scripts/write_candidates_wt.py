@@ -299,8 +299,8 @@ def _write_paper_candidates(target_date: str) -> None:
         if not rk or axis is None or p1 is None or p2 is None:
             continue
         # S1は「流し」ではなく軸1着固定・p1/p2の2着3着入替2点（残り車への流しはない）。
-        # 誤読防止のため確定後と同じ明示形式で表記する。
-        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}-{p1}-{p2},{axis}-{p2}-{p1}"))
+        # 表記: axis→p1=p2（U/Mの "=" 記法と統一・ユーザーフィードバック反映）
+        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}={p2}"))
 
     if not rows:
         return

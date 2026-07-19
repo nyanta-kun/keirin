@@ -997,7 +997,7 @@ def _build_s1_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎯 **[S1・win軸固定検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 1着モデル1位 {axis}  相手: 3着内モデル上位2車 {p1}/{p2}\n"
         f"  3連単({n_pts}点 / 名目{n_pts * S1W_STAKE:,}円): "
-        f"`{axis}→{p1}→{p2}, {axis}→{p2}→{p1}`\n"
+        f"`{axis}→{p1}={p2}`\n"
         f"  **条件: top3_gap={tg_str}(≥{S1W_TOP3_GAP_MIN})**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
@@ -1075,7 +1075,11 @@ def _process_s1_candidates(today: str, now_unix: int, notified: set[str]) -> tup
 
         if decision == "buy":
             combos = detail["combos"]
-            pred = ",".join(combos)
+            # 表記: axis→p1=p2（2点とも成立時）。片方のみ成立時は該当目のみ明示。
+            if len(combos) == 2:
+                pred = f"{detail['axis']}→{detail['p1']}={detail['p2']}"
+            else:
+                pred = ",".join(combos)
             _insert_s1_pick(rk, today, pred, len(combos))
             messages.append((s1_key, _build_s1_message(cand, ri, detail)))
             print(f"[prerace] {rk} S1候補 → buy（ペーパー・{len(combos)}点）", flush=True)

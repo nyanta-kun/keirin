@@ -134,7 +134,9 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         trifecta_pay = pm.get(rk, {}).get(("trifecta", order3), 0)
         pay = trifecta_pay * S1W_STAKE // 100 if hit else 0
         bet = len(buy) * S1W_STAKE
-        pred = ",".join("-".join(map(str, c)) for c in buy)
+        # 表記: axis→p1=p2（2点とも成立時）。片方のみ成立時は該当目のみ明示。
+        pred = f"{axis}→{p1}={p2}" if len(buy) == 2 else \
+            ",".join("-".join(map(str, c)) for c in buy)
         rows.append({
             "race_date": date_map.get(rk, ""),
             "race_key": f"{rk}#7S1", "rank": "SEVEN_S1",
