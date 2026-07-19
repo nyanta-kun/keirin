@@ -1539,8 +1539,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     lines.append("=" * 70)
     lines.append(f" 競輪AI予想PICK [wt]  {target_date}")
     lines.append(f" モデル: {model_name}  生成: {now_str}")
-    lines.append(" 現行ランク: S2(波乱ライン連れ込み)・S3(不一致×gap12≥0.10) の2ペーパーのみ。")
-    lines.append("   → 候補は u_candidates.json / m_candidates.json、")
+    lines.append(" 現行ランク: S1(win軸1着固定)・S2(波乱ライン連れ込み)・S3(不一致×gap12≥0.10) の3ペーパー。")
+    lines.append("   → 候補は s1_candidates.json / u_candidates.json / m_candidates.json、")
     lines.append("     発走前判定・通知は notify_prerace_wt.py 参照")
     lines.append("=" * 70)
 
@@ -1548,7 +1548,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     # （notify_results_wt._parse_picks_full は過去日 txt の後方互換のためパース処理を残置）。
 
     lines.append("=" * 70)
-    lines.append("  実賭け推奨なし（S2/S3 は全てペーパー検証・S1/A は 2026-07-17 全廃）")
+    lines.append("  実賭け推奨なし（S1/S2/S3 は全てペーパー検証・旧新S1/A は 2026-07-17 全廃）")
     lines.append("=" * 70)
 
     output_text = "\n".join(lines)
