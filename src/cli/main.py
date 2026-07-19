@@ -1315,6 +1315,25 @@ def wave_picks_wt(target_date, output_path, model_name,
         click.echo("[wt] lgbm_wt_win が見つかりません。M候補は gap12 単独ゲートで生成します。",
                    err=True)
 
+    # Web表示用の単勝/複勝指数を wt_entries に書き込む（2026-07-19）。
+    # 候補選定と無関係に全出走馬分を更新するため、この位置（pred_prob/pred_win
+    # 算出直後・候補フィルタ前）で行う。
+    with get_connection() as _conn_idx:
+        _idx_rows = [
+            (
+                round(float(row.pred_win) * 100, 1) if pd.notna(row.pred_win) else None,
+                round(float(row.pred_prob) * 100, 1) if pd.notna(row.pred_prob) else None,
+                row.race_key, int(row.frame_no),
+            )
+            for row in df.itertuples(index=False)
+        ]
+        _conn_idx.executemany(
+            "UPDATE wt_entries SET pred_win_pct = ?, pred_top3_pct = ? "
+            "WHERE race_key = ? AND frame_no = ?",
+            _idx_rows,
+        )
+        _conn_idx.commit()
+
     df["race_no"] = df["race_key"].apply(
         lambda rk: int(rk.split("_")[2]) if len(rk.split("_")) >= 3 else 0
     )
