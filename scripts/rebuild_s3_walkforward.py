@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.backfill_um_rank_wt import build_rows, insert_rows, wipe_rank_rows
+from scripts.rebuild_coverage_guard import assert_local_covers_pg
 
 # get_connection() は KEIRIN_DB_URL が立っていると読み取りも VPS PG に向く。
 # PG 側の wt_odds は直近分のみのミラー（2026-06〜）で全履歴を持たないため、
@@ -56,10 +57,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--end", default=None, help="末尾窓の終了日（省略時は昨日）")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                     help="ローカルDBカバレッジ不足の警告を無視して続行する")
     args = ap.parse_args()
     if not args.end:
         from datetime import date, timedelta
         args.end = (date.today() - timedelta(days=1)).isoformat()
+
+    assert_local_covers_pg("2024-01-01", args.end, _PG_URL, args.force)
 
     quarters = list(QUARTERS)
     quarters.append(("2026-04-13", args.end, "lgbm_wt_eval", "lgbm_wt_win_eval"))
