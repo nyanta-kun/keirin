@@ -1208,9 +1208,9 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, S1W_TOP3_GAP_MIN, U_ENTROPY_MIN,
-        line_score_features, m_axis_gate, race_signals, s1w_gate, s1w_select,
-        ss_policy, u_entropy,
+        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, S1W_TOP3_GAP_MIN, S4_DAILY_TOP_N,
+        U_ENTROPY_MIN, line_score_features, m_axis_gate, race_signals, s1w_gate,
+        s1w_select, s4_select_axis, ss_policy, u_entropy,
     )
     from pathlib import Path
 
@@ -1897,6 +1897,53 @@ def wave_picks_wt(target_date, output_path, model_name,
         with open(s1_path, "w", encoding="utf-8") as f:
             json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・win軸1着固定/ペーパー検証)")
+
+    # ── S4候補（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し・2026-07-21導入）──
+    # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
+    #         strategy_wt.s4_select_axis() で選定
+    # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
+    # 選出 = 当日の該当レースをaxis_sum昇順に並べ上位 S4_DAILY_TOP_N 件（日次ランキング）
+    # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
+    if include_7plus:
+        s4_raw_candidates = []
+        if "pred_win" in df.columns:
+            for race_key, grp in df.groupby("race_key"):
+                if n_entries_map.get(race_key, 0) != 7:
+                    continue
+                grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+                if len(grp_sorted) != 7 or grp_sorted["pred_win"].isna().any():
+                    continue
+                if _hour_skip(_hour_of(grp_sorted)):
+                    continue
+                win_probs = {int(r.frame_no): float(r.pred_win)
+                             for r in grp_sorted.itertuples(index=False)}
+                top3_probs = {int(r.frame_no): float(r.pred_prob)
+                              for r in grp_sorted.itertuples(index=False)}
+                sel = s4_select_axis(win_probs, top3_probs)
+                if sel is None:
+                    continue
+                axis1, axis2, axis_sum = sel
+                s4_raw_candidates.append({
+                    "race_key":   race_key,
+                    "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                    "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                    "start_time": grp_sorted["start_time"].iloc[0],
+                    "axis1": axis1, "axis2": axis2,
+                    "axis_sum": round(axis_sum, 4),
+                })
+        else:
+            click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
+
+        # 日次ランキング: axis_sum昇順(=軸が弱い=波乱度高い)で上位 S4_DAILY_TOP_N 件のみ採用
+        s4_raw_candidates.sort(key=lambda c: c["axis_sum"])
+        s4_candidates = s4_raw_candidates[:S4_DAILY_TOP_N]
+
+        s4_suffix = "_night_s4_candidates.json" if out_stem.endswith("_night") else "_s4_candidates.json"
+        s4_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s4_suffix}"
+        with open(s4_path, "w", encoding="utf-8") as f:
+            json.dump(s4_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s4_path}  (S4候補 {len(s4_candidates)}件/{len(s4_raw_candidates)}件中"
+                   f"・波乱度選出/ペーパー検証)")
 
     # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──
     # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の

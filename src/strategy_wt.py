@@ -204,6 +204,72 @@ def s1w_gate(top3_gap: float) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# S4（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し）— 2026-07-21 導入
+#
+# ユーザー仮説の検証（exp_upset_axis_trio.py 相当・正規プロトコル: 検証2025-04-01〜
+# 2026-03-31／テスト2026-04-01〜07-10）で発見:
+#
+# 軸 = win_top3(pred_win_pct上位3) ∩ top3_top3(pred_top3_pct上位3) の重なり車。
+#   重なり>=2: 重なりの中からpred_top3_pct上位2を軸に採用。
+#   重なり==1: その1車 + 残りでpred_top3_pct最上位の1車。
+#   重なり==0: 対象外（実データで58,616中1件のみ、事実上発生しない）。
+# 波乱度指数 = 軸2車のpred_top3_pct合計（axis_sum）。低いほど「軸自体が本命でない」
+#   ＝波乱度が高いレースと解釈する。レース全体のエントロピー（拮抗度）で絞ると
+#   ROIが悪化する（絞り込みなし85.7%→73.5%）ことを確認済みで不採用。
+# 選出 = 当日の該当レースをaxis_sum昇順に並べ、上位 S4_DAILY_TOP_N 件を採用
+#   （1レース単位の閾値ゲートではなく日次クロスレースランキング）。
+# 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）。
+#
+# 正規プロトコル結果（N=15/日）: 検証ROI116.3%(n=5475)・テストROI116.3%(n=1515・
+# ほぼ完全一致）。的中率は検証37.8%/テスト36.0%。的中時に三連複20倍以上となる
+# 割合は絞り込みなし7.3%に対しN=15で16.0%(検証)/18.5%(テスト)と倍以上に向上。
+# Nを5/10/15/20/30と変えた際のROIは両窓とも単調減衰（181.5→136.0→116.3→107.4→97.4%
+# 検証・153.4→134.7→116.3→107.9→101.0%テスト）で自然な閾値の延長として信頼できる。
+# 単勝指数側の信号（win_max・単勝トップ2合計）との複合も試したが改善なし
+# （複勝指数トップ2合計との相関が強く追加情報量が乏しいため、単独採用のままとする）。
+# ユーザー判断によりペーパートレードで運用開始（2026-07-21）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+S4_NE = 7                  # 対象車数（7車ちょうど）
+S4_DAILY_TOP_N = 15        # axis_sum昇順で採用する1日あたりのレース数
+S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
+
+
+def s4_select_axis(
+    win_probs: dict[int, float], top3_probs: dict[int, float],
+) -> tuple[int, int, float] | None:
+    """S4の軸2車とaxis_sum（波乱度指数の元）を選定する。
+
+    win_probs / top3_probs: {frame_no: 確率(0-1 or pct、比較にのみ使うのでスケール不問)}
+      レース内全車分。
+
+    軸選定: win_probs上位3 ∩ top3_probs上位3 の重なり車から、
+      重なり>=2ならtop3_probs上位2、重なり==1ならその1車+残りのtop3_probs最上位。
+
+    returns (axis1, axis2, axis_sum) or None（重なり0・データ不足で選定不能）。
+    axis_sum は axis1/axis2 の top3_probs 合計（波乱度指数・低いほど波乱寄り）。
+    """
+    if not win_probs or not top3_probs or len(win_probs) < 3 or len(top3_probs) < 3:
+        return None
+    win_top3 = {f for f, _ in sorted(win_probs.items(), key=lambda kv: -kv[1])[:3]}
+    place_top3 = {f for f, _ in sorted(top3_probs.items(), key=lambda kv: -kv[1])[:3]}
+    overlap = win_top3 & place_top3
+    if not overlap:
+        return None
+    if len(overlap) >= 2:
+        cands = sorted(overlap, key=lambda f: -top3_probs[f])
+        axis1, axis2 = cands[0], cands[1]
+    else:
+        axis1 = next(iter(overlap))
+        rest = sorted((f for f in top3_probs if f != axis1), key=lambda f: -top3_probs[f])
+        if not rest:
+            return None
+        axis2 = rest[0]
+    axis_sum = top3_probs[axis1] + top3_probs[axis2]
+    return axis1, axis2, axis_sum
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # U（波乱ライン連れ込み）戦略 — 2026-07-16 ペーパートレード検証中
 #
 # 波乱見込みレース（指数エントロピー高 ∧ 盤面min三連複オッズ高）で、
