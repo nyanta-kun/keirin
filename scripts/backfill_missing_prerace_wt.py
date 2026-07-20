@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""picks_history の自動完全性保証（2026-07-20）。
+"""picks_history の自動完全性保証（2026-07-20・2026-07-21 S4対応追加）。
 
 notify_prerace_wt.py のT-15分ライブ判定が何らかの理由（scraper障害・
 システム停止・rebuild_*_walkforward.py の事故等）で実行されず picks_history
 に記録が残らなかった日を検知し、最終オッズを使った build_rows() で
-S1(SEVEN_S1) / S3(7PLUS_M) の該当日分を後追いで補完する。
+S1(SEVEN_S1) / S3(7PLUS_M) / S4(SEVEN_S4) の該当日分を後追いで補完する。
 
 ライブの実際の売買判定（judge_m/judge_u/judge_s1・T-15分オッズ基準）は
 一切変更しない。あくまで picks_history という記録の完全性を事後に保証する
@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.backfill_s1w_rank_wt import build_rows as build_rows_s1
+from scripts.backfill_s4_rank_wt import build_rows as build_rows_s4
 from scripts.backfill_um_rank_wt import build_rows as build_rows_m
 from src.database import get_connection
 from src.notify.discord import send as discord_send
@@ -106,6 +107,7 @@ def main() -> None:
     race_counts = _race_counts(date_from, date_to)
     m_counts = _pick_counts("7PLUS_M", date_from, date_to)
     s1_counts = _pick_counts("SEVEN_S1", date_from, date_to)
+    s4_counts = _pick_counts("SEVEN_S4", date_from, date_to)
 
     gap_dates_m = sorted(
         d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and m_counts.get(d, 0) == 0
@@ -113,17 +115,22 @@ def main() -> None:
     gap_dates_s1 = sorted(
         d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s1_counts.get(d, 0) == 0
     )
+    gap_dates_s4 = sorted(
+        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s4_counts.get(d, 0) == 0
+    )
 
     print(f"[gap-heal] 確認期間: {date_from}〜{date_to}")
     print(f"[gap-heal] S3(M) 欠損日: {gap_dates_m}")
     print(f"[gap-heal] S1 欠損日: {gap_dates_s1}")
+    print(f"[gap-heal] S4 欠損日: {gap_dates_s4}")
 
-    if not gap_dates_m and not gap_dates_s1:
+    if not gap_dates_m and not gap_dates_s1 and not gap_dates_s4:
         print("[gap-heal] 欠損なし。終了。")
         return
 
     total_new_m = 0
     total_new_s1 = 0
+    total_new_s4 = 0
     healed_summary: list[str] = []
 
     for d in gap_dates_m:
@@ -149,7 +156,18 @@ def main() -> None:
         if n:
             healed_summary.append(f"S1 {d}: {n}件")
 
-    print(f"\n[gap-heal] 合計: S3(M) +{total_new_m}件 / S1 +{total_new_s1}件")
+    for d in gap_dates_s4:
+        rows = build_rows_s4(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
+        n = 0 if args.dry_run else _insert_additive(rows, is_m=False)
+        if args.dry_run:
+            n = len(rows)
+        total_new_s4 += n
+        print(f"[gap-heal] S4 {d}: 候補{len(rows)}件 → 挿入{n}件"
+              f"{'（dry-run）' if args.dry_run else ''}")
+        if n:
+            healed_summary.append(f"S4 {d}: {n}件")
+
+    print(f"\n[gap-heal] 合計: S3(M) +{total_new_m}件 / S1 +{total_new_s1}件 / S4 +{total_new_s4}件")
 
     if healed_summary and not args.dry_run:
         msg = (
