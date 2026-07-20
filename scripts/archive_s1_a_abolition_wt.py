@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""S1(SIX_S1)/A(7PLUS_A) 全廃（2026-07-17）に伴う picks_history 行の退避。
+"""廃止ランクの picks_history 行の退避（S1(SIX_S1)/A(7PLUS_A) 全廃・2026-07-17〜）。
 
 正規プロトコル再検証（学習〜2025-03-31／検証2025-04-01〜2026-03-31／
 テスト2026-04-01〜07-15）で両ランクとも検証ROI100%超なし → 全廃。
 picks_history の該当行を退避テーブルへ移動して現行集計（kiseki Web・
 save_model_eval）から外す。表示系譜に合わせて退避先を分ける:
 
-  SIX_S1（#6S1・6車三連単）  → picks_history_r_archive（S1系譜。旧7PLUS_R と同居）
-  7PLUS_A（#7A・二連単）     → picks_history_a_archive（A系譜。旧Aと同居）
+  SIX_S1（#6S1・6車三連単）    → picks_history_r_archive（S1系譜。旧7PLUS_R と同居）
+  7PLUS_A（#7A・二連単）       → picks_history_a_archive（A系譜。旧Aと同居）
+  7PLUS_R（#7R・7車三連複）    → picks_history_r_archive（2026-07-16 全廃・S1系譜）
+  7PLUS_CAND（#CAND・生候補）  → picks_history_r_archive（#CAND書き込み自体2026-07-16
+                                 停止済みのため残存は全て旧S1系レガシー行）
+
+冪等: 挿入は ON CONFLICT DO NOTHING（PG）／既存重複はそのままスキップ（SQLite）で
+既に退避済みの行を再実行しても安全。2026-07-21、Web表示で「非」「候補」バッジとして
+表示される7PLUS_R/7PLUS_CANDの残存行（2026-07-13〜16分・一部は退避済みだが
+本体から削除されず二重に残っていた）を発見して対象に追加した。
 
 SQLite（Mac 正本）と VPS PG（KEIRIN_DB_URL 設定時）の両方を処理する。
 
@@ -28,6 +36,8 @@ from src.database import get_connection
 # (rank, race_key suffix LIKE, 退避先テーブル)
 TARGETS = [
     ("SIX_S1", "%#6S1", "picks_history_r_archive"),
+    ("7PLUS_R", "%#7R", "picks_history_r_archive"),
+    ("7PLUS_CAND", "%#CAND", "picks_history_r_archive"),
     ("7PLUS_A", "%#7A", "picks_history_a_archive"),
 ]
 
