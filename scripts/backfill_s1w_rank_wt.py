@@ -118,7 +118,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if sel is None:
             continue
         axis, p1, p2, top3_gap = sel
-        if not s1w_gate(top3_gap):
+        if not s1w_gate(top3_gap, win_probs[axis]):
             continue
         if axis not in board or p1 not in board or p2 not in board:
             continue
