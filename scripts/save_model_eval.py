@@ -427,6 +427,9 @@ def main() -> None:
             # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) 全廃
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7U'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7M'")
+            # 2026-07-21: S4を軸2車とWT◎◯の重なりでSS/Sへ再編したため、
+            # 旧統合S4行（"#7S4"で終わる。"#7SS"/"#7S"とは末尾一致で衝突しない）を削除
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S4'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:
