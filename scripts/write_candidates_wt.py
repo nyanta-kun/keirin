@@ -255,12 +255,17 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
 
 
 def _write_paper_candidates(target_date: str) -> None:
-    """S1/S2/S3（ペーパー検証ランク）の候補レースを picks_history に書き込む。
+    """S1/S4（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
 
-    2026-07-16〜: 候補時点で {rk}#7U/#7M/#7S1 行（bet_amount=0・miwokuri=False・
+    2026-07-16〜: 候補時点で {rk}#7S1 行（bet_amount=0・miwokuri=False・
     pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
+    2026-07-21〜: S4（{rk}#7S4）も同様に候補時点で書き込む。以前は発走15分前の
+    買い判定が成立して初めて行が生成されるため、それ以前は他の推奨外レースと
+    区別がつかず、また15分前判定がオッズ条件で見送りになった場合は行自体が
+    存在せず _mark_paper_miwokuri() のUPDATEが対象0件で空振りしていた
+    （候補だったのに「推奨外」と見分けがつかない・ユーザー指摘で発覚）。
     発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
-    miwokuri=True（オッズ見送り）に更新する。既存行（判定済み）は上書きしない。
+    miwokuri=True（オッズ見送り・グレーアウト表示）に更新する。既存行（判定済み）は上書きしない。
     A（#7A）・旧S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
     U（#7U）・M（#7M）は 2026-07-21 全廃。main.py は候補JSON自体を生成しなくなったが、
     全廃日当日は既存の古い候補JSON（コード修正前に生成済み）がまだ残っていたため
@@ -282,7 +287,7 @@ def _write_paper_candidates(target_date: str) -> None:
                     print(f"[write_candidates_wt] {fname} 読み込み失敗: {e}", flush=True)
         return out
 
-    rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder)
+    rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder, gate_label)
     # U(#7U)/M(#7M) は 2026-07-21 全廃のため読み込み自体を行わない（上記docstring参照）。
     for c in _load((f"wave_picks_wt_{target_date}_s1_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s1_candidates.json")):
@@ -292,26 +297,37 @@ def _write_paper_candidates(target_date: str) -> None:
             continue
         # S1は「流し」ではなく軸1着固定・p1/p2の2着3着入替2点（残り車への流しはない）。
         # 表記: axis→p1=p2（U/Mの "=" 記法と統一・ユーザーフィードバック反映）
-        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}={p2}"))
+        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}={p2}", None))
+
+    for c in _load((f"wave_picks_wt_{target_date}_s4_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s4_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        if not rk or axis1 is None or axis2 is None:
+            continue
+        gate_label = {0: "SS", 1: "S"}.get(c.get("wt_overlap_n"))
+        if gate_label is None:
+            continue  # 重なり2・不明は候補として表示しない（s4_daily_select と同じ除外対象）
+        rows.append((f"{rk}#7S4", "SEVEN_S4", f"{axis1}={axis2}-候補", gate_label))
 
     if not rows:
         return
     inserted = 0
     try:
         with get_connection() as conn:
-            for store_key, rank, pred in rows:
+            for store_key, rank, pred, gate_label in rows:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO picks_history "
-                    "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                    "VALUES (?,?,?,?,0,0,0,0,0,'wt',False)",
-                    (target_date, store_key, rank, pred),
+                    "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                    "VALUES (?,?,?,?,0,0,0,0,0,'wt',False,?)",
+                    (target_date, store_key, rank, pred, gate_label),
                 )
                 inserted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             conn.commit()
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S1/S2/S3) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(S1/S4) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")
@@ -321,13 +337,13 @@ def _write_paper_candidates(target_date: str) -> None:
         import psycopg2  # noqa: PLC0415
         with psycopg2.connect(db_url) as pg_conn:
             with pg_conn.cursor() as cur:
-                for store_key, rank, pred in rows:
+                for store_key, rank, pred, gate_label in rows:
                     cur.execute(
                         "INSERT INTO keirin.picks_history "
-                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                        "VALUES (%s,%s,%s,%s,0,0,0,0,0,'wt',FALSE) "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                        "VALUES (%s,%s,%s,%s,0,0,0,0,0,'wt',FALSE,%s) "
                         "ON CONFLICT (race_key) DO NOTHING",
-                        (target_date, store_key, rank, pred),
+                        (target_date, store_key, rank, pred, gate_label),
                     )
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補 VPS ミラー失敗: {e}", flush=True)

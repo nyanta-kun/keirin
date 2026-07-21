@@ -868,10 +868,14 @@ def _main_inner(date, _db_url):
                 # 正本は decisions の {rk}#S4。返還処理なし（実精算方式:
                 # 買い目確定後の落車・失格・欠車も外れ計上）。ペーパーのため
                 # ヘッダー合計（p7b/p7r/p7h・total_7plus）には算入しない。
+                # 2026-07-21〜: オッズ見送り（decision=="skip"）も軸2車が実際に3着内へ
+                # 入ったかだけ参考採点する（miwokuri=True・bet=0でサマリー集計対象外の
+                # まま、見送りが「的中していたか」をWebで確認できるようにする）。
                 dec_s4 = decisions.get(rk + "#S4")
-                if not (dec_s4 and dec_s4.get("decision") == "buy" and dec_s4.get("combos")):
+                if not dec_s4 or dec_s4.get("decision") not in ("buy", "skip"):
                     print(f"[notify_results_wt] S4判定記録なし {rk}: 不計上", flush=True)
                     continue
+                is_buy = dec_s4.get("decision") == "buy" and bool(dec_s4.get("combos"))
                 s4_rows = conn.execute(
                     "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
                     "ORDER BY finish_order", (rk,)).fetchall()
@@ -882,20 +886,34 @@ def _main_inner(date, _db_url):
                 try:
                     s4_axis1 = int(dec_s4.get("axis1"))
                     s4_axis2 = int(dec_s4.get("axis2"))
-                    s4_combos = [frozenset(int(x) for x in str(c).split("-"))
-                                 for c in dec_s4["combos"]]
                 except (TypeError, ValueError):
                     continue
                 s4_top3 = frozenset(s4_order[:3])
-                s4_hit = any(cs == s4_top3 for cs in s4_combos)
                 s4_trio_pay = pm.get(rk, {}).get(("trio", s4_top3), 0)
                 s4_trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(s4_order[:3])), 0)
-                s4_pay = s4_trio_pay * s4_stake // 100 if s4_hit else 0
-                s4_bet = len(s4_combos) * s4_stake
-                s4_thirds = sorted(
-                    next(iter(cs - {s4_axis1, s4_axis2}))
-                    for cs in s4_combos if len(cs - {s4_axis1, s4_axis2}) == 1)
-                s4_pred = f"{s4_axis1}={s4_axis2}-" + ",".join(map(str, s4_thirds))
+
+                if is_buy:
+                    try:
+                        s4_combos = [frozenset(int(x) for x in str(c).split("-"))
+                                     for c in dec_s4["combos"]]
+                    except (TypeError, ValueError):
+                        continue
+                    s4_hit = any(cs == s4_top3 for cs in s4_combos)
+                    s4_pay = s4_trio_pay * s4_stake // 100 if s4_hit else 0
+                    s4_bet = len(s4_combos) * s4_stake
+                    s4_n_combos = len(s4_combos)
+                    s4_thirds = sorted(
+                        next(iter(cs - {s4_axis1, s4_axis2}))
+                        for cs in s4_combos if len(cs - {s4_axis1, s4_axis2}) == 1)
+                    s4_pred = f"{s4_axis1}={s4_axis2}-" + ",".join(map(str, s4_thirds))
+                else:
+                    # 見送り: 軸2車が両方とも実際の3着内に入っていれば「見送りだが的中」扱い
+                    # （買っていれば5点全目のいずれかで的中していたはずのため）。実賭けなし。
+                    s4_hit = s4_axis1 in s4_top3 and s4_axis2 in s4_top3
+                    s4_pay = 0
+                    s4_bet = 0
+                    s4_n_combos = 0
+                    s4_pred = f"{s4_axis1}={s4_axis2}-見送り"
                 s4_tstr = ptime
                 _s4_stt = start_map.get(rk)
                 if _s4_stt:
@@ -904,16 +922,18 @@ def _main_inner(date, _db_url):
                         s4_tstr = _dt.fromtimestamp(int(_s4_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
                     except (ValueError, TypeError):
                         pass
-                s4_mark = f"◎ ¥{s4_pay:,}" if s4_hit else "×"
-                results_7plus_s4.append(
-                    f"[S4] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
-                    f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}（ペーパー）")
-                p7s4b += s4_bet
-                if s4_hit:
-                    p7s4r += s4_pay
-                    p7s4h += 1
-                history.append((target_date, f"{rk}#7S4", "SEVEN_S4", s4_pred, len(s4_combos),
-                                int(s4_hit), s4_pay, s4_trio_pay, s4_trifecta_pay, s4_bet, False, None,
+                if is_buy:
+                    s4_mark = f"◎ ¥{s4_pay:,}" if s4_hit else "×"
+                    results_7plus_s4.append(
+                        f"[S4] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
+                        f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}（ペーパー）")
+                    p7s4b += s4_bet
+                    if s4_hit:
+                        p7s4r += s4_pay
+                        p7s4h += 1
+                history.append((target_date, f"{rk}#7S4", "SEVEN_S4", s4_pred, s4_n_combos,
+                                int(s4_hit), s4_pay, s4_trio_pay, s4_trifecta_pay, s4_bet,
+                                not is_buy, None,
                                 *gap_map.get(rk, (None, None, None)), dec_s4.get("gate_label")))
                 continue
 
