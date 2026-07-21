@@ -1709,7 +1709,8 @@ def wave_picks_wt(target_date, output_path, model_name,
                 if sel is None:
                     continue
                 axis, p1, p2, top3_gap = sel
-                if not s1w_gate(top3_gap):
+                axis_win_prob = win_probs[axis]
+                if not s1w_gate(top3_gap, axis_win_prob):
                     continue
                 s1_candidates.append({
                     "race_key":   race_key,
@@ -1717,6 +1718,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "race_no":    int(grp_sorted["race_no"].iloc[0]),
                     "start_time": grp_sorted["start_time"].iloc[0],
                     "top3_gap":   round(top3_gap, 4),
+                    "axis_win_prob": round(axis_win_prob, 4),
                     "axis": axis, "p1": p1, "p2": p2,
                 })
         else:
@@ -1792,10 +1794,24 @@ def wave_picks_wt(target_date, output_path, model_name,
             click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
 
         # 日次選出: 重なり0は全件・重なり1はaxis_sum昇順でS4_DAILY_TOP_N件・重なり2/不明は除外
-        s4_candidates = s4_daily_select(s4_raw_candidates)
+        # 夜の部(_night)は朝の部と別プロセスで独立に選出するため、暦日あたりの
+        # 上限を維持するには朝ファイルの選出済み件数を差し引く必要がある
+        # （2026-07-21発見: 独立に選出すると1日で最大20件になるバグがあった）。
+        already_selected_tier1 = 0
+        is_night = out_stem.endswith("_night")
+        if is_night:
+            day_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_s4_candidates.json"
+            if day_path.exists():
+                try:
+                    day_cands = json.loads(day_path.read_text(encoding="utf-8"))
+                    already_selected_tier1 = sum(
+                        1 for c in day_cands if c.get("wt_overlap_n") == 1)
+                except Exception:
+                    already_selected_tier1 = 0
+        s4_candidates = s4_daily_select(s4_raw_candidates, already_selected_tier1)
         s4_candidates.sort(key=lambda c: c["axis_sum"])
 
-        s4_suffix = "_night_s4_candidates.json" if out_stem.endswith("_night") else "_s4_candidates.json"
+        s4_suffix = "_night_s4_candidates.json" if is_night else "_s4_candidates.json"
         s4_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s4_suffix}"
         with open(s4_path, "w", encoding="utf-8") as f:
             json.dump(s4_candidates, f, ensure_ascii=False, indent=2)

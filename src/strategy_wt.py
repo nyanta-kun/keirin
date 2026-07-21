@@ -169,10 +169,22 @@ S1_STAKE = 100             # 円/点（ペーパー）
 # 未来データ込みでスコアリングしていた問題）と同型の問題がS1にも存在したため、
 # 同時に四半期walk-forwardモデル（lgbm_wt_eval_q24xx/lgbm_wt_win_q24xx等）で
 # 全期間再構築した。
+#
+# 2026-07-21 再チューニング: 高配当（万車券含む）を取りこぼさない方向へ再設計。
+# top3_gap閾値を0.22→0.15へ戻したうえ、軸の単勝勝率(pred_win)が高すぎる
+# （＝本命決着で低配当になりやすい）レースを除外する新ゲートを追加
+# （exp_s1_20x_filter_design.py・honest全期間 th>=0.15 母集団 n=25,268 で検証）。
+# 軸勝率<=50%フィルター単体の実績: n=13,510(53.5%)・的中率10.7%・ROI146.3%、
+# 20倍以上再現率65.9%・30倍以上70.3%・50倍以上72.5%・万車券再現率84.0%
+# （無フィルター時: 的中率16.2%・ROI120.3%・母数25,268）。
+# 的中率は下がるが、S1の的中条件（軸が1着固定）と高配当（＝波乱決着）は
+# 構造的にトレードオフのため、的中率を維持したまま高配当のみ拾うことは
+# できないとユーザーに説明のうえ、高配当の取りこぼし防止を優先する方針で採用。
 # ═══════════════════════════════════════════════════════════════════════════
 
 S1W_NE = 7                  # 対象車数（7車ちょうど）
-S1W_TOP3_GAP_MIN = 0.22     # 相手2車(p1,p2)の3着内モデル確率差 下限（凍結値・2026-07-19更新）
+S1W_TOP3_GAP_MIN = 0.15     # 相手2車(p1,p2)の3着内モデル確率差 下限（2026-07-21再変更）
+S1W_AXIS_WIN_PROB_MAX = 0.50  # 軸の単勝勝率 上限（本命決着＝低配当レースを除外・2026-07-21新設）
 S1W_STAKE = 100              # 円/点（ペーパー）
 
 
@@ -198,9 +210,19 @@ def s1w_select(
     return axis, p1, p2, top3_gap
 
 
-def s1w_gate(top3_gap: float) -> bool:
-    """S1(新設計)のゲート判定（相手2車の3着内モデル確信度）。"""
-    return top3_gap >= S1W_TOP3_GAP_MIN
+def s1w_gate(top3_gap: float, axis_win_prob: float | None = None) -> bool:
+    """S1(新設計)のゲート判定。
+
+    - top3_gap（相手2車の3着内モデル確信度）>= S1W_TOP3_GAP_MIN
+    - axis_win_prob（軸の単勝勝率）が渡された場合は <= S1W_AXIS_WIN_PROB_MAX も要求
+      （本命決着＝低配当レースを除外し、高配当の取りこぼしを防ぐ・2026-07-21新設）。
+      axis_win_prob=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
+    """
+    if top3_gap < S1W_TOP3_GAP_MIN:
+        return False
+    if axis_win_prob is not None and axis_win_prob > S1W_AXIS_WIN_PROB_MAX:
+        return False
+    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -301,7 +323,7 @@ def s4_wt_overlap_n(
     return len({axis1, axis2} & {wt_honmei, wt_taikou})
 
 
-def s4_daily_select(day_candidates: list[dict]) -> list[dict]:
+def s4_daily_select(day_candidates: list[dict], already_selected_tier1: int = 0) -> list[dict]:
     """S4の日次選出（2026-07-21 WT◎◯重なり考慮版）。
 
     day_candidates: 同一日の候補レースのリスト。各要素は最低限
@@ -315,14 +337,21 @@ def s4_daily_select(day_candidates: list[dict]) -> list[dict]:
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
 
+    already_selected_tier1: 同一暦日で本関数がこれより前に選出済みの重なり1件数
+      （夜の部生成が朝の部と別プロセスで走るため、日次上限 S4_DAILY_TOP_N を
+      「実行あたり」ではなく「暦日あたり」で維持するために必要。2026-07-21発見:
+      day/night 2回の生成が独立にTOP_N件ずつ選ぶと1日で最大20件になるバグが
+      あった。夜の部呼び出し側で当日の朝ファイル選出済み件数を渡すこと）。
+
     returns 採用された候補のリスト（重なり0が前・重なり1がaxis_sum昇順で続く）。
     1日あたりの採用本数は可変（重なり0の発生数 + 最大 S4_DAILY_TOP_N 件）。
     """
+    remaining = max(0, S4_DAILY_TOP_N - already_selected_tier1)
     tier0 = [c for c in day_candidates if c.get("wt_overlap_n") == 0]
     tier1 = sorted(
         (c for c in day_candidates if c.get("wt_overlap_n") == 1),
         key=lambda c: c["axis_sum"])
-    return tier0 + tier1[:S4_DAILY_TOP_N]
+    return tier0 + tier1[:remaining]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
