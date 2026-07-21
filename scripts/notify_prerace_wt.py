@@ -38,8 +38,8 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    M_GAP12_MIN, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, S1W_STAKE,
-    S1W_TOP3_GAP_MIN, S4_DAILY_TOP_N, S4_STAKE, SS_STAKE,
+    M_GAP12_MIN, M_LEG_MIN_ODDS, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, S1W_STAKE,
+    S1W_TOP3_GAP_MIN, S4_STAKE, SS_STAKE,
     U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
     line_score_features, ss_policy,
 )
@@ -656,11 +656,15 @@ def _process_u_candidates(today: str, now_unix: int, notified: set[str]) -> tupl
     return messages, newly_done
 
 
-# ── M=S3（◎不一致×軸信頼ゲート(gap12 OR win_rank)・2026-07-19 OR拡張／ペーパー検証）─
-# 朝の wave-picks-wt が m_candidates JSON（gap12≥M_GAP12_MIN または
-# win_rank≥M_WIN_RANK_MIN・WT◎≠システム◎・同ライン逃相方あり）を出力し、
+# ── M=S3（◎不一致×軸信頼ゲート win_rank単独・2026-07-21 厳選／ペーパー検証）─
+# 朝の wave-picks-wt が m_candidates JSON（win_rank≥M_WIN_RANK_MIN・
+# WT◎≠システム◎・同ライン逃相方あり）を出力し、
 # ここで発走15分前のライブオッズにより最終判定する。
 # 旧定義の波乱ゲート（entropy≥U_ENTROPY_MIN ∧ mto≥U_MTO_MIN）は 2026-07-17 に廃止。
+# 2026-07-19〜07-21 の gap12/win_rank/ratio 3way OR ゲートは、honest全期間再構築で
+# gap12/ratio単独が赤字と判明したため 2026-07-21 に win_rank 単独へ厳選（[[keirin]]
+# strategy_wt.py の m_axis_gate 参照）。買い目オッズ下限も U と分離し
+# M_LEG_MIN_ODDS=20倍に引き上げ済み。
 # 実際の賭けは行わない（記録 + Discord 通知のみ）。
 # U と同一ペア集合で U が buy のレースは U 優先で M を記録しない（重複排除）。
 
@@ -677,7 +681,7 @@ def judge_m(pair: dict, trio_lookup: dict,
     U重複排除あり。gap12/win_rank の軸信頼ゲートは朝の候補選定で確定済み）:
       ① 盤面（有効オッズ 0<ov<9000 の掲載車）が7車 — 欠車発生なら見送り
       ② U優先の重複排除: {rk}#U が buy ∧ (dark,mate) と (m1,mate) が同一集合 → 見送り
-      ③ 買い目 = {m1, mate, t}（t=残り5車）のうちオッズ >= U_LEG_MIN_ODDS のみ
+      ③ 買い目 = {m1, mate, t}（t=残り5車）のうちオッズ >= M_LEG_MIN_ODDS のみ
 
     returns (decision, detail)
       decision: "buy" / "skip" / "不明"（盤面なし→次分再試行）
@@ -732,19 +736,19 @@ def judge_m(pair: dict, trio_lookup: dict,
             detail["skip_reason"] = "U重複（同一ペア・U優先）"
             return "skip", detail
 
-    # ③ 買い目 = {m1, mate, t} の三連複のうちオッズ >= U_LEG_MIN_ODDS の目のみ
+    # ③ 買い目 = {m1, mate, t} の三連複のうちオッズ >= M_LEG_MIN_ODDS の目のみ
     leg_odds: dict[str, float | None] = {}
     combos: list[str] = []
     for t in sorted(board - {m1, mate}):
         label = "-".join(map(str, sorted((m1, mate, t))))
         ov = valid.get(frozenset({m1, mate, t}))
         leg_odds[label] = ov
-        if ov is not None and ov >= U_LEG_MIN_ODDS:
+        if ov is not None and ov >= M_LEG_MIN_ODDS:
             combos.append(label)
     detail["leg_odds"] = leg_odds
     detail["combos"] = combos
     if not combos:
-        detail["skip_reason"] = f"{U_LEG_MIN_ODDS:.0f}倍以上の目なし"
+        detail["skip_reason"] = f"{M_LEG_MIN_ODDS:.0f}倍以上の目なし"
         return "skip", detail
 
     return "buy", detail
@@ -827,15 +831,14 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
     wr_str = str(win_rank) if win_rank is not None else "—"
     ratio = cand.get("ratio")
     ratio_str = f"{float(ratio):.3f}" if ratio is not None else "—"
-    gate = cand.get("gate", "gap12")
+    gate = cand.get("gate", "win_rank")
     return (
         f"🧲 **[S3・不一致×軸信頼検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸2車: システム◎ {m1} × 相方 {mate}（同ライン・逃）  ※WT◎={wt_mark} と不一致\n"
         f"  3連複({n_pts}点 / 名目{n_pts * M_STAKE:,}円): "
-        f"`{m1}={mate} 流し（{U_LEG_MIN_ODDS:.0f}倍以上の目のみ）`\n"
-        f"  **条件(gate={gate}): gap12={g12_str}(≥{M_GAP12_MIN}) "
-        f"win_rank={wr_str}(≥{M_WIN_RANK_MIN}) "
-        f"ratio={ratio_str}(≤{M_RATIO_MAX})**\n"
+        f"`{m1}={mate} 流し（{M_LEG_MIN_ODDS:.0f}倍以上の目のみ）`\n"
+        f"  **条件(gate={gate}): win_rank={wr_str}(≥{M_WIN_RANK_MIN})** "
+        f"  [参考] gap12={g12_str} ratio={ratio_str}\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
         + "\n".join(lines) + "\n"
@@ -1094,8 +1097,8 @@ def _process_s1_candidates(today: str, now_unix: int, notified: set[str]) -> tup
 def judge_s4(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     """S4（単勝×複勝指数トップ3重なり軸×波乱度選出）の発走前ライブオッズ判定（純関数・DB非依存）。
 
-    cand:        朝のS4候補JSON行（axis1/axis2・朝時点のaxis_sum日次ランキングで
-                 選出済み）
+    cand:        朝のS4候補JSON行（axis1/axis2・朝時点の s4_daily_select() による
+                 日次選出＝WT◎◯重なり考慮版で選出済み・2026-07-21〜）
     trio_lookup: _build_odds_lookup(odds_data, "trio") が返す {frozenset: odds} 辞書
 
     判定（judge_mとの相違: オッズ下限なし＝レース選出自体が朝のaxis_sum日次
@@ -1179,12 +1182,16 @@ def _load_s4_candidates(today: str) -> list[dict]:
     return out
 
 
-def _insert_s4_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+def _insert_s4_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
+                     gate_label: str | None = None) -> None:
     """S4（波乱度選出・ペーパー）の記録行 {base}#7S4 を picks_history に即時反映する（SQLite + VPS PG）。
 
     実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
     （n_combos × S4_STAKE）で記録する（三連複のため trio_payout を使う）。
     翌朝の notify_results_wt.py が decisions（{rk}#S4）に基づき最終確定（採点）する。
+
+    gate_label: "SS"（軸2車がWT◎◯と全く重ならない＝wt_overlap_n=0）/
+                "S"（片方だけ重なる＝wt_overlap_n=1）。2026-07-21〜。
     """
     store_key = race_key + "#7S4"
     bet = n_combos * S4_STAKE
@@ -1192,9 +1199,9 @@ def _insert_s4_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, "SEVEN_S4", pred_combo, n_combos, bet),
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False,?)",
+                (race_date, store_key, "SEVEN_S4", pred_combo, n_combos, bet, gate_label),
             )
             conn.commit()
     except Exception as e:
@@ -1208,19 +1215,25 @@ def _insert_s4_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
                 with pg_conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO keirin.picks_history "
-                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE,%s) "
                         "ON CONFLICT (race_key) DO UPDATE SET "
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
-                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, "SEVEN_S4", pred_combo, n_combos, bet),
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE, "
+                        "gate_label=EXCLUDED.gate_label",
+                        (race_date, store_key, "SEVEN_S4", pred_combo, n_combos, bet, gate_label),
                     )
         except Exception as e:
             logger.warning("S4 pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_s4_message(cand: dict, race_info: dict, detail: dict) -> str:
-    """S4（波乱度選出・ペーパー）の15分前 Discord 通知メッセージ。"""
+def _build_s4_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
+    """S4（波乱度選出・ペーパー）の15分前 Discord 通知メッセージ。
+
+    gate_label: "SS"（軸2車がWT◎◯と全く重ならない）/ "S"（片方だけ重なる）。
+    2026-07-21〜、軸2車とWT◎◯の重なりに応じてSS/Sの2段階でランク表示する
+    （honest全期間検証で重なりが増えるほどROIが悪化すると判明したため）。
+    """
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
     start = cand.get("start_time", "--:--")
@@ -1236,12 +1249,16 @@ def _build_s4_message(cand: dict, race_info: dict, detail: dict) -> str:
         lines.append(f"    {c}:  {ov_str}")
     axis_sum = cand.get("axis_sum")
     axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    label = gate_label or "S4"
+    label_desc = {"SS": "WT◎◯と軸2車が全く重ならない", "S": "WT◎◯と軸2車が片方だけ重なる"}.get(
+        gate_label, "")
     return (
-        f"🎲 **[S4・波乱度選出検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
-        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}\n"
+        f"🎲 **[{label}・波乱度選出検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
+        + (f"（{label_desc}）" if label_desc else "") + "\n"
         f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S4_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
-        f"  **軸合計複勝指数(波乱度)={axis_sum_str}（当日上位{S4_DAILY_TOP_N}選出）**\n"
+        f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
         + "\n".join(lines) + "\n"
@@ -1306,6 +1323,9 @@ def _process_s4_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             time.sleep(0.3)
             continue
 
+        wt_overlap_n = cand.get("wt_overlap_n")
+        gate_label = {0: "SS", 1: "S"}.get(wt_overlap_n)
+
         # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
         _save_decision(today, s4_key, {
             "decision": decision,
@@ -1313,6 +1333,8 @@ def _process_s4_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             "paper": True,
             "stake": S4_STAKE,
             "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": wt_overlap_n,
+            "gate_label": gate_label,
             **detail,
         })
 
@@ -1321,9 +1343,9 @@ def _process_s4_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_s4_pick(rk, today, pred, len(combos))
-            messages.append((s4_key, _build_s4_message(cand, ri, detail)))
-            print(f"[prerace] {rk} S4候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+            _insert_s4_pick(rk, today, pred, len(combos), gate_label)
+            messages.append((s4_key, _build_s4_message(cand, ri, detail, gate_label)))
+            print(f"[prerace] {rk} S4候補 → buy（ペーパー・{len(combos)}点・{gate_label}）", flush=True)
         else:
             _mark_paper_miwokuri(rk, "#7S4")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} S4候補 → skip: {detail.get('skip_reason')}", flush=True)
@@ -1961,24 +1983,10 @@ def main():
         newly_done.add(rk)
         time.sleep(0.5)   # Discord レート制限対策
 
-    # ── U候補（波乱ライン連れ込み・ペーパー）処理 ──
-    # try/except で全体を包み、U処理の失敗が既存 SS 通知を絶対に阻害しないようにする。
-    try:
-        u_messages, u_done = _process_u_candidates(today, now_unix, notified)
-        messages += u_messages
-        newly_done |= u_done
-    except Exception as e:
-        logger.exception("U候補処理失敗（SS通知には影響しない）: %s", e)
-
-    # ── M候補（◎不一致×システム◎・ペーパー）処理 ──
-    # 必ず U処理の後に呼ぶ（同分に保存された {rk}#U buy を見て同一ペアの M を
-    # U優先で重複排除するため）。try/except で SS/U 通知を絶対に阻害しない。
-    try:
-        m_messages, m_done = _process_m_candidates(today, now_unix, notified)
-        messages += m_messages
-        newly_done |= m_done
-    except Exception as e:
-        logger.exception("M候補処理失敗（SS/U通知には影響しない）: %s", e)
+    # ── U(S2)候補・M(S3)候補処理 は 2026-07-21 全廃 ────────────────────────
+    # 対象レース数・的中率・期待値の観点で継続困難と判断し購入候補生成を停止したため、
+    # 朝の候補JSON自体がもう作られない（_process_u_candidates/_process_m_candidates は
+    # 過去日再採点・分析スクリプト互換のため関数定義のみ残置・呼び出しは停止）。
 
     # ── S1候補（新設計・win軸1着固定・ペーパー）処理 ──────────────────────
     # U/Mとの重複排除はない（独立戦略）。try/exceptで既存通知を阻害しない。

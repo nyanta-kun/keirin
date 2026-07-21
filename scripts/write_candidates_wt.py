@@ -262,6 +262,9 @@ def _write_paper_candidates(target_date: str) -> None:
     発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
     miwokuri=True（オッズ見送り）に更新する。既存行（判定済み）は上書きしない。
     A（#7A）・旧S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
+    U（#7U）・M（#7M）は 2026-07-21 全廃により main.py が候補JSON自体を
+    生成しなくなったため、下記の読み込みは常に空リストとなり自然に無効化される
+    （コードは過去日再採点互換のため残置）。
     """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
 

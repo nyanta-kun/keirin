@@ -1208,9 +1208,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        M_GAP12_MIN, M_RATIO_MAX, M_WIN_RANK_MIN, S1W_TOP3_GAP_MIN, S4_DAILY_TOP_N,
-        U_ENTROPY_MIN, line_score_features, m_axis_gate, race_signals, s1w_gate,
-        s1w_select, s4_select_axis, ss_policy, u_entropy,
+        S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
+        s1w_select, s4_daily_select, s4_select_axis, s4_wt_overlap_n, ss_policy,
     )
     from pathlib import Path
 
@@ -1676,183 +1675,14 @@ def wave_picks_wt(target_date, output_path, model_name,
         json.dump(all_index, f, ensure_ascii=False, indent=2)
     click.echo(f"[保存先] {allindex_path}  (全{len(all_index)}レース指数)")
 
-    # ── U候補（波乱ライン連れ込み・ペーパートレード検証 2026-07-16〜）──────────
-    # 朝はモデル情報のみで候補を抽出する（オッズ判定は発走15分前に
-    # notify_prerace_wt.judge_u が盤面7車・mto・市場順位・買い目オッズで確定）。
-    #   対象: 7車ちょうど ∧ u_entropy(全7車 pred_prob) >= U_ENTROPY_MIN
-    #   ペア候補: 穴=モデル3位内 ∧ (単騎 or ライン先頭/番手)、
-    #             相方=同ライン ∧ 脚質「逃」∧ 穴と別人
-    if include_7plus:
-        u_candidates = []
-        for race_key, grp in df.groupby("race_key"):
-            if n_entries_map.get(race_key, 0) != 7:
-                continue
-            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
-            if len(grp_sorted) != 7:
-                continue
-            if _hour_skip(_hour_of(grp_sorted)):
-                continue
-            ent = u_entropy([float(x) for x in grp_sorted["pred_prob"].tolist()])
-            if ent < U_ENTROPY_MIN:
-                continue
-
-            def _u_int(v):
-                return None if v is None or pd.isna(v) else int(v)
-
-            rows_u = list(grp_sorted.itertuples(index=False))
-            pairs_u = []
-            for rank_idx_u, r_u in enumerate(rows_u[:3], start=1):  # モデル順位3位以内
-                lg_u = _u_int(getattr(r_u, "line_group", None))
-                ls_u = _u_int(getattr(r_u, "line_size", None))
-                lp_u = _u_int(getattr(r_u, "line_pos", None))
-                if not (ls_u == 1 or lp_u in (1, 2)):
-                    continue
-                if lg_u is None:
-                    continue  # ラインなし → 同ラインの相方なし
-                dark_fno = int(r_u.frame_no)
-                for m_u in rows_u:
-                    m_fno = int(m_u.frame_no)
-                    m_lg = _u_int(getattr(m_u, "line_group", None))
-                    m_style = m_u.style if isinstance(getattr(m_u, "style", None), str) else ""
-                    if m_fno == dark_fno or m_lg is None or m_lg != lg_u or m_style != "逃":
-                        continue
-                    pairs_u.append({
-                        "dark": dark_fno,
-                        "dark_model_rank": rank_idx_u,
-                        "mate": m_fno,
-                    })
-            if not pairs_u:
-                continue
-            u_candidates.append({
-                "race_key":   race_key,
-                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
-                "race_no":    int(grp_sorted["race_no"].iloc[0]),
-                "start_time": grp_sorted["start_time"].iloc[0],
-                "entropy":    round(float(ent), 4),
-                "pairs":      pairs_u,
-            })
-
-        u_suffix = "_night_u_candidates.json" if out_stem.endswith("_night") else "_u_candidates.json"
-        u_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{u_suffix}"
-        with open(u_path, "w", encoding="utf-8") as f:
-            json.dump(u_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {u_path}  (U候補 {len(u_candidates)}件・波乱ライン連れ込み/ペーパー検証)")
-
-    # ── M候補（S3・◎不一致×軸信頼ゲート(gap12 OR win_rank OR ratio)・2026-07-19 3way OR拡張）─
-    # WT◎（prediction_mark==1）とシステム◎（モデル指数1位）が不一致で、以下いずれか:
-    #   (a) gap12 >= M_GAP12_MIN（3着内モデルの軸信頼ゲート）
-    #   (b) システム◎の1着モデル内レース順位 >= M_WIN_RANK_MIN（勝ちきれない評価ほど
-    #       ROIが上がる逆説的シグナル・exp_win_axis_sweep_wt.py で発見・ほぼ独立）
-    #   (c) システム◎の p_win/p_top3 比 <= M_RATIO_MAX（(b)の連続量版・
-    #       exp_composite_prob_diff_wt.py で発見・母数を更に+22〜26%拡張）
-    # を満たすレースで、システム◎と同ライン「逃」相方を2車軸にする。
-    # オッズ判定（盤面7車・15倍以上の目・U重複排除）は発走15分前に
-    # notify_prerace_wt.judge_m が確定する。市場順位条件はなし（Uとの相違点）。
-    if include_7plus:
-        m_candidates = []
-        # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
-        pm_fallback = None
-        if "prediction_mark" not in df.columns:
-            pm_fallback = {}
-            with get_connection() as conn_m:
-                for _rk_m, _fno_m, _pm_m in conn_m.execute(
-                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
-                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
-                    "WHERE r.race_date = ?", (target_date,)
-                ).fetchall():
-                    if _pm_m is not None:
-                        pm_fallback.setdefault(_rk_m, {})[int(_fno_m)] = int(_pm_m)
-
-        for race_key, grp in df.groupby("race_key"):
-            if n_entries_map.get(race_key, 0) != 7:
-                continue
-            grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
-            if len(grp_sorted) != 7:
-                continue
-            if _hour_skip(_hour_of(grp_sorted)):
-                continue
-
-            def _m_int(v):
-                return None if v is None or pd.isna(v) else int(v)
-
-            rows_m = list(grp_sorted.itertuples(index=False))
-
-            # WT◎（prediction_mark==1）の存在確認
-            if pm_fallback is None:
-                wt_marks = [int(r_m.frame_no) for r_m in rows_m
-                            if _m_int(getattr(r_m, "prediction_mark", None)) == 1]
-            else:
-                wt_marks = [fno for fno, pm_v in pm_fallback.get(race_key, {}).items()
-                            if pm_v == 1]
-            if not wt_marks:
-                continue
-            wt_fno = min(wt_marks)
-
-            # システム◎ = pred_prob 1位。WT◎と不一致のレースのみ対象
-            r1_m = rows_m[0]
-            m1_fno = int(r1_m.frame_no)
-            if m1_fno == wt_fno:
-                continue
-
-            p_m = grp_sorted["pred_prob"].tolist()
-            gap12_m = float(p_m[0] - p_m[1])
-
-            # win_rank: システム◎(m1_fno) の1着モデル内レース順位（1着モデル未ロード時は None）
-            # ratio: システム◎の p_win/p_top3 比（1着モデル未ロード時は None）
-            win_rank_m = None
-            ratio_m = None
-            if "pred_win" in grp_sorted.columns and grp_sorted["pred_win"].notna().all():
-                grp_by_win = grp_sorted.sort_values("pred_win", ascending=False).reset_index(drop=True)
-                win_order = [int(f) for f in grp_by_win["frame_no"].tolist()]
-                win_rank_m = win_order.index(m1_fno) + 1
-                p_win_axis = float(r1_m.pred_win)
-                p_top3_axis = float(r1_m.pred_prob)
-                if p_top3_axis > 0:
-                    ratio_m = p_win_axis / p_top3_axis
-
-            gate_ok, gate_label = m_axis_gate(gap12_m, win_rank_m, ratio_m)  # 軸信頼ゲート（2026-07-19 3way OR拡張）
-            if not gate_ok:
-                continue
-
-            # 相方 = システム◎と同 line_group ∧ 脚質「逃」∧ 別人。
-            # 複数該当は line_pos 相補（◎が番手なら先頭/先頭なら番手）を優先、
-            # 無ければ車番最小の同ライン逃。
-            lg1_m = _m_int(getattr(r1_m, "line_group", None))
-            if lg1_m is None:
-                continue  # ラインなし → 同ラインの相方なし
-            lp1_m = _m_int(getattr(r1_m, "line_pos", None))
-            want_lp_m = 1 if lp1_m == 2 else 2
-            mates_m = []
-            for r_m in rows_m:
-                fno_m = int(r_m.frame_no)
-                lg_m = _m_int(getattr(r_m, "line_group", None))
-                style_m = r_m.style if isinstance(getattr(r_m, "style", None), str) else ""
-                if fno_m == m1_fno or lg_m is None or lg_m != lg1_m or style_m != "逃":
-                    continue
-                mates_m.append((fno_m, _m_int(getattr(r_m, "line_pos", None))))
-            if not mates_m:
-                continue
-            mates_m.sort()  # 車番昇順（フォールバック時の決定性）
-            mate_fno = next((f for f, lp in mates_m if lp == want_lp_m), mates_m[0][0])
-
-            m_candidates.append({
-                "race_key":   race_key,
-                "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
-                "race_no":    int(grp_sorted["race_no"].iloc[0]),
-                "start_time": grp_sorted["start_time"].iloc[0],
-                "gap12":      round(gap12_m, 4),
-                "win_rank":   win_rank_m,
-                "ratio":      round(ratio_m, 4) if ratio_m is not None else None,
-                "gate":       gate_label,
-                "pair":       {"m1": m1_fno, "mate": mate_fno},
-                "wt_mark":    wt_fno,
-            })
-
-        m_suffix = "_night_m_candidates.json" if out_stem.endswith("_night") else "_m_candidates.json"
-        m_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{m_suffix}"
-        with open(m_path, "w", encoding="utf-8") as f:
-            json.dump(m_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {m_path}  (M候補 {len(m_candidates)}件・◎不一致×システム◎/ペーパー検証)")
+    # ── U(S2)候補・M(S3)候補 は 2026-07-21 全廃 ─────────────────────────────
+    # 対象レース数・的中率・期待値の観点で継続困難と判断し、購入候補の生成を停止。
+    # honest全期間実績: S2(7PLUS_U) ROI84.8%(1155R)・S3(7PLUS_M) ROI120.4%(801R)
+    # （直近まで厳選を続けていたが、母数・実績とも他ランクに劣るため廃止）。
+    # 既存 picks_history 行は scripts/archive_u_m_abolition_wt.py で
+    # picks_history_u_archive / picks_history_m_archive へ退避済み。
+    # judge_u/judge_m・m_axis_gate 等のロジックは過去日再採点・分析スクリプト
+    # 互換のため残置（呼び出し元のみ停止）。
 
     # ── S1候補（新設計・win軸1着固定×3着内モデル相手2車・三連単2点流し・2026-07-19導入）──
     # WT◎/システム◎の一致・不一致は問わない。7車全レース対象。
@@ -1902,9 +1732,25 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
     #         strategy_wt.s4_select_axis() で選定
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-    # 選出 = 当日の該当レースをaxis_sum昇順に並べ上位 S4_DAILY_TOP_N 件（日次ランキング）
+    # 選出 = strategy_wt.s4_daily_select()（2026-07-21 WT◎◯重なり考慮版・日次選出）
+    #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
+    #   重なり0(全く重ならない)は無条件で全件採用、重なり1(片方一致)は
+    #   axis_sum昇順で固定S4_DAILY_TOP_N件、重なり2(完全一致)は除外する。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
+        # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
+        s4_pm_fallback = None
+        if "prediction_mark" not in df.columns:
+            s4_pm_fallback = {}
+            with get_connection() as conn_s4:
+                for _rk_s4, _fno_s4, _pm_s4 in conn_s4.execute(
+                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
+                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
+                    "WHERE r.race_date = ?", (target_date,)
+                ).fetchall():
+                    if _pm_s4 is not None:
+                        s4_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
+
         s4_raw_candidates = []
         if "pred_win" in df.columns:
             for race_key, grp in df.groupby("race_key"):
@@ -1923,6 +1769,16 @@ def wave_picks_wt(target_date, output_path, model_name,
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
+
+                if s4_pm_fallback is None:
+                    _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
+                              for r in grp_sorted.itertuples(index=False)}
+                else:
+                    _marks = s4_pm_fallback.get(race_key, {})
+                wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
+                wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
+                wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+
                 s4_raw_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
@@ -1930,13 +1786,14 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "start_time": grp_sorted["start_time"].iloc[0],
                     "axis1": axis1, "axis2": axis2,
                     "axis_sum": round(axis_sum, 4),
+                    "wt_overlap_n": wt_overlap_n,
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
 
-        # 日次ランキング: axis_sum昇順(=軸が弱い=波乱度高い)で上位 S4_DAILY_TOP_N 件のみ採用
-        s4_raw_candidates.sort(key=lambda c: c["axis_sum"])
-        s4_candidates = s4_raw_candidates[:S4_DAILY_TOP_N]
+        # 日次選出: 重なり0は全件・重なり1はaxis_sum昇順でS4_DAILY_TOP_N件・重なり2/不明は除外
+        s4_candidates = s4_daily_select(s4_raw_candidates)
+        s4_candidates.sort(key=lambda c: c["axis_sum"])
 
         s4_suffix = "_night_s4_candidates.json" if out_stem.endswith("_night") else "_s4_candidates.json"
         s4_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s4_suffix}"

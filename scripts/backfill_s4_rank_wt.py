@@ -9,8 +9,11 @@ S4 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
           strategy_wt.s4_select_axis() で選定
   波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-  選出 = 当日該当レースをaxis_sum昇順に並べ上位 S4_DAILY_TOP_N 件（日次ランキング・
-         1レース単位の閾値ゲートではない）
+  選出 = strategy_wt.s4_daily_select()（2026-07-21〜 WT◎◯重なり考慮版）:
+         軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
+         重なり0(全く重ならない)は無条件で全件採用、重なり1(片方一致)は
+         axis_sum昇順で固定S4_DAILY_TOP_N件、重なり2(完全一致)・マーク欠損は除外
+         （1レース単位の閾値ゲートではなく日次クロスレースの区分選出）
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。
@@ -36,7 +39,7 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import S4_DAILY_TOP_N, S4_STAKE, s4_select_axis
+from src.strategy_wt import S4_STAKE, s4_daily_select, s4_select_axis, s4_wt_overlap_n
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
@@ -80,13 +83,16 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             (date_from, date_to)))
         rks7 = [rk for rk, ne in ne_map.items() if ne and int(ne) == 7]
         fins: dict[str, list[tuple[int, int]]] = {}
+        marks: dict[str, dict[int, int]] = {}
         for i in range(0, len(rks7), 900):
             chunk = rks7[i:i + 900]
-            q = ("SELECT race_key, frame_no, finish_order FROM wt_entries "
+            q = ("SELECT race_key, frame_no, finish_order, prediction_mark FROM wt_entries "
                  "WHERE race_key IN (%s)" % ",".join("?" * len(chunk)))
-            for rk, fno, fo in c.execute(q, chunk):
+            for rk, fno, fo, pmv in c.execute(q, chunk):
                 if fo is not None and fo >= 1:
                     fins.setdefault(rk, []).append((fo, int(fno)))
+                if pmv is not None:
+                    marks.setdefault(rk, {})[int(fno)] = int(pmv)
     df = df[df["race_key"].isin(set(rks7))].copy()
     if df.empty:
         return []
@@ -129,21 +135,26 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         order3 = tuple(fno for _, fno in fin[:3])
         actual_top3 = frozenset(order3)
 
+        mk = marks.get(rk, {})
+        wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
+        wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
+        wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum,
             "others": others, "trio": trio, "actual_top3": actual_top3,
+            "wt_overlap_n": wt_overlap_n,
         })
 
-    # ── 日次ランキング: axis_sum昇順で上位 S4_DAILY_TOP_N 件のみ採用 ──
+    # ── 日次選出: s4_daily_select()（2026-07-21〜 WT◎◯重なり考慮版） ──
     by_day: dict[str, list[dict]] = defaultdict(list)
     for c_ in candidates:
         by_day[c_["race_date"]].append(c_)
 
     rows: list[dict] = []
     for d, day_cands in by_day.items():
-        day_cands.sort(key=lambda c_: c_["axis_sum"])
-        for c_ in day_cands[:S4_DAILY_TOP_N]:
+        for c_ in s4_daily_select(day_cands):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
             combos = []
@@ -158,13 +169,14 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
             pay = trio_pay * S4_STAKE // 100 if hit else 0
             bet = len(combos) * S4_STAKE
+            gate_label = {0: "SS", 1: "S"}.get(c_["wt_overlap_n"])
             rows.append({
                 "race_date": d,
                 "race_key": f"{rk}#7S4", "rank": "SEVEN_S4",
                 "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in c_["others"])
                               + f" (axis_sum={c_['axis_sum']:.1f})",
                 "n_combos": len(combos), "hit": int(hit), "payout": pay,
-                "trio_payout": trio_pay, "bet_amount": bet,
+                "trio_payout": trio_pay, "bet_amount": bet, "gate_label": gate_label,
             })
     return rows
 
@@ -205,9 +217,9 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
         conn.executemany(
             "INSERT OR REPLACE INTO picks_history "
             "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
-            " trio_payout,bet_amount,route,miwokuri) "
+            " trio_payout,bet_amount,route,miwokuri,gate_label) "
             "VALUES (:race_date,:race_key,:rank,:pred_combo,:n_combos,:hit,"
-            " :payout,:trio_payout,:bet_amount,'wt',:miwokuri)",
+            " :payout,:trio_payout,:bet_amount,'wt',:miwokuri,:gate_label)",
             rows_ins)
         conn.commit()
     print(f"[backfill] get_connection先 {len(rows)}件 書き込み完了")
@@ -223,16 +235,17 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
             execute_batch(cur, """
                 INSERT INTO keirin.picks_history
                   (race_date,race_key,rank,pred_combo,n_combos,hit,payout,
-                   trio_payout,bet_amount,route,miwokuri)
+                   trio_payout,bet_amount,route,miwokuri,gate_label)
                 VALUES (%(race_date)s,%(race_key)s,%(rank)s,%(pred_combo)s,
                         %(n_combos)s,%(hit)s,%(payout)s,%(trio_payout)s,
-                        %(bet_amount)s,'wt',FALSE)
+                        %(bet_amount)s,'wt',FALSE,%(gate_label)s)
                 ON CONFLICT (race_key) DO UPDATE SET
                   race_date=EXCLUDED.race_date, rank=EXCLUDED.rank,
                   pred_combo=EXCLUDED.pred_combo, n_combos=EXCLUDED.n_combos,
                   hit=EXCLUDED.hit, payout=EXCLUDED.payout,
                   trio_payout=EXCLUDED.trio_payout,
-                  bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE
+                  bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE,
+                  gate_label=EXCLUDED.gate_label
             """, rows, page_size=200)
     print(f"[backfill] VPS PG {len(rows)}件 書き込み完了")
 

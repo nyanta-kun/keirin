@@ -50,12 +50,19 @@ from src.strategy_wt import line_score_features, ss_policy
 VAL  = ("2025-07-01", "2026-02-28")
 HOLD = ("2026-03-01", "2026-06-30")
 
-# ペーパーランク（S2/S3）の検証期間集計対象（picks_history バックフィル済み範囲。
+# ペーパーランクの検証期間集計対象（picks_history バックフィル済み範囲。
 # lgbm_wt_eval の OOS 開始 2026-04-13 〜 検証期間末 2026-06-30）
 # 2026-07-16: 旧S1（7PLUS_R・実賭け）全廃 → 全ランクがペーパー。
 # 2026-07-17: S1(SIX_S1)/A(7PLUS_A) 全廃・S3(7PLUS_M) は新定義（不一致×gap12≥0.10）。
+# 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) を対象レース数・的中率・期待値の観点で全廃。
+# 2026-07-21: S4(SEVEN_S4)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
+# 再編。picks_history.gate_label列（SS/S）で絞り込む（4要素目・Noneならフィルタなし）。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
-PAPER_RANKS = [("S1", "SEVEN_S1", "#7S1"), ("U", "7PLUS_U", "#7U"), ("M", "7PLUS_M", "#7M")]
+PAPER_RANKS = [
+    ("S1", "SEVEN_S1", "#7S1", None),
+    ("SS", "SEVEN_S4", "#7S4", "SS"),
+    ("S", "SEVEN_S4", "#7S4", "S"),
+]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
 # VAL評価:  lgbm_wt_train_only（TRAIN 2022-12〜2025-06-30のみ学習・VALを汚染していない）
@@ -272,15 +279,20 @@ def run_7plus_backtest(
 
 
 def paper_rank_stats() -> dict:
-    """picks_history から S2/S3（ペーパー）の検証期間集計を返す。
+    """picks_history からペーパーランク（S1/SS/S）の検証期間集計を返す。
 
-    バックフィル済みの picks_history（#7U/#7M・実精算）を PAPER_HOLD 期間で
-    集計する。候補行（bet_amount=0）・見送り行は含めない。
+    バックフィル済みの picks_history（実精算）を PAPER_HOLD 期間で集計する。
+    候補行（bet_amount=0）・見送り行は含めない。SS/S は同一rank(SEVEN_S4)を
+    gate_label列（"SS"/"S"）で絞り込んで区別する。
     """
     out: dict[str, dict] = {}
     pfrom, pto = PAPER_HOLD
     with get_connection() as conn:
-        for rank_key, rank_val, suffix in PAPER_RANKS:
+        for rank_key, rank_val, suffix, gate_filter in PAPER_RANKS:
+            gate_cond = " AND gate_label = ?" if gate_filter is not None else ""
+            params = [rank_val, pfrom, pto, f"%{suffix}"]
+            if gate_filter is not None:
+                params.append(gate_filter)
             # 集約列は必ずエイリアスを付ける（PG RealDict は無名集約列名が重複し
             # row[i] 位置アクセスが崩れるため）
             row = conn.execute(
@@ -289,8 +301,8 @@ def paper_rank_stats() -> dict:
                 "COALESCE(SUM(CASE WHEN hit=1 THEN payout ELSE 0 END),0) AS p "
                 "FROM picks_history WHERE rank = ? AND route='wt' "
                 "AND race_date BETWEEN ? AND ? AND bet_amount > 0 AND NOT miwokuri "
-                "AND race_key LIKE ?",
-                (rank_val, pfrom, pto, f"%{suffix}"),
+                f"AND race_key LIKE ?{gate_cond}",
+                params,
             ).fetchone()
             n, h, b, p = (int(row["n"] or 0), int(row["h"] or 0),
                           int(row["b"] or 0), int(row["p"] or 0))
@@ -412,6 +424,9 @@ def main() -> None:
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7R'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#6S1'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7A'")
+            # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) 全廃
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7U'")
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7M'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:

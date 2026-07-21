@@ -6,15 +6,17 @@ S2/S3 の検証期間実績を picks_history（SQLite + VPS PG）に構築する
 同一条件を最終オッズ盤面で再現する:
 
   共通: 7車ちょうど ∧ 盤面(trio)7車
-  S2(U): entropy>=U_ENTROPY_MIN ∧ mto>=U_MTO_MIN ∧
+  S2(U): entropy>=U_ENTROPY_MIN ∧ mto>=U_MTO_MIN（2026-07-21: 4.3→4.5に厳選）∧
          穴=モデル3位内 ∧ (単騎 or ライン先頭/番手) ∧ 市場順位4-7位、
          相方=同ライン「逃」。複数成立は (モデル順位, 車番) 最小の1ペア。
          買い目 = 三連複 {穴,相方,t} のうちオッズ>=U_LEG_MIN_ODDS のみ
-  S3(M): WT◎≠システム◎ ∧ gap12>=M_GAP12_MIN（2026-07-17 新定義・軸信頼ゲート。
-         旧定義の entropy/mto 波乱ゲートは廃止）∧
+  S3(M): WT◎≠システム◎ ∧ win_rank>=M_WIN_RANK_MIN（2026-07-21: gap12/ratioとの
+         3way ORから win_rank 単独ゲートへ厳選。honest全期間再構築でgap12/ratio
+         単独が赤字と判明したため）∧
          相方=システム◎と同ライン「逃」（lp相補優先→車番最小）。
          S2(buy) と同一ペア集合のレースは S2 優先で S3 は記録しない。
-         買い目 = 三連複 {システム◎,相方,t} のうちオッズ>=U_LEG_MIN_ODDS のみ
+         買い目 = 三連複 {システム◎,相方,t} のうちオッズ>=M_LEG_MIN_ODDS のみ
+         （2026-07-21: Uと分離し20倍に引き上げ）
 
 採点は実精算方式（U/M live 採点と同一）: 盤面7車レースのみ対象・返還処理なし
 （買い目確定後の落車・失格は外れ計上）。払戻 = 的中時 trio 最終オッズ×100。
@@ -44,7 +46,8 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    M_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE, m_axis_gate,
+    M_LEG_MIN_ODDS, M_STAKE, U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
+    m_axis_gate,
 )
 
 
@@ -165,12 +168,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
         rows_g = list(g.itertuples(index=False))
 
-        def _mk_combos(a: int, b: int) -> tuple[list[frozenset], list[int]]:
+        def _mk_combos(a: int, b: int, leg_min: float) -> tuple[list[frozenset], list[int]]:
             combos, thirds = [], []
             for t in sorted(board - {a, b}):
                 key = frozenset({a, b, t})
                 ov = trio.get(key)
-                if ov is not None and ov >= U_LEG_MIN_ODDS:
+                if ov is not None and ov >= leg_min:
                     combos.append(key)
                     thirds.append(t)
             return combos, thirds
@@ -197,7 +200,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if eligible:
             eligible.sort()
             _, dark, mate = eligible[0]
-            combos, thirds = _mk_combos(dark, mate)
+            combos, thirds = _mk_combos(dark, mate, U_LEG_MIN_ODDS)
             if combos:
                 u_pair = (dark, mate)
                 hit = top3 in combos
@@ -211,9 +214,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
                     "bet_amount": len(combos) * U_STAKE,
                 })
 
-        # ── S3(M): ◎不一致 × (gap12≥M_GAP12_MIN OR win_rank≥M_WIN_RANK_MIN OR ratio≤M_RATIO_MAX) ──
-        # 2026-07-19: win_rank（システム◎の1着モデル内順位）ゲートをOR統合
+        # ── S3(M): ◎不一致 × win_rank≥M_WIN_RANK_MIN（2026-07-21: win_rank単独へ厳選）──
+        # 2026-07-19: win_rank（システム◎の1着モデル内順位）ゲートをgap12とOR統合
         # 2026-07-19: ratio（システム◎のp_win/p_top3比・win_rankの連続量版）を第3項でOR統合
+        # 2026-07-21: honest全期間再構築でgap12/ratio単独が赤字と判明したため、
+        # win_rank単独ゲートへ縮小（m_axis_gate内部で判定・gap12/ratioは記録のみ）
         probs_m = [float(x) for x in g["pred_prob"].tolist()]
         gap12_m = probs_m[0] - probs_m[1]
         wt_tops = [fno for fno, (pm_v, _) in mk.items() if pm_v == 1]
@@ -257,7 +262,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         # S2優先の重複排除（同一ペア集合）
         if u_pair is not None and {m1, mate_m} == set(u_pair):
             continue
-        combos, thirds = _mk_combos(m1, mate_m)
+        combos, thirds = _mk_combos(m1, mate_m, M_LEG_MIN_ODDS)
         if not combos:
             continue
         hit = top3 in combos
