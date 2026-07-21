@@ -757,7 +757,7 @@ def _main_inner(date, _db_url):
                     p7uh += 1
                 history.append((target_date, f"{rk}#7U", "7PLUS_U", u_pred, len(u_combos),
                                 int(u_hit), u_pay, u_trio_pay, u_trifecta_pay, u_bet, False, None,
-                                *gap_map.get(rk, (None, None, None))))
+                                *gap_map.get(rk, (None, None, None)), None))
                 continue
 
             if _slot == "7plus_m":
@@ -811,7 +811,7 @@ def _main_inner(date, _db_url):
                     p7mh += 1
                 history.append((target_date, f"{rk}#7M", "7PLUS_M", m_pred, len(m_combos),
                                 int(m_hit), m_pay, m_trio_pay, m_trifecta_pay, m_bet, False, None,
-                                *gap_map.get(rk, (None, None, None))))
+                                *gap_map.get(rk, (None, None, None)), None))
                 continue
 
             if _slot == "seven_s1":
@@ -860,7 +860,7 @@ def _main_inner(date, _db_url):
                     p7s1h += 1
                 history.append((target_date, f"{rk}#7S1", "SEVEN_S1", s1_pred, len(s1_combos),
                                 int(s1_hit), s1_pay, 0, s1_trifecta_pay, s1_bet, False, None,
-                                *gap_map.get(rk, (None, None, None))))
+                                *gap_map.get(rk, (None, None, None)), None))
                 continue
 
             if _slot == "seven_s4":
@@ -914,7 +914,7 @@ def _main_inner(date, _db_url):
                     p7s4h += 1
                 history.append((target_date, f"{rk}#7S4", "SEVEN_S4", s4_pred, len(s4_combos),
                                 int(s4_hit), s4_pay, s4_trio_pay, s4_trifecta_pay, s4_bet, False, None,
-                                *gap_map.get(rk, (None, None, None))))
+                                *gap_map.get(rk, (None, None, None)), dec_s4.get("gate_label")))
                 continue
 
             # 7plus_a / six_s1 スロットの採点は 2026-07-17 全廃（A・旧S1廃止）
@@ -1028,9 +1028,9 @@ def _main_inner(date, _db_url):
                 results_7plus_s.append(row_str)
             # prerace ガミ条件落ち → 見送り（bet/pay=0, miwokuri=True）として記録
             if is_gami_skip:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, trifecta_pay, 0, True, pg, *gap_map.get(rk, (None, None, None))))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), 0, trio_pay, trifecta_pay, 0, True, pg, *gap_map.get(rk, (None, None, None)), None))
             else:
-                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, trifecta_pay, bet, False, pg, *gap_map.get(rk, (None, None, None))))
+                history.append((target_date, store_key, rank, pred, n_combos, int(hit), pay, trio_pay, trifecta_pay, bet, False, pg, *gap_map.get(rk, (None, None, None)), None))
 
         if history:
             # 採点済みレースのベースキー単位で選択削除する。
@@ -1057,8 +1057,8 @@ def _main_inner(date, _db_url):
                     )
             conn.executemany(
                 "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,prerace_gami,gap12,gap34,gap23) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?,?,?,?)", history)
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,trifecta_payout,bet_amount,route,miwokuri,prerace_gami,gap12,gap34,gap23,gate_label) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?,?,?,?,?)", history)
 
         # S1/S2/S3/S4（ペーパー）は候補見送り集計に影響させない（#7S1/#7U/#7M/#7S4/#7A を購入扱いにしない）
         purchased_base_keys = {h[1].split("#")[0] for h in history
