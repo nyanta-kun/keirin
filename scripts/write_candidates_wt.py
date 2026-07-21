@@ -262,9 +262,12 @@ def _write_paper_candidates(target_date: str) -> None:
     発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
     miwokuri=True（オッズ見送り）に更新する。既存行（判定済み）は上書きしない。
     A（#7A）・旧S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
-    U（#7U）・M（#7M）は 2026-07-21 全廃により main.py が候補JSON自体を
-    生成しなくなったため、下記の読み込みは常に空リストとなり自然に無効化される
-    （コードは過去日再採点互換のため残置）。
+    U（#7U）・M（#7M）は 2026-07-21 全廃。main.py は候補JSON自体を生成しなくなったが、
+    全廃日当日は既存の古い候補JSON（コード修正前に生成済み）がまだ残っていたため
+    intraday_results_wt.sh 等からの再実行のたびに廃止済みランクの行が復活する事故が
+    発生した（write_candidates_wt.py は候補JSONの中身をそのまま信用してINSERT OR
+    REPLACEするため、ファイルさえ存在すれば何度でも復活してしまう）。再発防止のため
+    ファイルの有無に関わらずU/Mの読み込み自体をコードレベルで無効化する。
     """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
 
@@ -280,21 +283,7 @@ def _write_paper_candidates(target_date: str) -> None:
         return out
 
     rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder)
-    for c in _load((f"wave_picks_wt_{target_date}_u_candidates.json",
-                    f"wave_picks_wt_{target_date}_night_u_candidates.json")):
-        rk = c.get("race_key")
-        pairs = c.get("pairs") or []
-        if not rk or not pairs:
-            continue
-        pr = pairs[0]
-        rows.append((f"{rk}#7U", "7PLUS_U", f"{pr.get('dark')}={pr.get('mate')}流し"))
-    for c in _load((f"wave_picks_wt_{target_date}_m_candidates.json",
-                    f"wave_picks_wt_{target_date}_night_m_candidates.json")):
-        rk = c.get("race_key")
-        pair = c.get("pair") or {}
-        if not rk or not pair:
-            continue
-        rows.append((f"{rk}#7M", "7PLUS_M", f"{pair.get('m1')}={pair.get('mate')}流し"))
+    # U(#7U)/M(#7M) は 2026-07-21 全廃のため読み込み自体を行わない（上記docstring参照）。
     for c in _load((f"wave_picks_wt_{target_date}_s1_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s1_candidates.json")):
         rk = c.get("race_key")
