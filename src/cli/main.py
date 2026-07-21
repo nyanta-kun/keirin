@@ -1734,10 +1734,14 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
     #         strategy_wt.s4_select_axis() で選定
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-    # 選出 = strategy_wt.s4_daily_select()（2026-07-21 WT◎◯重なり考慮版・日次選出）
+    # 一次選出 = strategy_wt.s4_daily_select()（WT◎◯重なり考慮版・バッチ単位選出）
     #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
     #   重なり0(全く重ならない)は無条件で全件採用、重なり1(片方一致)は
-    #   axis_sum昇順で固定S4_DAILY_TOP_N件、重なり2(完全一致)は除外する。
+    #   axis_sum昇順で上位S4_HALF_CAP件、重なり2(完全一致)は除外する。
+    # 最終選出 = 2026-07-22〜: 朝夕それぞれで上記の一次選出を行った後、夕方バッチで
+    #   scripts/s4_evening_reselect.py が朝夜の生候補を統合し、既に買い判定済みの
+    #   レースは維持したまま日次合計S4_DAILY_TOP_N件へ組み直す（朝の先着で
+    #   夜の優良候補を取りこぼす問題への対処）。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
         # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
@@ -1793,22 +1797,18 @@ def wave_picks_wt(target_date, output_path, model_name,
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
 
-        # 日次選出: 重なり0は全件・重なり1はaxis_sum昇順でS4_DAILY_TOP_N件・重なり2/不明は除外
-        # 夜の部(_night)は朝の部と別プロセスで独立に選出するため、暦日あたりの
-        # 上限を維持するには朝ファイルの選出済み件数を差し引く必要がある
-        # （2026-07-21発見: 独立に選出すると1日で最大20件になるバグがあった）。
-        already_selected_tier1 = 0
+        # 2026-07-22再設計: 朝夕それぞれの生候補プールから一次選出（重なり0は全件・
+        # 重なり1はaxis_sum昇順でS4_HALF_CAP件）。夕方バッチ実行後、
+        # scripts/s4_evening_reselect.py が朝夜の生候補を統合して日次S4_DAILY_TOP_N件へ
+        # 組み直す（先着順による取りこぼしを解消するため、生候補も別途保存する）。
         is_night = out_stem.endswith("_night")
-        if is_night:
-            day_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_s4_candidates.json"
-            if day_path.exists():
-                try:
-                    day_cands = json.loads(day_path.read_text(encoding="utf-8"))
-                    already_selected_tier1 = sum(
-                        1 for c in day_cands if c.get("wt_overlap_n") == 1)
-                except Exception:
-                    already_selected_tier1 = 0
-        s4_candidates = s4_daily_select(s4_raw_candidates, already_selected_tier1)
+        s4_raw_path = Path(output_path).parent / (
+            f"wave_picks_wt_{target_date}_night_s4_raw_candidates.json" if is_night
+            else f"wave_picks_wt_{target_date}_s4_raw_candidates.json")
+        with open(s4_raw_path, "w", encoding="utf-8") as f:
+            json.dump(s4_raw_candidates, f, ensure_ascii=False, indent=2)
+
+        s4_candidates = s4_daily_select(s4_raw_candidates)
         s4_candidates.sort(key=lambda c: c["axis_sum"])
 
         s4_suffix = "_night_s4_candidates.json" if is_night else "_s4_candidates.json"

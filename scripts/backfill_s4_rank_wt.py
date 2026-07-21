@@ -39,7 +39,7 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import S4_STAKE, s4_daily_select, s4_select_axis, s4_wt_overlap_n
+from src.strategy_wt import S4_DAILY_TOP_N, S4_STAKE, s4_daily_select, s4_select_axis, s4_wt_overlap_n
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
@@ -154,7 +154,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
     rows: list[dict] = []
     for d, day_cands in by_day.items():
-        for c_ in s4_daily_select(day_cands):
+        # 2026-07-22〜: 本番は朝夕別プロセス+夕方統合トリム(scripts/s4_evening_reselect.py)
+        # だが、バックフィルは1日分のデータを最初から統合済みのため、その理論上限
+        # （honest全期間検証でROI120.8%の本番実装とほぼ同等・120.6%）を直接再現する
+        # cap=S4_DAILY_TOP_N（=10）を明示指定する（s4_daily_select の既定値は
+        # 朝夕バッチ用のS4_HALF_CAP=6に変更されているため）。
+        for c_ in s4_daily_select(day_cands, cap=S4_DAILY_TOP_N):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
             combos = []

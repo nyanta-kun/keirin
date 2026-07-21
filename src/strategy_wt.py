@@ -269,9 +269,10 @@ def s1w_gate(top3_gap: float, axis_win_prob: float | None = None) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════
 
 S4_NE = 7                  # 対象車数（7車ちょうど）
-S4_DAILY_TOP_N = 10        # 重なり1（片方一致）候補の1日あたり固定採用件数（axis_sum昇順）
+S4_DAILY_TOP_N = 10        # 重なり1（片方一致）候補の1日あたり最終固定採用件数（axis_sum昇順）
                            # 2026-07-21: 「N件」の意味が変更された（旧: 全候補中の上位N件 →
                            # 新: 重なり0は別枠で全件採用・本値は重なり1のみに適用する固定枠）
+S4_HALF_CAP = 6            # 朝/夜それぞれの生候補プールからの一次選出上限（重なり1のみ・2026-07-22新設）
 S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 
 
@@ -323,35 +324,71 @@ def s4_wt_overlap_n(
     return len({axis1, axis2} & {wt_honmei, wt_taikou})
 
 
-def s4_daily_select(day_candidates: list[dict], already_selected_tier1: int = 0) -> list[dict]:
-    """S4の日次選出（2026-07-21 WT◎◯重なり考慮版）。
+def s4_daily_select(candidates: list[dict], cap: int = S4_HALF_CAP) -> list[dict]:
+    """S4の一次選出（朝または夜、片方のバッチ内での選出・2026-07-22改定）。
 
-    day_candidates: 同一日の候補レースのリスト。各要素は最低限
-      {"axis_sum": float, "wt_overlap_n": int | None} を持つ dict（追加キーは自由）。
+    candidates: 同一バッチ（朝races または 夜races）の候補レースのリスト。
+      各要素は最低限 {"axis_sum": float, "wt_overlap_n": int | None} を持つ dict。
 
-    選出ロジック（ユーザー指示・2026-07-21）:
+    選出ロジック:
       - wt_overlap_n == 0（◎◯と全く重ならない）: 該当があれば無条件で全件採用
         （的中率は変わらずROIを押し上げる区分のため最優先・本数上限なし）
-      - wt_overlap_n == 1（片方だけ重なる）: axis_sum昇順で S4_DAILY_TOP_N 件を採用
-        （重なり0の件数に関わらず常に固定 S4_DAILY_TOP_N 件）
+      - wt_overlap_n == 1（片方だけ重なる）: axis_sum昇順で上位 cap 件を採用
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
 
-    already_selected_tier1: 同一暦日で本関数がこれより前に選出済みの重なり1件数
-      （夜の部生成が朝の部と別プロセスで走るため、日次上限 S4_DAILY_TOP_N を
-      「実行あたり」ではなく「暦日あたり」で維持するために必要。2026-07-21発見:
-      day/night 2回の生成が独立にTOP_N件ずつ選ぶと1日で最大20件になるバグが
-      あった。夜の部呼び出し側で当日の朝ファイル選出済み件数を渡すこと）。
+    2026-07-21〜07-22の変遷: 当初は日次上限をそのままバッチ単位に適用していたが、
+    朝夕2回が独立にTOP_N件ずつ選ぶと1日で最大20件になるバグを発見（07-21）。
+    「朝が先着で枠を使い切り、夜の優良候補を取りこぼす」というユーザー指摘を受け、
+    朝夕それぞれの一次選出をS4_HALF_CAP(=6)件に縮小し、夕方バッチで
+    s4_evening_reselect() により朝夜合算のaxis_sumランキングへ組み直す方式へ
+    07-22に再設計した（honest全期間バックテストでROI120.8%・理論上限120.6%と
+    ほぼ同等・選出一致率89.5%を確認）。
+
+    cap: 重なり1の一次選出上限。朝夕バッチでは既定のS4_HALF_CAP(6)を使う。
 
     returns 採用された候補のリスト（重なり0が前・重なり1がaxis_sum昇順で続く）。
-    1日あたりの採用本数は可変（重なり0の発生数 + 最大 S4_DAILY_TOP_N 件）。
     """
-    remaining = max(0, S4_DAILY_TOP_N - already_selected_tier1)
-    tier0 = [c for c in day_candidates if c.get("wt_overlap_n") == 0]
+    tier0 = [c for c in candidates if c.get("wt_overlap_n") == 0]
     tier1 = sorted(
-        (c for c in day_candidates if c.get("wt_overlap_n") == 1),
+        (c for c in candidates if c.get("wt_overlap_n") == 1),
         key=lambda c: c["axis_sum"])
-    return tier0 + tier1[:remaining]
+    return tier0 + tier1[:cap]
+
+
+def s4_evening_reselect(
+    day_raw: list[dict], night_raw: list[dict], locked_keys: set[str],
+) -> list[dict]:
+    """S4の夕方最終選出（朝夜統合→ロック考慮で日次S4_DAILY_TOP_N件へトリム・2026-07-22新設）。
+
+    day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s4_select_axis+
+      s4_wt_overlap_n を通した dict のリスト。各要素に "race_key" キーが必要）。
+    locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
+      race_key の集合。この夕方の組み直しでは変更しない（実購入は取り消せないため）。
+
+    手順:
+      1. 朝夜それぞれの生候補（重なり1のみ）から s4_daily_select() でS4_HALF_CAP件ずつ
+         一次選出し、最大12件の統合プールを作る（重なり0は別枠で無条件採用のまま）。
+      2. 統合プールのうちロック済み（既に買い判定済み）のものは無条件で残す。
+      3. 残り（未判定）はaxis_sum昇順で、日次合計が S4_DAILY_TOP_N 件に収まる範囲だけ
+         採用し、それ以外は候補から外す（次点繰り上げなし＝質で足切り）。
+
+    returns 最終採用候補のリスト（重なり0全件 + 重なり1の最終選出）。
+    """
+    day_sel = s4_daily_select(day_raw, cap=S4_HALF_CAP)
+    night_sel = s4_daily_select(night_raw, cap=S4_HALF_CAP)
+
+    tier0 = [c for c in day_sel + night_sel if c.get("wt_overlap_n") == 0]
+    tier1_union = [c for c in day_sel + night_sel if c.get("wt_overlap_n") == 1]
+
+    locked = [c for c in tier1_union if c.get("race_key") in locked_keys]
+    unlocked = sorted(
+        (c for c in tier1_union if c.get("race_key") not in locked_keys),
+        key=lambda c: c["axis_sum"])
+    remaining_budget = max(0, S4_DAILY_TOP_N - len(locked))
+    tier1_final = locked + unlocked[:remaining_budget]
+
+    return tier0 + tier1_final
 
 
 # ═══════════════════════════════════════════════════════════════════════════
