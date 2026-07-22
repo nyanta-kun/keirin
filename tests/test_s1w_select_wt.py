@@ -3,7 +3,7 @@
 2026-07-19 導入: win model(1着専用モデル)のレース内1位を軸に固定し、
 3着内モデルで軸を除いた上位2頭を相手に選ぶ。
 """
-from src.strategy_wt import S1W_TOP3_GAP_MIN, s1w_gate, s1w_select
+from src.strategy_wt import S1W_AXIS_WIN_PROB_MAX, S1W_TOP3_GAP_MIN, s1w_gate, s1w_select
 
 
 def test_select_axis_is_win_model_top1():
@@ -46,3 +46,23 @@ def test_gate_fails_below_threshold():
 
 def test_gate_passes_above_threshold():
     assert s1w_gate(0.30) is True
+
+
+def test_gate_denies_axis_class_s1():
+    assert s1w_gate(0.30, None, "S1") is False
+
+
+def test_gate_denies_axis_class_a1():
+    assert s1w_gate(0.30, None, "A1") is False
+
+
+def test_gate_passes_axis_class_a2():
+    assert s1w_gate(0.30, None, "A2") is True
+
+
+def test_gate_axis_class_none_skips_check():
+    assert s1w_gate(0.30, None, None) is True
+
+
+def test_gate_denies_axis_class_even_when_win_prob_passes():
+    assert s1w_gate(0.30, S1W_AXIS_WIN_PROB_MAX, "S1") is False

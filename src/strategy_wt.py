@@ -185,6 +185,7 @@ S1_STAKE = 100             # 円/点（ペーパー）
 S1W_NE = 7                  # 対象車数（7車ちょうど）
 S1W_TOP3_GAP_MIN = 0.15     # 相手2車(p1,p2)の3着内モデル確率差 下限（2026-07-21再変更）
 S1W_AXIS_WIN_PROB_MAX = 0.50  # 軸の単勝勝率 上限（本命決着＝低配当レースを除外・2026-07-21新設）
+S1W_DENY_AXIS_CLASS = {"S1", "A1"}  # 軸級班denyフィルター（2026-07-22新設）
 S1W_STAKE = 100              # 円/点（ペーパー）
 
 
@@ -210,17 +211,28 @@ def s1w_select(
     return axis, p1, p2, top3_gap
 
 
-def s1w_gate(top3_gap: float, axis_win_prob: float | None = None) -> bool:
+def s1w_gate(
+    top3_gap: float, axis_win_prob: float | None = None,
+    axis_player_class: str | None = None,
+) -> bool:
     """S1(新設計)のゲート判定。
 
     - top3_gap（相手2車の3着内モデル確信度）>= S1W_TOP3_GAP_MIN
     - axis_win_prob（軸の単勝勝率）が渡された場合は <= S1W_AXIS_WIN_PROB_MAX も要求
       （本命決着＝低配当レースを除外し、高配当の取りこぼしを防ぐ・2026-07-21新設）。
       axis_win_prob=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
+    - axis_player_class（軸選手の級班）が渡された場合は S1W_DENY_AXIS_CLASS
+      （各グレード内の最上位クラス=S1/A1）を除外する（2026-07-22新設）。
+      軸がそのグレードの「格上」認定選手だと配当が低くなりやすい傾向を確認した
+      （honest全期間: 的中率は変化なし・ROI 138.5%→173.5%・5万円以上配当の
+      再現率85.7%を維持しつつ母数を約半分に絞る）。
+      axis_player_class=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
     """
     if top3_gap < S1W_TOP3_GAP_MIN:
         return False
     if axis_win_prob is not None and axis_win_prob > S1W_AXIS_WIN_PROB_MAX:
+        return False
+    if axis_player_class is not None and axis_player_class in S1W_DENY_AXIS_CLASS:
         return False
     return True
 

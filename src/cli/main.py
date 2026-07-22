@@ -1710,7 +1710,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     continue
                 axis, p1, p2, top3_gap = sel
                 axis_win_prob = win_probs[axis]
-                if not s1w_gate(top3_gap, axis_win_prob):
+                _axis_rows = grp_sorted.loc[grp_sorted["frame_no"] == axis, "player_class"]
+                axis_player_class = _axis_rows.iloc[0] if not _axis_rows.empty else None
+                if not s1w_gate(top3_gap, axis_win_prob, axis_player_class):
                     continue
                 s1_candidates.append({
                     "race_key":   race_key,

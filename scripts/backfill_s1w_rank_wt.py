@@ -114,11 +114,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
+        class_map = {int(r.frame_no): r.player_class for r in g.itertuples(index=False)}
         sel = s1w_select(win_probs, top3_probs)
         if sel is None:
             continue
         axis, p1, p2, top3_gap = sel
-        if not s1w_gate(top3_gap, win_probs[axis]):
+        if not s1w_gate(top3_gap, win_probs[axis], class_map.get(axis)):
             continue
         if axis not in board or p1 not in board or p2 not in board:
             continue
