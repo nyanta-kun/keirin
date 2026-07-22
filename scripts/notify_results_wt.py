@@ -698,6 +698,9 @@ def _main_inner(date, _db_url):
     p7mb = p7mr = p7mh = 0    # 7+車 S3=M（ペーパー・名目値。ヘッダー合計には不算入）
     p7s1b = p7s1r = p7s1h = 0  # 7+車 S1=win軸（ペーパー・名目値。ヘッダー合計には不算入）
     p7s4b = p7s4r = p7s4h = 0  # 7+車 S4=波乱度選出（ペーパー・名目値。ヘッダー合計には不算入）
+    # 2026-07-22: S4は表示ランクSS/Sに分離済み（gate_label）なので結果通知も内訳を分ける
+    p7s4ssn = p7s4ssb = p7s4ssr = p7s4ssh = 0  # S4のうちgate_label="SS"（軸2車がWT◎◯と全く重ならない）
+    p7s4sn = p7s4sb = p7s4sr = p7s4sh = 0      # S4のうちgate_label="S"（片方だけ重なる）
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -924,13 +927,26 @@ def _main_inner(date, _db_url):
                         pass
                 if is_buy:
                     s4_mark = f"◎ ¥{s4_pay:,}" if s4_hit else "×"
+                    s4_gate_label = dec_s4.get("gate_label") or "S4"
                     results_7plus_s4.append(
-                        f"[S4] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
+                        f"[{s4_gate_label}] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
                         f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}（ペーパー）")
                     p7s4b += s4_bet
+                    if s4_gate_label == "SS":
+                        p7s4ssn += 1
+                        p7s4ssb += s4_bet
+                    elif s4_gate_label == "S":
+                        p7s4sn += 1
+                        p7s4sb += s4_bet
                     if s4_hit:
                         p7s4r += s4_pay
                         p7s4h += 1
+                        if s4_gate_label == "SS":
+                            p7s4ssr += s4_pay
+                            p7s4ssh += 1
+                        elif s4_gate_label == "S":
+                            p7s4sr += s4_pay
+                            p7s4sh += 1
                 history.append((target_date, f"{rk}#7S4", "SEVEN_S4", s4_pred, s4_n_combos,
                                 int(s4_hit), s4_pay, s4_trio_pay, s4_trifecta_pay, s4_bet,
                                 not is_buy, None,
@@ -1162,8 +1178,9 @@ def _main_inner(date, _db_url):
     s1_line = _rank_line("S1(win軸固定・検証/ペーパー)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
     u_line  = _rank_line("S2(波乱・検証/ペーパー)", len(results_7plus_u), p7ub, p7ur, p7uh)
     m_line  = _rank_line("S3(不一致×軸信頼・検証/ペーパー)", len(results_7plus_m), p7mb, p7mr, p7mh)
-    s4_line = _rank_line("S4(波乱度選出・検証/ペーパー)", len(results_7plus_s4), p7s4b, p7s4r, p7s4h)
-    for _l in (s1_line, u_line, m_line, s4_line, r_line, ss_line, s_line):
+    s4ss_line = _rank_line("SS(波乱度選出・検証/ペーパー)", p7s4ssn, p7s4ssb, p7s4ssr, p7s4ssh)
+    s4s_line = _rank_line("S(波乱度選出・検証/ペーパー)", p7s4sn, p7s4sb, p7s4sr, p7s4sh)
+    for _l in (s1_line, u_line, m_line, s4ss_line, s4s_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1185,7 +1202,8 @@ def _main_inner(date, _db_url):
           f"S1(ペーパー) {len(results_7plus_s1)}R 的中{p7s1h} / "
           f"S2(ペーパー) {len(results_7plus_u)}R 的中{p7uh} / "
           f"S3(ペーパー) {len(results_7plus_m)}R 的中{p7mh} / "
-          f"S4(ペーパー) {len(results_7plus_s4)}R 的中{p7s4h} / "
+          f"S4-SS(ペーパー) {p7s4ssn}R 的中{p7s4ssh} / "
+          f"S4-S(ペーパー) {p7s4sn}R 的中{p7s4sh} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
 
     _sync_vps(_db_url, target_date)
