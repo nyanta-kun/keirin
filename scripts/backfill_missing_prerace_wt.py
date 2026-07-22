@@ -65,13 +65,18 @@ def _pick_counts(rank: str, date_from: str, date_to: str) -> dict[str, int]:
         return dict(rows)
 
 
-def _insert_additive(rows: list[dict], is_m: bool) -> int:
-    """race_key が未存在の場合のみ INSERT する（既存行は一切変更しない）。"""
+def _insert_additive(rows: list[dict]) -> int:
+    """race_key が未存在の場合のみ INSERT する（既存行は一切変更しない）。
+
+    gate_label は S4(SEVEN_S4)行のみ有効（SS/S表示ランクの分岐に必須）。
+    win_rank/ratio は全廃済みS3(旧M)専用の列でこのスクリプトの対象外（常にNone）。
+    """
     if not rows:
         return 0
     with get_connection() as c:
         inserted = 0
         for r in rows:
+            is_s4 = r["rank"] == "SEVEN_S4"
             cur = c.execute(
                 "INSERT OR IGNORE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
@@ -88,9 +93,9 @@ def _insert_additive(rows: list[dict], is_m: bool) -> int:
                     "trifecta_payout": r.get("trifecta_payout", 0) or 0,
                     "bet_amount": r["bet_amount"], "miwokuri": False,
                     "gap12": r.get("gap12"), "gap23": r.get("gap23"), "gap34": r.get("gap34"),
-                    "gate_label": r.get("gate_label") if is_m else None,
-                    "win_rank": r.get("win_rank") if is_m else None,
-                    "ratio": r.get("ratio") if is_m else None,
+                    "gate_label": r.get("gate_label") if is_s4 else None,
+                    "win_rank": None,
+                    "ratio": None,
                 })
             inserted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         c.commit()
@@ -132,7 +137,7 @@ def main() -> None:
 
     for d in gap_dates_s1:
         rows = build_rows_s1(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
-        n = 0 if args.dry_run else _insert_additive(rows, is_m=False)
+        n = 0 if args.dry_run else _insert_additive(rows)
         if args.dry_run:
             n = len(rows)
         total_new_s1 += n
@@ -143,7 +148,7 @@ def main() -> None:
 
     for d in gap_dates_s4:
         rows = build_rows_s4(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
-        n = 0 if args.dry_run else _insert_additive(rows, is_m=False)
+        n = 0 if args.dry_run else _insert_additive(rows)
         if args.dry_run:
             n = len(rows)
         total_new_s4 += n
