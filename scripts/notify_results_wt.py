@@ -699,6 +699,7 @@ def _main_inner(date, _db_url):
     p7s1b = p7s1r = p7s1h = 0  # 7+車 S1=win軸（ペーパー・名目値。ヘッダー合計には不算入）
     p7s4b = p7s4r = p7s4h = 0  # 7+車 S4=波乱度選出（ペーパー・名目値。ヘッダー合計には不算入）
     # 2026-07-22: S4は表示ランクSS/Sに分離済み（gate_label）なので結果通知も内訳を分ける
+    p7s4sspn = p7s4sspb = p7s4sspr = p7s4ssph = 0  # S4のうちgate_label="SS+"（重ならない・軸に格上クラスなし）
     p7s4ssn = p7s4ssb = p7s4ssr = p7s4ssh = 0  # S4のうちgate_label="SS"（軸2車がWT◎◯と全く重ならない）
     p7s4sn = p7s4sb = p7s4sr = p7s4sh = 0      # S4のうちgate_label="S"（片方だけ重なる）
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
@@ -932,7 +933,10 @@ def _main_inner(date, _db_url):
                         f"[{s4_gate_label}] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
                         f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}（ペーパー）")
                     p7s4b += s4_bet
-                    if s4_gate_label == "SS":
+                    if s4_gate_label == "SS+":
+                        p7s4sspn += 1
+                        p7s4sspb += s4_bet
+                    elif s4_gate_label == "SS":
                         p7s4ssn += 1
                         p7s4ssb += s4_bet
                     elif s4_gate_label == "S":
@@ -941,7 +945,10 @@ def _main_inner(date, _db_url):
                     if s4_hit:
                         p7s4r += s4_pay
                         p7s4h += 1
-                        if s4_gate_label == "SS":
+                        if s4_gate_label == "SS+":
+                            p7s4sspr += s4_pay
+                            p7s4ssph += 1
+                        elif s4_gate_label == "SS":
                             p7s4ssr += s4_pay
                             p7s4ssh += 1
                         elif s4_gate_label == "S":
@@ -1178,9 +1185,10 @@ def _main_inner(date, _db_url):
     s1_line = _rank_line("S1(win軸固定・検証/ペーパー)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
     u_line  = _rank_line("S2(波乱・検証/ペーパー)", len(results_7plus_u), p7ub, p7ur, p7uh)
     m_line  = _rank_line("S3(不一致×軸信頼・検証/ペーパー)", len(results_7plus_m), p7mb, p7mr, p7mh)
+    s4ssp_line = _rank_line("SS+(波乱度選出・軸格上なし・検証/ペーパー)", p7s4sspn, p7s4sspb, p7s4sspr, p7s4ssph)
     s4ss_line = _rank_line("SS(波乱度選出・検証/ペーパー)", p7s4ssn, p7s4ssb, p7s4ssr, p7s4ssh)
     s4s_line = _rank_line("S(波乱度選出・検証/ペーパー)", p7s4sn, p7s4sb, p7s4sr, p7s4sh)
-    for _l in (s1_line, u_line, m_line, s4ss_line, s4s_line, r_line, ss_line, s_line):
+    for _l in (s1_line, u_line, m_line, s4ssp_line, s4ss_line, s4s_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1202,6 +1210,7 @@ def _main_inner(date, _db_url):
           f"S1(ペーパー) {len(results_7plus_s1)}R 的中{p7s1h} / "
           f"S2(ペーパー) {len(results_7plus_u)}R 的中{p7uh} / "
           f"S3(ペーパー) {len(results_7plus_m)}R 的中{p7mh} / "
+          f"S4-SS+(ペーパー) {p7s4sspn}R 的中{p7s4ssph} / "
           f"S4-SS(ペーパー) {p7s4ssn}R 的中{p7s4ssh} / "
           f"S4-S(ペーパー) {p7s4sn}R 的中{p7s4sh} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")

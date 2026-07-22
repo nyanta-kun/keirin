@@ -41,7 +41,7 @@ from src.strategy_wt import (
     M_GAP12_MIN, M_LEG_MIN_ODDS, M_RATIO_MAX, M_STAKE, M_WIN_RANK_MIN, S1W_STAKE,
     S1W_TOP3_GAP_MIN, S4_STAKE, SS_STAKE,
     U_ENTROPY_MIN, U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE,
-    line_score_features, ss_policy,
+    line_score_features, s4_gate_label, ss_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -1230,9 +1230,12 @@ def _insert_s4_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
 def _build_s4_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
     """S4（波乱度選出・ペーパー）の15分前 Discord 通知メッセージ。
 
-    gate_label: "SS"（軸2車がWT◎◯と全く重ならない）/ "S"（片方だけ重なる）。
-    2026-07-21〜、軸2車とWT◎◯の重なりに応じてSS/Sの2段階でランク表示する
-    （honest全期間検証で重なりが増えるほどROIが悪化すると判明したため）。
+    gate_label: "SS+"（軸2車がWT◎◯と全く重ならない・かつ軸2車に各グレード
+    最上位クラス=S1/A1が含まれない）/ "SS"（重ならないが格上軸を含む）/
+    "S"（片方だけ重なる）。2026-07-21〜、軸2車とWT◎◯の重なりに応じてSS/Sの
+    2段階でランク表示する（honest全期間検証で重なりが増えるほどROIが悪化す
+    ると判明したため）。2026-07-23〜、SSはさらに軸級班で分岐しSS+を観察用
+    サブランクとして追加した（買い目・実際の購入対象は変更しない表示分岐）。
     """
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
@@ -1250,8 +1253,11 @@ def _build_s4_message(cand: dict, race_info: dict, detail: dict, gate_label: str
     axis_sum = cand.get("axis_sum")
     axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
     label = gate_label or "S4"
-    label_desc = {"SS": "WT◎◯と軸2車が全く重ならない", "S": "WT◎◯と軸2車が片方だけ重なる"}.get(
-        gate_label, "")
+    label_desc = {
+        "SS+": "WT◎◯と軸2車が全く重ならない・軸に格上クラスなし",
+        "SS": "WT◎◯と軸2車が全く重ならない",
+        "S": "WT◎◯と軸2車が片方だけ重なる",
+    }.get(gate_label, "")
     return (
         f"🎲 **[{label}・波乱度選出検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
@@ -1324,7 +1330,7 @@ def _process_s4_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             continue
 
         wt_overlap_n = cand.get("wt_overlap_n")
-        gate_label = {0: "SS", 1: "S"}.get(wt_overlap_n)
+        gate_label = s4_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
 
         # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
         _save_decision(today, s4_key, {

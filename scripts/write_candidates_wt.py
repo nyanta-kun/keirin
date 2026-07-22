@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
+from src.strategy_wt import s4_gate_label
 
 GAMI_THRESHOLD = 7.0  # レース単位ガミ閾値（min全目。main.py / notify_prerace_wt.py と揃える）
 
@@ -305,7 +306,7 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        gate_label = {0: "SS", 1: "S"}.get(c.get("wt_overlap_n"))
+        gate_label = s4_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
             continue  # 重なり2・不明は候補として表示しない（s4_daily_select と同じ除外対象）
         rows.append((f"{rk}#7S4", "SEVEN_S4", f"{axis1}={axis2}-候補", gate_label))

@@ -336,6 +336,39 @@ def s4_wt_overlap_n(
     return len({axis1, axis2} & {wt_honmei, wt_taikou})
 
 
+# S4のSS(重なり0)のうち、軸2車のいずれかが各グレード最上位クラス（S1/A1）だと
+# 配当が下がりやすい傾向を確認（2026-07-23・honest全期間検証）。SSは無制限採用
+# （日次cap無し）のため、S1と異なり「除外→繰り上がり」の副作用がなく単純に
+# 効く: train+val ROI222.3%→351.6%・全期間237.1%→362.2%（的中率は不変〜微増）。
+# 一方Sは日次axis_sum上位10件のcap付き選出のため、除外すると繰り上がり候補で
+# ROIが悪化する（train+val 116.3%→111.5%・test 132.6%→119.2%）ことを確認済み。
+# → SS内の格上非該当サブセットを新表示ランク"SS+"として観察する（実際の
+# 購入対象・買い目は変更しない。あくまで表示分岐）。
+S4_TOP_CLASS = {"S1", "A1"}
+
+
+def s4_gate_label(
+    wt_overlap_n: int | None,
+    axis1_class: str | None = None, axis2_class: str | None = None,
+) -> str | None:
+    """S4の表示ランク(gate_label)を返す。
+
+    - wt_overlap_n == 0: 軸2車の級班情報が両方揃っており、いずれもS4_TOP_CLASS
+      でなければ "SS+"（観察用サブランク）、そうでなければ "SS"。
+      級班情報が欠損している場合は従来通り "SS"（後方互換）。
+    - wt_overlap_n == 1: "S"
+    - それ以外（重なり2・None）: None（除外対象）
+    """
+    if wt_overlap_n == 0:
+        if axis1_class is not None and axis2_class is not None:
+            has_top = axis1_class in S4_TOP_CLASS or axis2_class in S4_TOP_CLASS
+            return "SS" if has_top else "SS+"
+        return "SS"
+    if wt_overlap_n == 1:
+        return "S"
+    return None
+
+
 def s4_daily_select(candidates: list[dict], cap: int = S4_HALF_CAP) -> list[dict]:
     """S4の一次選出（朝または夜、片方のバッチ内での選出・2026-07-22改定）。
 

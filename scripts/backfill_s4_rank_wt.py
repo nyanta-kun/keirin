@@ -39,7 +39,9 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import S4_DAILY_TOP_N, S4_STAKE, s4_daily_select, s4_select_axis, s4_wt_overlap_n
+from src.strategy_wt import (
+    S4_DAILY_TOP_N, S4_STAKE, s4_daily_select, s4_gate_label, s4_select_axis, s4_wt_overlap_n,
+)
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
@@ -121,6 +123,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
+        class_map = {int(r.frame_no): r.player_class for r in g.itertuples(index=False)}
         sel = s4_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
@@ -145,6 +148,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum,
             "others": others, "trio": trio, "actual_top3": actual_top3,
             "wt_overlap_n": wt_overlap_n,
+            "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
 
     # ── 日次選出: s4_daily_select()（2026-07-21〜 WT◎◯重なり考慮版） ──
@@ -174,7 +178,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
             pay = trio_pay * S4_STAKE // 100 if hit else 0
             bet = len(combos) * S4_STAKE
-            gate_label = {0: "SS", 1: "S"}.get(c_["wt_overlap_n"])
+            gate_label = s4_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
             rows.append({
                 "race_date": d,
                 "race_key": f"{rk}#7S4", "rank": "SEVEN_S4",

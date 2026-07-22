@@ -1787,6 +1787,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
                 wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
 
+                _class_map_s4 = {int(r.frame_no): r.player_class
+                                  for r in grp_sorted.itertuples(index=False)}
+
                 s4_raw_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
@@ -1795,6 +1798,8 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "axis1": axis1, "axis2": axis2,
                     "axis_sum": round(axis_sum, 4),
                     "wt_overlap_n": wt_overlap_n,
+                    "axis1_class": _class_map_s4.get(axis1),
+                    "axis2_class": _class_map_s4.get(axis2),
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
