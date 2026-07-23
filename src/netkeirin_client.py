@@ -1,15 +1,12 @@
 """netkeirin「ウマい車券」入稿ツール（tool.syakenv2.netkeiba.com/bettool/）への
 下書き自動入稿クライアント。
 
-仕様の根拠は docs/netkeirin-input-api-spec.md（2026-07-23実機検証で確定）。
+仕様の根拠は docs/netkeirin-input-api-spec.md（2026-07-23実機検証で確定。
+ログインURL/フィールド名・type/pointパラメータの正体は同日の追加検証
+（認証済みセッションで race.html / auth/login.html の実ソースを直接取得）で
+確定済み — 詳細はdocs参照）。
 「二軸探偵」方式（軸1=◎・軸2=○・残り全馬=△、三連複2軸ながし・各2,000円・5点）
 専用のシンプルなクライアントであり、汎用の全券種対応は意図していない。
-
-**重要な制約（2026-07-23時点）**: ログインフォームの実際のフィールド名
-（`LOGIN_ID_FIELD` / `PASSWORD_FIELD` / `LOGIN_URL`）は未検証。既存のログイン
-セッションが有効な間は動作するが、セッション切れ後の自動再ログインが
-成功するかは実機で一度確認する必要がある（本モジュールのdocstring末尾・
-`login()` のコメント参照）。
 """
 from __future__ import annotations
 
@@ -24,9 +21,8 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://tool.syakenv2.netkeiba.com/bettool"
 TOP_URL = f"{BASE_URL}/top/index.html"
-# 要検証: 実際のログインエンドポイント・フィールド名（下記 login() 参照）
-LOGIN_URL = f"{BASE_URL}/login/api_post_login.html"
-LOGIN_ID_FIELD = "login_id"
+LOGIN_URL = f"{BASE_URL}/auth/api_post_login.html"
+LOGIN_ID_FIELD = "user_id"
 PASSWORD_FIELD = "password"
 
 RACE_LIST_URL = f"{BASE_URL}/bet/race_list.html"
@@ -37,11 +33,22 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 SESSION_FILE = DATA_DIR / "netkeirin_session.json"
 VENUE_CACHE_FILE = DATA_DIR / "netkeirin_venue_codes.json"
 
-STAKE_PER_LINE = 2000  # 円/点（三連複2軸ながし・各2,000円）
-SHIKIBETU_TRIO = "8"   # 3連複
-HOUSHIKI_AXIS2_NAGASHI = "6"  # 軸2頭ながし
+STAKE_PER_LINE = 2000  # 円/点（三連複2軸ながし・各2,000円・5点=10,000円=上限ぴったり）
+SHIKIBETU_TRIO = "8"   # 3連複（bet_id内の b トークン）
+HOUSHIKI_AXIS2_NAGASHI = "6"  # 軸2頭ながし（bet_id内の c トークン）
+
+# race.html の実ソース確認済み（2026-07-23）: param.type = $('#act-type').val()
+# （勝負アイコン: 0=指定しない/1=自信あり/2=穴狙い）、param.point = $('#act-point').val()
+# （販売価格）。旧ドキュメントの「type=式別・point=ポイント数」という推測は誤りだった
+# ため訂正済み。式別/方式は kaime[].bet_id 文字列にのみ含まれる。
+ACT_TYPE_CONFIDENT = "1"
+ACT_TYPE_DEFAULT = "0"
 SALE_PRICE_DEFAULT = "300"
 CONFIDENT_GATE_LABELS = {"SS+", "SS"}  # 勝負アイコン「自信あり」対象
+
+# race.html の check_goods_data() 実装確認済み: comment/titleは必須（空文字だと
+# クライアント側バリデーションで弾かれる）。
+DEFAULT_COMMENT = "本日の二軸をお届けします。"
 
 
 def _env(key: str) -> str:
@@ -97,9 +104,20 @@ class NetkeirinClient:
         )
 
     def _is_logged_in(self) -> bool:
+        """認証状態を判定する。
+
+        未ログイン時は top/index.html への GET が auth/login.html へリダイレクト
+        される（2026-07-23確認）。単純に本文へ"ログアウト"の文字列有無で判定すると
+        ログイン画面自体にも同文字列が含まれておりfalse positiveになるため、
+        最終URLがログイン画面でないことも合わせて確認する。
+        """
         try:
             r = self.session.get(TOP_URL, timeout=10)
-            return r.status_code == 200 and "ログアウト" in r.text
+            if r.status_code != 200:
+                return False
+            if "auth/login.html" in r.url:
+                return False
+            return "ログアウト" in r.text
         except requests.RequestException as e:
             print(f"[netkeirin] ログイン状態確認失敗: {e}")
             return False
@@ -107,15 +125,11 @@ class NetkeirinClient:
     def login(self) -> bool:
         """既存セッションが有効ならそれを使う。無効ならログインを試みる。
 
-        要検証: LOGIN_URL / LOGIN_ID_FIELD / PASSWORD_FIELD は2026-07-23時点で
-        未確認（実機でパスワードをフォームへ入力する操作は自動化ポリシー上
-        代行できず、既存の有効セッションで検証を代替したため）。
-        本番投入前に一度、下記のようなコマンドで疎通確認すること:
-            .venv/bin/python3 -c \
-                "from src.netkeirin_client import NetkeirinClient; \
-                 print(NetkeirinClient().login())"
-        失敗する場合はレスポンス本文からフォームの実フィールド名を確認し、
-        本ファイル冒頭の定数を修正する。
+        2026-07-23、認証済みセッションで auth/login.html の実ソースを取得し
+        api_auth() の実装からログインPOSTの仕様を確定済み:
+            POST https://tool.syakenv2.netkeiba.com/bettool/auth/api_post_login.html
+            data: {output: 'json', action: 'login', user_id: <ID>, password: <PW>}
+            成功時レスポンス: {"status":"OK","user_id":"<内部ID>"}
         """
         if self._is_logged_in():
             return True
@@ -125,18 +139,24 @@ class NetkeirinClient:
             print("[netkeirin] NETKEIRIN_LOGIN_ID / NETKEIRIN_PASSWORD が未設定です")
             return False
         try:
-            self.session.post(
+            r = self.session.post(
                 LOGIN_URL,
-                data={LOGIN_ID_FIELD: login_id, PASSWORD_FIELD: password},
+                data={
+                    "output": "json",
+                    "action": "login",
+                    LOGIN_ID_FIELD: login_id,
+                    PASSWORD_FIELD: password,
+                },
                 timeout=10,
             )
-        except requests.RequestException as e:
+            ok = r.status_code == 200 and r.json().get("status") == "OK"
+        except (requests.RequestException, ValueError) as e:
             print(f"[netkeirin] ログインリクエスト失敗: {e}")
             return False
-        if self._is_logged_in():
+        if ok:
             self._save_cookies()
             return True
-        print("[netkeirin] ログイン失敗（フィールド名/URLの要検証事項を参照）")
+        print(f"[netkeirin] ログイン失敗: status={r.status_code} body={r.text[:200]}")
         return False
 
     # ── 場コード解決 ────────────────────────────────────────────────────
@@ -193,7 +213,7 @@ class NetkeirinClient:
     def submit_pick(
         self, *, race_date: date, venue_name: str, race_no: int,
         axis1: int, axis2: int, n_entries: int, gate_label: str,
-        title: str, comment: str,
+        title: str, comment: str = DEFAULT_COMMENT,
     ) -> tuple[bool, str]:
         """1レース分の下書き（action=add）を入稿する。
 
@@ -202,6 +222,8 @@ class NetkeirinClient:
         """
         if n_entries != 7:
             return False, f"対象外(n_entries={n_entries}、7車のみ対応)"
+        if not comment:
+            comment = DEFAULT_COMMENT
 
         if not self.login():
             return False, "ログイン失敗"
@@ -214,12 +236,14 @@ class NetkeirinClient:
         race_id = f"{race_date.strftime('%Y%m%d')}{venue_code}{race_no:02d}"
         bet_id = build_bet_id(race_date, venue_code, race_no, axis1, axis2, partners)
 
-        mark = {str(axis1): 1, str(axis2): 2}
+        # mark の値は race.html 実装上 DOM id (id="act-mark_{車番}_{code}") を
+        # split した文字列がそのままセットされる（数値ではなく文字列）。
+        mark = {str(axis1): "1", str(axis2): "2"}
         for p in partners:
-            mark[str(p)] = 4
+            mark[str(p)] = "4"
 
-        # 7車ちょうどの場合、車6・7は常に同一枠(枠番6)を共有する（keirin固有の固定ルール）。
-        # 要検証: waku_check の正確なJSON形状（未確定、初回ライブ実行時に確認）。
+        # 7車ちょうどの場合、車6・7は常に同一枠(枠番6)を共有する（keirin固有の固定ルール。
+        # 2026-07-23、佐世保1R(7車)の実ページソースで waku_check = [6] を直接確認済み）。
         waku_check = [6]
 
         payload = {
@@ -229,21 +253,23 @@ class NetkeirinClient:
             "mark": json.dumps(mark, ensure_ascii=False),
             "title": title,
             "comment": comment,
-            "type": SHIKIBETU_TRIO,
-            "point": str(len(partners)),
+            # race.html実ソース確認済み: type=勝負アイコン値・point=販売価格
+            # （式別/方式はkaime[].bet_idにのみ含まれる。旧仮実装の誤りを訂正済み）。
+            "type": ACT_TYPE_CONFIDENT if gate_label in CONFIDENT_GATE_LABELS else ACT_TYPE_DEFAULT,
+            "point": SALE_PRICE_DEFAULT,
             "waku_check": json.dumps(waku_check),
             "kaime": json.dumps(
                 [{"bet_id": bet_id, "bet_money": STAKE_PER_LINE}], ensure_ascii=False,
             ),
-            # 要検証: 実際のPOSTフィールド名（DOM上のid="act-type"/"act-point"から推定）。
-            "act_type": "1" if gate_label in CONFIDENT_GATE_LABELS else "0",
-            "act_point": SALE_PRICE_DEFAULT,
         }
 
         try:
             r = self.session.post(POST_GOODS_URL, data=payload, timeout=15)
             r.raise_for_status()
-        except requests.RequestException as e:
+            resp = r.json()
+        except (requests.RequestException, ValueError) as e:
             return False, f"入稿リクエスト失敗: {e}"
 
+        if resp.get("status") != "OK":
+            return False, f"入稿失敗: {resp}"
         return True, race_id
