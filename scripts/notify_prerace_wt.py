@@ -567,8 +567,7 @@ def _build_u_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"  **条件: entropy={ent_str}(≥{U_ENTROPY_MIN}) mto={mto_str}(≥{U_MTO_MIN})**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
-        + "\n".join(lines) + "\n"
-        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+        + "\n".join(lines)
     )
 
 
@@ -841,8 +840,7 @@ def _build_m_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"  [参考] gap12={g12_str} ratio={ratio_str}\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前・採用目のみ）:\n"
-        + "\n".join(lines) + "\n"
-        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+        + "\n".join(lines)
     )
 
 
@@ -1004,8 +1002,7 @@ def _build_s1_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"  **条件: top3_gap={tg_str}(≥{S1W_TOP3_GAP_MIN})**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
-        + "\n".join(lines) + "\n"
-        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+        + "\n".join(lines)
     )
 
 
@@ -1267,8 +1264,7 @@ def _build_s4_message(cand: dict, race_info: dict, detail: dict, gate_label: str
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
-        + "\n".join(lines) + "\n"
-        f"  ※ペーパートレード（賭金なし・検証記録のみ）"
+        + "\n".join(lines)
     )
 
 
