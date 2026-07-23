@@ -1655,19 +1655,14 @@ def wave_picks_wt(target_date, output_path, model_name,
             "combo_str":  combo_str,
             "riders":     riders_detail,
         })
-    from src.database import get_connection
-    _score_updates = [
-        (rider["pred_prob_pct"], item["race_key"], rider["frame_no"])
-        for item in all_index
-        for rider in item["riders"]
-    ]
-    if _score_updates:
-        with get_connection() as _conn:
-            _conn.executemany(
-                "UPDATE wt_entries SET race_point = ? WHERE race_key = ? AND frame_no = ?",
-                _score_updates,
-            )
-            _conn.commit()
+    # 【2026-07-23廃止】以前はここで wt_entries.race_point を pred_prob_pct(AI予測確率)
+    # で上書きしていた(2026-06-18導入・kiseki 指数表示用)。race_point は
+    # feature_wt.py の score_z/score_rank/score_mean（実モデル特徴量・学習にも使用）
+    # の入力でもあり、この上書きにより「モデル自身の過去の予測」を特徴量として
+    # 再学習し続ける自己参照的な汚染が発生していた(2026-06-21以降の週次再学習で
+    # 複利的に悪化・[[keirin_race_point_feature_leak_2026_07_23]]参照)。
+    # 2026-07-19導入の pred_top3_pct（複勝指数用の専用カラム）が同じ表示目的を
+    # 汚染なしで既に満たしているため、この上書き自体が不要になっていた。
 
     all_index.sort(key=lambda x: (x["start_time"] == "--:--", x["start_time"], x["venue_name"], x["race_no"]))
     allindex_path = Path(output_path).parent / f"wave_picks_wt_{target_date}_allindex.json"
