@@ -124,7 +124,12 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     df["second_rate_norm"] = df["second_rate"].fillna(0.0) / 100.0
     df["third_rate_norm"]  = df["third_rate"].fillna(0.0) / 100.0
 
-    # 得点補完
+    # 得点補完（2026-07-24修正: race_point=0.0はデビュー戦等の未点数選手を表す実値
+    # であり欠損ではないが、そのまま使うとレース内平均・標準偏差(score_mean/score_std)
+    # を引き下げ他選手のscore_zまで歪める。0.0もNaN同様に欠損扱いし中央値で補完する
+    # （全車0.0＝ガールズ/新人戦は中央値算出の対象自体がNaNになりグローバル中央値で
+    # 一律補完されるため、レース単位で見ても不自然にならない）。
+    df["race_point"] = df["race_point"].replace(0.0, np.nan)
     med_rp = df["race_point"].median()
     df["race_point"] = df["race_point"].fillna(med_rp if not pd.isna(med_rp) else 50.0)
 
