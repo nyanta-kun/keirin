@@ -91,7 +91,8 @@ S4(SEVEN_S4)は今後の予想データのベースと位置づけ、軸2車がW
   **【2026-07-22・朝夕統合再選出への再設計】** 上記の「重なり1は固定`S4_DAILY_TOP_N`件」は、朝(`daily_picks_wt.sh`)と夕(`evening_picks_wt.sh`)が別プロセスで独立にこの上限を適用していたため、1日最大20件になるバグと化していた（発覚の経緯は`keirin_s4_gate_label_bug_and_candidate_visibility_2026_07_22`）。さらにhonest全期間検証で「朝の部(19時未満発走)だけでS候補が10件に達する日が57.2%」と判明し、朝が先着で夜の優良候補を取りこぼす構造的懸念が確認された。**`S4_HALF_CAP`=6を新設し、朝夕それぞれの一次選出を6件に縮小**。夕方バッチの最後に`scripts/s4_evening_reselect.py`を実行し、朝夜の生候補（`_s4_raw_candidates.json`/`_night_s4_raw_candidates.json`に新たに永続化）を統合してaxis_sumランキングを組み直す（`strategy_wt.s4_evening_reselect()`）。ただし既に買い判定済み（`bet_amount>0`）のレースは実購入を取り消せないため維持し、未判定分だけ日次合計`S4_DAILY_TOP_N`(10)件へトリムする。honest全期間バックテスト: 現行(朝夕別選出)ROI117.7%(理論上限との選出一致率76.5%) → **新設計ROI120.8%(理論上限120.6%とほぼ同等・一致率89.5%)**。過去分再構築(`scripts/backfill_s4_rank_wt.py`)は1日分データを最初から統合済みのため影響を受けない（`cap=S4_DAILY_TOP_N`を明示指定して従来通りの理論上限相当を再現）。詳細: `keirin_s4_evening_reselect_2026_07_22`
   **【関連: 「非」バッジ再発バグ】** `notify_results_wt.py`の毎時採点処理がpicks_history行をDELETE+`INSERT OR REPLACE`で再作成する際、列リストに`gate_label`が含まれておらず、対象レースが再採点されるたびにgate_labelがNULLに巻き戻り「非」表示になるバグがあった（2026-07-21発見・修正済み）。picks_historyに新規列を追加する際は、この`INSERT OR REPLACE`列リスト（S1/S4/旧U/M共通）に必ず追加すること。あわせてS4は候補時点（買い判定成立前）から`write_candidates_wt.py`がプレースホルダ行を書き込むようになり、Webで候補になった時点からS/SSバッジが表示される（見送りは的中したかを`miwokuri=True・bet=0`のまま参考記録）。詳細: `keirin_s4_gate_label_bug_and_candidate_visibility_2026_07_22`
   **【2026-07-23・SS+観察サブランク新設】** S1で発見した軸級班denyフィルターがS4のSS/Sにも効くか検証（`scripts/exp_s4_axis_class_deny_analysis.py`・正規プロトコル）。**単純な母集団相関ではS/SSとも改善に見えたが、Sは日次axis_sum上位10件の「枠付き相対選出」のため、格上軸候補を除外すると別候補が繰り上がり、実際にシミュレーションすると悪化する**（train+val ROI116.3%→111.5%・test 132.6%→119.2%、両期間で一貫して悪化）。一方SSは無制限採用（枠なし）のため単純に足切りされるだけで、繰り上がり効果を考慮しても改善が残る（train+val ROI222.3%→351.6%・全期間237.1%→362.2%、的中率は不変〜微増）。**結論: Sには適用せず、SS内の軸格上非該当サブセットのみ新表示ランク"SS+"として観察する**（ユーザー判断・実際の買い目・購入対象は変更しない表示分岐のみ）。
-  実装: `strategy_wt.s4_gate_label(wt_overlap_n, axis1_class, axis2_class)`（軸級班情報が両方揃いいずれもS1/A1でなければ"SS+"、それ以外は従来通り"SS"、重なり1は"S"）に集約。`src/cli/main.py`（S4候補生成時にaxis1_class/axis2_class追加）・`scripts/notify_prerace_wt.py`（`_process_s4_candidates`/`_build_s4_message`）・`scripts/write_candidates_wt.py`（候補時点表示）・`scripts/backfill_s4_rank_wt.py`（過去分再構築）・`scripts/notify_results_wt.py`（日次結果通知のSS+/SS/S 3分割）・`scripts/save_model_eval.py`（`PAPER_RANKS`にSS+追加）に反映。既存SS行（951件）はSQL UPDATEでgate_label='SS+'/'SS'へ即時分割済み（367件がSS+へ・honest実績: SS+ ROI360.9%(367件)・SS ROI158.9%(584件)・S ROI119.9%(9104件)）。kiseki側（backend `_display_rank`・frontend `RANK_ORDER`）の対応も必要。
+  実装: `strategy_wt.s4_gate_label(wt_overlap_n, axis1_class, axis2_class)`（軸級班情報が両方揃いいずれもS1/A1でなければ"SS+"、それ以外は従来通り"SS"、重なり1は"S"）に集約。`src/cli/main.py`（S4候補生成時にaxis1_class/axis2_class追加）・`scripts/notify_prerace_wt.py`（`_process_s4_candidates`/`_build_s4_message`）・`scripts/write_candidates_wt.py`（候補時点表示）・`scripts/backfill_s4_rank_wt.py`（過去分再構築）・`scripts/notify_results_wt.py`（日次結果通知のSS+/SS/S 3分割）・`scripts/save_model_eval.py`（`PAPER_RANKS`にSS+追加）に反映。既存SS行（951件）はSQL UPDATEでgate_label='SS+'/'SS'へ即時分割済み（367件がSS+へ・honest実績: SS+ ROI360.9%(367件)・SS ROI158.9%(584件)・S ROI119.9%(9104件)）。
+  **【2026-07-23完了】** kiseki側backend `_display_rank`/frontend `RANK_ORDER`/`RANK_BADGE_STYLE`は同日中に対応済みだったが、`RankBadge`用の`RANK_STYLE`マップ（レース詳細の個別バッジ表示）だけ更新漏れで「非」表示になっていたバグを発見・修正（`keirin_ss_plus_display_fixes_2026_07_23`）。あわせて`/keirin/help`の`RANKS`カード一覧にSS+カードを追加し表示順をSS+/SS/S/S1に変更、Web指数ラベルを「単勝指数/複勝指数/指数」→「単勝率/複勝率/競走得点」へ改称（表示値の実態を反映）。
 - **旧新S1（SIX_S1・6車三連単・2026-07-17 全廃）**: 3独立窓では110/103/113%だったが正規プロトコルの1年検証で最良70.3%・100%超なし（「直近だけ良い」レジーム依存を検出）。6車全域・9車・新S1候補も全滅 → 全廃。`#6S1` 行は `picks_history_r_archive` へ退避（`scripts/archive_s1_a_abolition_wt.py`）
 - **A（7PLUS_A・2026-07-17 全廃）**: 正規プロトコルで検証最良88.5-94.2%・100%超なし → 全廃。`#7A` 行は `picks_history_a_archive` へ退避（同上スクリプト）。旧・買い目カット方式Aランク（〜2026-06-19）の行も同テーブルに退避済み
 - **旧S1（7PLUS_R・7車三連複・2026-07-16 全廃）**: 検証期間ROI 67.3%・代替条件の全探索で黒字なし。過去行（7PLUS_R/7PLUS_CAND/7PLUS_SS/7PLUS_S）は `picks_history_r_archive` へ退避。wave-picks の SS txtセクション・#CAND 書き込み・ガミ判定は停止済み（ss_policy 等は互換のため残置）
@@ -104,17 +105,32 @@ S4(SEVEN_S4)は今後の予想データのベースと位置づけ、軸2車がW
 - `prerace_decisions_{date}.json` が採点/Web/サマリー/Discord の正本（15分前判定を事後変更しない）。キーは S1=`{rk}#S1` / S4(SS/S)=`{rk}#S4`（廃止済みのS2=`{rk}#U`/S3=`{rk}#M`キーは過去日分のみ存在）
 - **落車失格レースの学習除外は棄却**（除外するとS1テスト122.8→87.9%に劣化した検証あり。落車の事前予測情報は不存在＝事後情報での母集団選別になる）。`WT_EXCLUDE_DNF_RACES=1` のオプトインのみ残置
 
-## Web指数表示（単勝指数・複勝指数・2026-07-19導入）
+## Web指数表示（単勝率・複勝率・競走得点・2026-07-19導入、2026-07-23ラベル変更）
 
-- kiseki側 `/keirin` の出走表（EntryTable）に、既存の指数（`race_point`＝競走得点）に加えて
-  **単勝指数**（1着専用モデル`lgbm_wt_win`の予測確率）・**複勝指数**（3着内モデルの予測確率）を
-  単→複→指数の順で表示する
+- kiseki側 `/keirin` の出走表（EntryTable）に、既存の**競走得点**（`race_point`）に加えて
+  **単勝率**（1着専用モデル`lgbm_wt_win`の予測確率）・**複勝率**（3着内モデルの予測確率）を
+  単→複→競走得点の順で表示する（2026-07-23: 「単勝指数/複勝指数/指数」から改称。
+  表示値の実態＝AI予測確率／公式得点であることを明確化するため）
 - `wt_entries.pred_win_pct` / `pred_top3_pct`（%スケール・小数1位）に格納。`wave-picks-wt`実行時に
   `pred_prob`/`pred_win`算出直後（候補選定の前）に全出走馬分をUPDATEする（`src/cli/main.py`）
 - PG側は kiseki alembic `n0p1q2r3s4t5`で追加。SQLite側は`src/database.py::migrate_db()`
 - 過去分（2024-01-01〜）は `scripts/backfill_index_pct_wt.py` で四半期walk-forwardモデルを使い
-  リークなしで一括反映済み（491,582/705,079件・2026-07-19実施）。ローカルSQLiteが直近数日分
-  停止しているため直近1週間程度は欠落あり得る（次回`wave-picks-wt`実行で自然に埋まる）
+  リークなしで一括反映済み（491,582/705,079件・2026-07-19実施）
+
+**【重要・設計原則】`wt_entries.race_point`を表示専用の値で上書きしてはならない**。
+2026-06-18のcommitで、この列（`feature_wt.py`の`score_rank`/`score_mean`/`score_std`/
+`score_z`という実モデル学習特徴量の入力）を`pred_prob_pct`（AI予測確率）で上書きする
+処理が`wave_picks_wt`内に混入し、`weekly_retrain_wt.sh`（毎週日曜23:30）が汚染された
+race_pointを特徴量として取り込み続けるという自己参照汚染が約5週間（2026-06-18〜07-23）
+放置されていた（2026-07-19導入の`pred_top3_pct`が既に同じ表示目的を汚染なく満たして
+おり、この上書き自体が既に不要だった）。2026-07-23、上書きコード削除・
+race_point=0.0（デビュー戦等未点数選手・欠損扱いへ修正）・健全性チェック+自動リトライ
+（`scripts/check_race_point_sanity.py`）・汚染期間の生データ再取得・汚染モデル破棄・
+全期間再学習・S1/S4のtailウィンドウ(2026-04-13〜)再構築まで完了。
+**教訓**: モデル特徴量として使う列に対して「表示のための書き込み」を絶対に行わない。
+表示専用の値は必ず別カラム（`pred_win_pct`/`pred_top3_pct`パターン）を新設すること。
+新しい特徴量列やUPDATE文を追加する際は`grep "UPDATE wt_entries SET"`で他の書き込み
+経路と衝突していないか必ず確認する。詳細はメモリ`keirin_race_point_feature_leak_2026_07_23`。
 
 ## Mac / VPS データアーキテクチャ（2026-07-21 調査確定）
 
