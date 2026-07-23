@@ -1676,8 +1676,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     # （直近まで厳選を続けていたが、母数・実績とも他ランクに劣るため廃止）。
     # 既存 picks_history 行は scripts/archive_u_m_abolition_wt.py で
     # picks_history_u_archive / picks_history_m_archive へ退避済み。
-    # judge_u/judge_m・m_axis_gate 等のロジックは過去日再採点・分析スクリプト
-    # 互換のため残置（呼び出し元のみ停止）。
+    # judge_u/judge_m・m_axis_gate 等のロジックは2026-07-23に全削除済み。
 
     # ── S1候補（新設計・win軸1着固定×3着内モデル相手2車・三連単2点流し・2026-07-19導入）──
     # WT◎/システム◎の一致・不一致は問わない。7車全レース対象。
