@@ -178,22 +178,36 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 
 ---
 
-## 毎朝の自動実行フロー（本番稼働中）
+## 毎朝の自動実行フロー（本番稼働中・2026-07-23現在）
 
-**2026-06-08 以降: winticketルートへ完全移行（ks収集停止）。** 本番日次は `scripts/daily_picks_wt.sh`（cron 8:00）:
+**VPS（`/home/ysuzuki/keirin`）が自前でcronを実行**（Mac側はweekly_retrain_wt.shのみ）。
+本番日次は `scripts/daily_picks_wt.sh`（cron 8:00）:
 ```
 AM 8:00 （daily_picks_wt.sh）
-  ① collect-wt --date $(yesterday)               # 前日結果 再収集（finish_order>=1のみスキップ）
-  ② notify_results_wt.py $(yesterday)            # 前日成績採点 → Discord / picks_history(route='wt')
-  ③ collect-wt --date $(today)                   # 当日出走表+オッズ収集
-  ④ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
-  ⑤ wave-picks-wt --date $(today) \
-       --gami-skip-odds 3.0 --b-rank-odds 5.0    # 予想生成（lgbm_wt 40特徴・SS/S/A＋ガミ3段階）
-  ⑥ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord（Bは各自判断・成績/ツイート対象外）
-日中（0,10-23時, intraday_results_wt.sh）: collect-wt --date $(today) で当日結果を逐次収集（未終了のみ・通知なし・最終R23:30発走を0:00でカバー）。
-週次（日 23:30, weekly_retrain_wt.sh）: train-wt 再学習。
+  ① collect-wt --date $(yesterday) --full-scan   # 前日結果 再収集
+  ② notify_results_wt.py $(yesterday)            # 前日成績採点 → Discord / picks_history
+  ③ 結果バックフィル（T-2〜T-4の取りこぼし回収、--silent）
+  ④ collect-wt --date $(today) --full-scan       # 当日出走表+オッズ+race_point収集（全会場走査）
+  ⑤ check_race_point_sanity.py $(today)          # race_point健全性チェック（2026-07-23導入）
+       → 直近7日中央値の50%未満なら異常。5分待機して④を最大3回リトライ
+       → 解消しなければDiscord通知して本日の指数算出・推奨提示をスキップ（exit）
+  ⑥ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
+  ⑦ wave-picks-wt --date $(today) \
+       --min-gap12 0.07 --include-7plus --start-to-hour 19
+                                                  # 予想生成（lgbm_wt 48特徴・S1/S4候補・7+車専用）
+  ⑧ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord
+  ⑨ write_candidates_wt.py $(today)              # 候補レースをpicks_historyへ即時書き込み（推奨ページ表示用）
+  ⑩ migrate_sqlite_to_pg.py                      # VPS PostgreSQL同期（KEIRIN_DB_URL設定時）
+夕方（16:00, evening_picks_wt.sh）: 夜レース分の候補生成 → s4_evening_reselect.py が朝夕のS4生候補を
+  統合し日次上限S4_DAILY_TOP_N(10)件へトリム（既に買い判定済みの分は維持）。
+日中毎分（8-23時, notify_prerace_wt.py）: 発走15分前の最終オッズで候補を買い/見送り判定・Discord通知・picks_history記録。
+日中毎時（10-翌0時, intraday_results_wt.sh）: 当日結果を逐次収集（未終了のみ・通知なし）。
+毎日00:40（backfill_missing_prerace_wt.py）: 前日分のpicks_history欠損を自動検知・補完。
+週次（日 23:30, weekly_retrain_wt.sh・Mac実行）: ①holdout評価→AUCゲート→②全データ再学習→
+  ③波乱ゲートcut再計測→④世代退避→rsyncでVPSへモデル配布。
 ```
-（旧ksフロー daily_picks.sh / notify_results.py / wave-picks は廃止。lgbm_v6等は保持＝ロールバック用）
+現行ランクはS1(SEVEN_S1・三連単2点流し)・S4(SEVEN_S4・三連複2軸総流し・gate_labelでSS+/SS/Sに分割表示)の
+2内部rank・4表示ランク（旧S2/S3・6車三連単S1・A等は全廃、詳細は`prediction-factors.md`/CLAUDE.md）。
 
 ---
 
