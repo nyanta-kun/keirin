@@ -57,6 +57,12 @@ echo "[$(date '+%H:%M:%S')] S4（Sランク）朝夜統合再選出..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜候補書き込みに失敗（継続）"
 
+# 3b. netkeirin（ウマい車券）へS4(SS+/SS/S)候補を下書き自動入稿（2026-07-23新設）
+echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（夕）..."
+.venv/bin/python3 scripts/netkeirin_submit_wt.py "$TODAY" evening \
+  2>&1 | tee -a "$LOG_DIR/netkeirin_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] netkeirin入稿(夕)に失敗（継続）"
+
 # 4. VPS PostgreSQL 同期（夜の部 wt_entries/picks_history を反映）
 if [[ -n "$KEIRIN_DB_URL" ]]; then
   echo "[$(date '+%H:%M:%S')] VPS PostgreSQL 同期..."

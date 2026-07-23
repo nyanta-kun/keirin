@@ -124,6 +124,12 @@ echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 候補書き込みに失敗（継続）"
 
+# --- 2b. netkeirin（ウマい車券）へS4(SS+/SS/S)候補を下書き自動入稿（2026-07-23新設）---
+echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（朝）..."
+.venv/bin/python3 scripts/netkeirin_submit_wt.py "$TODAY" morning \
+  2>&1 | tee -a "$LOG_DIR/netkeirin_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] netkeirin入稿(朝)に失敗（継続）"
+
 # --- 3. VPS PostgreSQL 同期（wt_entries/picks_history 等を反映）---
 # wave-picks-wt で race_point(AI確率) が更新された wt_entries と
 # write_candidates_wt で書き込まれた picks_history を VPS に同期する。

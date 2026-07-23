@@ -22,6 +22,7 @@ _PG_CONFLICT_COLS: dict[str, tuple[str, ...]] = {
     "wt_weather":       ("venue_id", "dt_hour"),
     "venue_info":       ("venue_code",),
     "picks_history":    ("race_key",),
+    "netkeirin_submissions": ("race_key",),
     "races":            ("race_key",),
     "odds":             ("race_key", "bet_type", "combination"),
     "race_entries":     ("race_key", "frame_no"),
@@ -605,6 +606,22 @@ def migrate_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_entries_race ON wt_entries(race_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_race    ON wt_odds(race_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_snap_race ON wt_odds_snapshot(race_key)")
+
+        # netkeirin（ウマい車券）自動入稿の送信済み記録（2026-07-23新設）。
+        # race_key 単位で1回だけ入稿する（重複入稿防止・Discordサマリー集計用）。
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS netkeirin_submissions (
+                race_key          TEXT PRIMARY KEY,
+                submitted_at      TEXT DEFAULT (datetime('now')),
+                session           TEXT,
+                venue_name        TEXT,
+                race_no           INTEGER,
+                gate_label        TEXT,
+                axis1             INTEGER,
+                axis2             INTEGER,
+                netkeirin_race_id TEXT
+            )
+        """)
 
         for code, (name, bank_length, is_indoor, prefecture) in VENUE_STATIC.items():
             conn.execute(
