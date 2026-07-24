@@ -132,50 +132,45 @@ race_point=0.0（デビュー戦等未点数選手・欠損扱いへ修正）・
 新しい特徴量列やUPDATE文を追加する際は`grep "UPDATE wt_entries SET"`で他の書き込み
 経路と衝突していないか必ず確認する。詳細はメモリ`keirin_race_point_feature_leak_2026_07_23`。
 
-## Mac / VPS データアーキテクチャ（2026-07-21 調査確定）
+## Mac / VPS データアーキテクチャ（2026-07-22 VPS PG一本化完了・確定）
 
-**VPS PostgreSQL（`hrdb`.`keirin`スキーマ）が実質的な唯一の本番マスターDB**。
+**VPS PostgreSQL（`hrdb`.`keirin`スキーマ）が唯一の本番データソース**。
 VPS（`/home/ysuzuki/keirin`・GitHubの本リポジトリと同一cloneが常駐）が
 daily_picks_wt.sh/evening_picks_wt.sh/notify_prerace_wt.py（毎分・8-23時）等の
 cronを自前で実行し、日次データ収集・ライブ判定・通知を独立して行っている。
-`wt_races`はVPS PGで2022-12-01〜当日まで欠損なし（2026-07-21確認・99,745件）。
+`wt_races`はVPS PGで2022-12-01〜当日まで欠損なし。
 
-**ローカルMacのSQLiteは2026-06-20の本番VPS移行後、継続更新されていない**
-（`wt_races`は2026-07-10で停止・以降のレースデータは存在しない）。Mac側crontabの
-コメントにも「週次再学習のみMacに残す（VPS移行後 2026-06-20）」と明記されている。
+**ローカルMacのSQLite（`data/keirin.db`）は2026-07-22に正式に廃止した**。
+Mac対話シェルも `~/.zshrc` に `KEIRIN_DB_URL=postgresql://...@sekito-stable.com:5432/hrdb`
+をグローバル export するよう変更し、対話セッション・crontab（週次再学習
+`weekly_retrain_wt.sh`含む）とも常にVPS PGを参照する。**`get_connection()`
+（`src/database.py`）は2026-07-24、`KEIRIN_DB_URL`未設定時にローカルSQLiteへ
+無言フォールバックする実装から、`RuntimeError`を送出する実装へ変更済み**
+（テストのみ`KEIRIN_ALLOW_SQLITE_FALLBACK=1`で明示的に許可・`tests/conftest.py`
+が自動設定）。`notify_results_wt.py`が持っていた旧Mac/VPS二重モード判定
+（ローカルSQLiteの鮮度をヒューリスティックで検知し書き込み先を自動切替する
+仕組み）も同日に削除済み。
 
-**週次再学習（`weekly_retrain_wt.sh`・日曜23:30 Mac cron）は問題なし**:
-Macのcrontab先頭で `KEIRIN_DB_URL=postgresql://...@sekito-stable.com:5432/hrdb`
-がグローバル環境変数として設定されているため、このジョブは（ローカルSQLiteではなく）
-**常にVPS PGの完全な最新データを参照して学習している**（2026-07-19実行ログで
-98,796レース使用を確認・VPS PG全件とほぼ一致）。混同注意: この結論は
-**crontab経由の実行**にのみ当てはまる。**対話的なターミナル/SSHセッションは
-crontabの環境変数を引き継がないため、`KEIRIN_DB_URL`を明示的にexportしない限り
-`get_connection()`はデフォルトでローカルSQLite（＝2026-07-10で止まった不完全な
-コピー）を見てしまう**（2026-07-21、この思い込みでVPS本番データを誤って
-wipeしかけたインシデント寸前があった）。
+**背景（2026-07-21の近未遂インシデント）**: 上記の一本化前は、crontab経由の
+実行は`KEIRIN_DB_URL`を引き継ぐが対話的なターミナル/SSHセッションは引き継がない
+ため、`KEIRIN_DB_URL`を明示的にexportしない限り`get_connection()`がデフォルトで
+ローカルSQLite（更新停止済みの不完全なコピー）を見てしまう罠があった。この
+思い込みでVPS本番データを誤ってwipeしかけたインシデント寸前が発生し、これが
+一本化・SQLite廃止・無言フォールバック廃止に至った直接のきっかけ。
 
 **運用ルール**:
-- 対話的に過去データを参照・書き込みする作業（honest全期間再構築・分析等）を行う際は、
-  **必ず対象範囲を明示的に確認すること**。ローカルSQLiteは「完全な履歴」ではない
-  （2026-06-20以降は不完全）。直近データが必要な作業は `KEIRIN_DB_URL` を明示的に
-  export してVPS PGを参照するか、SSH経由でVPS上（`/home/ysuzuki/keirin`）で実行する。
-- `rebuild_*_walkforward.py` 系スクリプトは「ローカルSQLite=完全な履歴」という
-  旧アーキテクチャ前提でread時に`KEIRIN_DB_URL`をpopする設計になっている
-  （2026-06-20以前は正しかったが、現在は date range を必ず確認しないと
-  直近データを取りこぼす）。全期間honest rebuildを最新日まで反映したい場合は、
-  ①ローカルSQLiteが実際にカバーする範囲（`SELECT MAX(race_date) FROM wt_races`で確認）
-  までをMac側で計算・scoped wipeでVPSへ反映、②それ以降の直近分は
-  `backfill_*_rank_wt.py`（pop挙動なし）をVPS上で`KEIRIN_DB_URL`付きで直接実行、
-  の2段階に分けること（2026-07-21のS4再構築で実施した手順）。
 - VPSは**メモリ1.9GB（空き実測101MB・buff/cache込みでも1.1GB程度）と限られており、
   ライブ本番処理と同居している**。重いバックテスト・モデル再学習等の計算処理は
   引き続きMacで行い、VPSには「完了した結果の書き込み」または「軽量な直接クエリ」
-  のみを行うこと。VPS上でのフル学習・大規模walk-forward計算は避ける。
-- ローカルSQLiteの完全な廃止は現時点では非推奨（VPSのメモリ制約下でMacでの
-  重い分析処理のための高速ローカルキャッシュとして引き続き有用）。ただし
-  「完全な履歴」という前提は既に崩れているため、分析結果を報告する際は
-  参照したデータの日付範囲を必ず明示すること。
+  のみを行うこと。VPS上でのフル学習・大規模walk-forward計算は避ける（PGは
+  VPS上で稼働しているため、Mac側からの重いクエリもVPS DBサーバー自体には
+  相応の負荷がかかる点は変わらず留意）。
+- `rebuild_*_walkforward.py` 系スクリプトのコメントに残る「ローカルSQLite=
+  完全な履歴」「PG側は直近数ヶ月のみのミラー」等の記述は2026-06-20以前の
+  旧アーキテクチャ前提で、現在は不正確。読む・改修する際は鵜呑みにしないこと。
+- keirinスクリプトをMacで修正した場合、VPS本番に反映するには必ず`git push`→
+  `ssh sekito "cd /home/ysuzuki/keirin && git pull"`まで実施すること。VPSの
+  cronはVPS上の別checkoutを実行するため、Macでの編集だけでは本番挙動は変わらない。
 - **【2026-07-22追記】`wt_odds`はVPS PG側こそ不完全だった**（`wt_races`とは逆パターン）。
   VPS PGの`wt_odds`は2026-06-01以降のミラーのみで2024〜2026-05分が丸ごと欠落しており、
   ローカルMac SQLiteだけが2022-12-01〜の全履歴を持っていた。S1のhonest再構築
