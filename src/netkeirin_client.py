@@ -255,7 +255,12 @@ class NetkeirinClient:
             "comment": comment,
             # race.html実ソース確認済み: type=勝負アイコン値・point=販売価格
             # （式別/方式はkaime[].bet_idにのみ含まれる。旧仮実装の誤りを訂正済み）。
-            "type": ACT_TYPE_CONFIDENT if gate_label in CONFIDENT_GATE_LABELS else ACT_TYPE_DEFAULT,
+            # 2026-07-24〜: 「自信あり」(type=1)の1日あたり投稿上限が不明なため
+            # ACT_TYPE_CONFIDENT自動付与を一時停止し、常にACT_TYPE_DEFAULT（指定なし）
+            # で送信する。SS/SS+の「自信あり」指定は上限が判明するまでユーザーが
+            # netkeirin.jp上で手動設定する運用とする。上限判明後にCONFIDENT_GATE_LABELS
+            # 判定へ戻すこと。
+            "type": ACT_TYPE_DEFAULT,
             "point": SALE_PRICE_DEFAULT,
             "waku_check": json.dumps(waku_check),
             "kaime": json.dumps(
