@@ -1454,7 +1454,7 @@ def main():
     # 推奨がある場合のみ Discord 送信（ヘッダーなし・詳細メッセージのみ）
     if messages:
         for rk, msg in messages:
-            send(msg)
+            send(msg, channel="prerace")
             print(f"[prerace] {rk} → 通知送信完了", flush=True)
             time.sleep(0.5)
     elif to_notify:

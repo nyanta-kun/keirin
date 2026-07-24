@@ -113,7 +113,7 @@ def _send_candidates(cands: list[dict], title: str) -> None:
 
     for line in lines:
         if chunk_len + len(line) + 1 > 1800:
-            send(f"{title}\n```\n" + "\n".join(chunk_lines) + "\n```")
+            send(f"{title}\n```\n" + "\n".join(chunk_lines) + "\n```", channel="picks")
             chunk_lines = []
             chunk_len = 10
             title = ""  # 2枚目以降はタイトルなし
@@ -122,7 +122,7 @@ def _send_candidates(cands: list[dict], title: str) -> None:
 
     if chunk_lines:
         prefix = f"{title}\n" if title else ""
-        send(f"{prefix}```\n" + "\n".join(chunk_lines) + "\n```")
+        send(f"{prefix}```\n" + "\n".join(chunk_lines) + "\n```", channel="picks")
 
 
 def _generate_picks_pdf(detail_json_path: str, output_path: str, dpi: int = 150) -> bool:
@@ -291,7 +291,7 @@ def main():
         else:
             print("[notify_picks] 指数JSONなし（wave-picks を先に実行）"); return
         if _generate_picks_pdf(str(src), str(pdf), dpi=dpi):
-            send_file(str(pdf), caption=f"📊 {label} {md}")
+            send_file(str(pdf), channel="picks", caption=f"📊 {label} {md}")
             print(f"[notify_picks] PDF 送信完了: {pdf}")
         else:
             print("[notify_picks] PDF 生成失敗")
@@ -302,7 +302,7 @@ def main():
         f"🚲 **{title_label} {target_date}**\n"
         f"※S2/S3 は発走15分前に個別通知"
     )
-    send(header)
+    send(header, channel="picks")
 
     # ── 推奨ランク詳細ブロック（SS/S/Aある場合のみ） ──────────────────────────
     def _fmt_rank_block(rank_label: str, picks: list[dict], desc: str) -> str:
@@ -324,7 +324,7 @@ def main():
             msg = f"```\n{section}\n```"
             if len(msg) > 1900:
                 msg = msg[:1900] + "\n…(省略)```"
-            send(msg)
+            send(msg, channel="picks")
 
     # ── 全候補一覧（ガミ判定付き） ─────────────────────────────────────────────
     if cands:
@@ -333,7 +333,7 @@ def main():
     else:
         # candidates JSON がない場合（古い形式やエラー）はスキップ
         if not picks_path.exists():
-            send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません")
+            send(f"⚠️ 競輪AI [{target_date}] picks ファイルが見つかりません", channel="picks")
 
     # ── 全レース指数PDF ────────────────────────────────────────────────────────
     _send_index_pdf()

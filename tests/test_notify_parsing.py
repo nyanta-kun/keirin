@@ -191,7 +191,7 @@ def test_results_b_only_not_filemissing(monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_B_ONLY, encoding="utf-8")
     msgs = []
-    monkeypatch.setattr(nr, "send", lambda m: msgs.append(m))
+    monkeypatch.setattr(nr, "send", lambda m, channel=None: msgs.append(m))
     monkeypatch.setattr(_sys, "argv", ["notify_results_wt.py", _B_ONLY_DATE])
     try:
         nr.main()

@@ -159,14 +159,15 @@ def main() -> None:
         if failures:
             msg += f"\n⚠️ 入稿失敗 {len(failures)}件: " + " / ".join(failures)
         try:
-            send(msg)
+            send(msg, channel="netkeirin")
         except Exception as e:
             print(f"[netkeirin_submit] Discord通知失敗: {e}", flush=True)
     elif failures:
         try:
             send(
                 f"⚠️ **[netkeirin入稿] {target_date}（{session_jp}）: 全{len(failures)}件が入稿失敗**\n"
-                + " / ".join(failures)
+                + " / ".join(failures),
+                channel="netkeirin",
             )
         except Exception as e:
             print(f"[netkeirin_submit] Discord通知失敗: {e}", flush=True)

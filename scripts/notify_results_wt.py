@@ -326,7 +326,7 @@ def _main_inner(date):
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target_date = pos[0] if pos else date.today().strftime("%Y-%m-%d")
     silent = "--silent" in sys.argv
-    emit = (lambda m: None) if silent else send
+    emit = (lambda m: None) if silent else (lambda m: send(m, channel="results"))
     dc = target_date.replace("-", "")
 
     # 発走前判定（prerace_decisions_*.json）を読み込む。

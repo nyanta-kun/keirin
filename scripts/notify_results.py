@@ -126,7 +126,7 @@ def main():
     #   未公開レースが混入して成績が乖離するため。実際に配信した買い目のみ採点）
     picks_full = _parse_picks_full(target_date)
     if not picks_full:
-        send(f"⚠️ 競輪AI [{target_date}] 予想ファイルが見つかりません")
+        send(f"⚠️ 競輪AI [{target_date}] 予想ファイルが見つかりません", channel="results")
         return
 
     name2code = {name: code for code, name in venue_map.items()}
@@ -218,7 +218,7 @@ def main():
 
     confirmed_n = len(results)
     if confirmed_n == 0:
-        send(f"📊 **競輪AI成績 {target_date}**\n6車立て以下の確定レースなし")
+        send(f"📊 **競輪AI成績 {target_date}**\n6車立て以下の確定レースなし", channel="results")
         return
 
     roi    = total_returns / total_bets if total_bets else 0
@@ -246,7 +246,7 @@ def main():
     msg = f"{header}\n```\n{body}\n```{stats_block}"
     if len(msg) > 1900:
         msg = msg[:1900] + "\n…(省略)"
-    send(msg)
+    send(msg, channel="results")
 
     # Xポスト用（的中のみ）
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
@@ -258,7 +258,7 @@ def main():
             f"的中なし ({confirmed_n}R中0回)\n\n"
             f"#競輪 #穴車AI #AI予想"
         )
-        send(f"**--- Xポスト用（コピペ）---**\n```\n{tw_none}\n```")
+        send(f"**--- Xポスト用（コピペ）---**\n```\n{tw_none}\n```", channel="results")
     else:
         max_chars = 270
         tw_header  = f"📊 穴車AI結果 {md}\n\n"
@@ -296,7 +296,7 @@ def main():
         for i, tw in enumerate(tw_tweets, 1):
             label = (f"**--- Xポスト用 {i}/{len(tw_tweets)}（コピペ）---**"
                      if len(tw_tweets) > 1 else "**--- Xポスト用（コピペ）---**")
-            send(f"{label}\n```\n{tw}\n```")
+            send(f"{label}\n```\n{tw}\n```", channel="results")
 
     # 未確定レース通知
     picks_full = _parse_picks_full(target_date)
@@ -328,7 +328,7 @@ def main():
             f"⏳ **競輪AI未確定 {target_date}**  [{len(pending_lines)}件]\n"
             f"```\n{pending_body}\n```"
         )
-        send(pending_msg)
+        send(pending_msg, channel="results")
 
     print(f"[notify_results] Discord 送信完了 ({target_date}, {confirmed_n}R, 的中{total_hits}回, 未確定{len(pending_lines)}件)")
 

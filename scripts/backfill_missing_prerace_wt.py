@@ -166,7 +166,7 @@ def main() -> None:
             "最終オッズで後追い再構築しました（実際の売買判定には影響しません）。\n"
             + "\n".join(f"- {s}" for s in healed_summary)
         )
-        discord_send(msg)
+        discord_send(msg, channel="system")
 
 
 if __name__ == "__main__":
