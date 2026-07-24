@@ -1,11 +1,17 @@
 #!/bin/bash
-# 日中(レース開催時間帯)に1時間毎実行: 当日のレース結果を逐次取得し VPS に同期する。
+# 日中(レース開催時間帯)に15分毎実行: 当日のレース結果を逐次取得し VPS に同期する。
 # collect-wt は finish_order>=1 のレースをスキップするため、終了済みは再取得せず
-# 未終了レースのみ取りに行く（時間が進むほど軽くなる）。
+# 未終了レースのみ取りに行く（時間が進むほど軽くなる）。15分毎に上げても負荷は小さい。
 # 注: wt_odds は最新オッズに更新されるが、朝オッズは wt_odds_snapshot に保全済（別テーブル）。
 # 注: 0:00 実行時は前日最終レース（23時台発走分）も追加取得する。
-#     最終レースが 23:00 以降に発走した場合、23:00 のイントラデイ実行では結果未確定であり
+#     最終レースが 23:00 以降に発走した場合、23:00台の実行では結果未確定であり
 #     00:00 で TODAY が翌日になって取りこぼされるため、これを防ぐ。
+#
+# Discordダイジェスト送信について（2026-07-24〜）:
+#   picks_history のDB更新（採点）自体は毎回サイレントに行うが、Discordの
+#   「results」チャンネルへは DIGEST_HOURS で指定した時刻(毎時0分)のみ送信する
+#   （15分毎に毎回送信するとスパムになるため）。当日の最終・正式版ダイジェストは
+#   翌朝8:00の daily_picks_wt.sh（前日分・非silent）が引き続き担う。
 set -e
 set -o pipefail
 export PATH="/usr/sbin:/sbin:$PATH"
@@ -15,10 +21,15 @@ TODAY=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"
 mkdir -p "$LOG_DIR"
 
-# 0:00 実行時: 前日最終レース（23時台発走分）の結果を取得する
-# cron スケジュール `0 0,10-23` で hour=0 の実行が該当する
 CURRENT_HOUR=$(date +%H)
-if [[ "$CURRENT_HOUR" == "00" ]]; then
+CURRENT_MIN=$(date +%M)
+
+# 日中Discordダイジェストを送信する時刻（毎時0分実行時のみ判定・1日4回）
+DIGEST_HOURS=" 12 15 18 21 "
+
+# 0:00 実行時: 前日最終レース（23時台発走分）の結果を取得する
+# cron スケジュール `*/15 10-23,0 * * *` のうち hour=0 かつ分0の実行が該当する
+if [[ "$CURRENT_HOUR" == "00" && "$CURRENT_MIN" == "00" ]]; then
   if [[ "$(uname)" == "Darwin" ]]; then
     PREV=$(date -v-1d +%Y-%m-%d)
   else
@@ -38,9 +49,16 @@ echo "[$(date '+%F %H:%M:%S')] 日中 当日結果取得 $TODAY ..."
   2>&1 | tee -a "$LOG_DIR/intraday_${TODAY}.log"
 echo "[$(date '+%H:%M:%S')] 日中取得 完了"
 
-# 採点（Discord通知なし）: picks_history.payout を SQLite で更新
-echo "[$(date '+%H:%M:%S')] 日中採点（--silent）..."
-.venv/bin/python3 scripts/notify_results_wt.py "$TODAY" --silent \
+# 採点: picks_history.payout を更新する。DIGEST_HOURS の毎時0分実行時のみ
+# Discordの「results」チャンネルへ日中ダイジェスト（その時点までの当日確定分）を送信する。
+NOTIFY_ARGS=(--silent)
+if [[ "$CURRENT_MIN" == "00" && "$DIGEST_HOURS" == *" $CURRENT_HOUR "* ]]; then
+  NOTIFY_ARGS=()
+  echo "[$(date '+%H:%M:%S')] 日中採点（Discordダイジェスト送信あり: ${CURRENT_HOUR}:00）..."
+else
+  echo "[$(date '+%H:%M:%S')] 日中採点（--silent）..."
+fi
+.venv/bin/python3 scripts/notify_results_wt.py "$TODAY" "${NOTIFY_ARGS[@]}" \
   2>&1 >> "$LOG_DIR/intraday_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 日中採点に失敗（継続）"
 
