@@ -29,7 +29,6 @@ wave_picks_wt_{date}.txt の公開買い目と prerace_decisions を、winticket
 """
 import json
 import os
-import subprocess
 import sys
 import re
 import time
@@ -40,110 +39,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
-
-
-def _cleanup_vps_stale_cand(db_url: str, target_date: str) -> None:
-    """VPS の picks_history から不要な #CAND エントリを削除する。
-
-    2 パターンを処理する:
-    1. 同一 base_key に購入済みエントリ(#7S/7A/7SS)が存在する #CAND
-       （ローカルで購入に置き換えられた後も VPS に残留するもの）
-    2. ローカル SQLite に存在しない孤立 #CAND
-       （write_candidates_wt.py が書いた後に notify_results_wt.py の処理対象外と
-       なりローカルから消えたのに VPS にだけ残ったもの）
-
-    migrate_sqlite_to_pg.py は upsert のみで DELETE しないため、この関数で整合させる。
-    """
-    import sqlite3
-    try:
-        import psycopg2
-        from src.database import DB_PATH
-        # ローカルSQLiteのtarget_date全race_keyを取得
-        local_conn = sqlite3.connect(str(DB_PATH))
-        local_keys = {
-            row[0] for row in local_conn.execute(
-                "SELECT race_key FROM picks_history WHERE race_date=? AND route='wt'",
-                (target_date,)
-            ).fetchall()
-        }
-        local_conn.close()
-
-        pg_conn = psycopg2.connect(db_url)
-        cur = pg_conn.cursor()
-
-        # パターン1: 同一base_keyに購入済みエントリが存在する#CAND
-        # ※ ペーパー行（#7S1/#7A）は「購入済み」とみなさない（同一レースの
-        #    S1系 #CAND 追跡を巻き込み削除しないため・2026-07-16）
-        cur.execute("""
-            DELETE FROM keirin.picks_history
-            WHERE race_date = %s
-              AND race_key LIKE %s
-              AND SPLIT_PART(race_key, chr(35), 1) IN (
-                  SELECT SPLIT_PART(race_key, chr(35), 1)
-                  FROM keirin.picks_history
-                  WHERE race_date = %s
-                    AND race_key NOT LIKE %s
-                    AND race_key NOT LIKE %s
-                    AND race_key NOT LIKE %s
-                    AND race_key NOT LIKE %s
-                    AND race_key NOT LIKE %s
-                    AND route = %s
-              )
-              AND route = %s
-        """, (target_date, '%#CAND', target_date, '%#CAND',
-              '%#7S1', '%#7A', '%#6S1', '%#7S4', 'wt', 'wt'))
-        deleted1 = cur.rowcount
-
-        # パターン2: ローカルSQLiteに存在しない孤立#CAND
-        cur.execute("""
-            SELECT race_key FROM keirin.picks_history
-            WHERE race_date = %s
-              AND race_key LIKE %s
-              AND route = %s
-        """, (target_date, '%#CAND', 'wt'))
-        vps_cands = [row[0] for row in cur.fetchall()]
-        orphans = [k for k in vps_cands if k not in local_keys]
-        deleted2 = 0
-        if orphans:
-            cur.execute(
-                "DELETE FROM keirin.picks_history WHERE race_key = ANY(%s)",
-                (orphans,)
-            )
-            deleted2 = cur.rowcount
-
-        pg_conn.commit()
-        pg_conn.close()
-        if deleted1:
-            print(f"[notify_results_wt] VPS 旧CAND削除(購入重複): {deleted1} 件", flush=True)
-        if deleted2:
-            print(f"[notify_results_wt] VPS 孤立CAND削除: {deleted2} 件 {orphans}", flush=True)
-    except Exception as e:
-        print(f"[notify_results_wt] VPS 旧CAND削除失敗（継続）: {e}", flush=True)
-
-
-def _sync_vps(db_url: str, target_date: str = "") -> None:
-    """picks_history.payout 書き込み後に VPS PostgreSQL へ即時同期する。
-    db_url 未設定時はスキップ（エラー非致命）。
-    wt_odds_snapshot は大容量のためスキップ。
-    同期後、target_date の旧 #CAND エントリ（購入済みと重複するもの）を削除する。
-    """
-    if not db_url:
-        return
-    script = Path(__file__).parent / "migrate_sqlite_to_pg.py"
-    try:
-        subprocess.run(
-            [sys.executable, str(script), "--skip", "wt_odds_snapshot"],
-            check=True,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "KEIRIN_DB_URL": db_url},
-        )
-        print("[notify_results_wt] VPS 同期完了", flush=True)
-    except subprocess.CalledProcessError as e:
-        print(f"[notify_results_wt] VPS 同期失敗（継続）: {e.stderr[:200]}", flush=True)
-        return
-    if target_date:
-        _cleanup_vps_stale_cand(db_url, target_date)
 
 
 def _parse_picks_full(target_date: str) -> dict:
@@ -422,54 +317,11 @@ def _query_stats_rank(like, rank):
 
 
 def main():
-    import sqlite3 as _sqlite3
     from datetime import date
-    from src.database import DB_PATH
-    _db_url = os.environ.get("KEIRIN_DB_URL", "")
-
-    def _sqlite_has_schema() -> bool:
-        """SQLiteに最新スキーマ(miwokuri列あり)のpicks_historyが存在するか確認。
-        miwokuri列がなければ放棄済みSQLiteとみなしFalseを返す（VPSネイティブモードへ）。
-        過去7日以内のwt_entriesデータがなければVPSがPGに直接書いているとみなしFalseを返す。
-        """
-        try:
-            with _sqlite3.connect(str(DB_PATH)) as c:
-                if not c.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='picks_history'"
-                ).fetchone():
-                    return False
-                cols = {r[1] for r in c.execute("PRAGMA table_info(picks_history)").fetchall()}
-                if "miwokuri" not in cols:
-                    return False
-                # 過去7日以内のwt_entriesがなければVPSがPGに直接書いているとみなす
-                from datetime import date as _date, timedelta as _td
-                cutoff = (_date.today() - _td(days=7)).strftime("%Y%m%d")
-                has_wt = c.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wt_entries'"
-                ).fetchone()
-                if not has_wt:
-                    return False
-                return bool(c.execute(
-                    "SELECT 1 FROM wt_entries WHERE race_key >= ? LIMIT 1",
-                    (cutoff,),
-                ).fetchone())
-        except Exception:
-            return False
-
-    # VPS直接書き込みモード: KEIRIN_DB_URL が設定されていてSQLiteにスキーマがない場合
-    # get_connection() が PostgreSQL を直接使う。_sync_vps は不要（既にPGへ書いている）。
-    # Mac 通常モード: KEIRIN_DB_URL を退避して SQLite へ書き込み、後で _sync_vps で同期。
-    _vps_native = bool(_db_url) and not _sqlite_has_schema()
-    if not _vps_native:
-        os.environ.pop("KEIRIN_DB_URL", "")
-    try:
-        _main_inner(date, "" if _vps_native else _db_url)
-    finally:
-        if _db_url and not _vps_native:
-            os.environ["KEIRIN_DB_URL"] = _db_url
+    _main_inner(date)
 
 
-def _main_inner(date, _db_url):
+def _main_inner(date):
     # 位置引数=日付 / --silent=Discord抑止(picks_history修復のみ・バックフィル用)
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target_date = pos[0] if pos else date.today().strftime("%Y-%m-%d")
@@ -992,7 +844,6 @@ def _main_inner(date, _db_url):
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r
     if not total_7plus and not results_7plus_s1 and not results_7plus_s4:
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
-        _sync_vps(_db_url, target_date)
         return
 
     # ヘッダー合計（p7b/p7r/p7h・total_7plus）に S2/S3（ペーパー）は含めない
@@ -1049,8 +900,6 @@ def _main_inner(date, _db_url):
           f"S4-SS(ペーパー) {p7s4ssn}R 的中{p7s4ssh} / "
           f"S4-S(ペーパー) {p7s4sn}R 的中{p7s4sh} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
-
-    _sync_vps(_db_url, target_date)
 
 
 if __name__ == "__main__":

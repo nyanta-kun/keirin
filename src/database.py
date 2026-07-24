@@ -11,6 +11,8 @@ DB_PATH = Path(__file__).parent.parent / "data" / "keirin.db"
 # PostgreSQL 互換レイヤー
 # KEIRIN_DB_URL 環境変数が設定されている場合は psycopg2 で VPS に接続する。
 # 例: postgresql://user:pass@vps-host:5432/keiba
+# 本番はVPS PostgreSQLへ一本化済み（2026-07-22〜）。ローカルSQLiteはテスト専用
+# （KEIRIN_ALLOW_SQLITE_FALLBACK=1 が必要・get_connection() 参照）。
 # ---------------------------------------------------------------------------
 
 # INSERT OR REPLACE / INSERT OR IGNORE の ON CONFLICT 先
@@ -637,7 +639,11 @@ def get_connection():
     """DB 接続を返す。
 
     KEIRIN_DB_URL 環境変数が設定されている場合は VPS PostgreSQL に接続する。
-    未設定の場合は従来どおりローカル SQLite を使用する。
+    本番運用は 2026-07-22 に VPS PostgreSQL への一本化が完了しており（Mac対話
+    シェルも ~/.zshrc の KEIRIN_DB_URL でデフォルト参照）、ローカル SQLite への
+    無言フォールバックは廃止した。KEIRIN_DB_URL が未設定の場合は明示的にエラーで
+    落とす（テスト実行時のみ KEIRIN_ALLOW_SQLITE_FALLBACK=1 でローカル SQLite を
+    使う。tests/conftest.py が自動設定する）。
 
     例:
         export KEIRIN_DB_URL="postgresql://keirin_app:pass@vps-host:5432/keiba"
@@ -663,6 +669,15 @@ def get_connection():
         finally:
             raw.close()
     else:
+        if not os.environ.get("KEIRIN_ALLOW_SQLITE_FALLBACK"):
+            raise RuntimeError(
+                "KEIRIN_DB_URL が未設定です。本番keirinはVPS PostgreSQLへ一本化済み"
+                "（2026-07-22〜）のため、ローカルSQLiteへの無言フォールバックは廃止"
+                "しました。KEIRIN_DB_URL を明示的に設定してください"
+                "（例: export KEIRIN_DB_URL=\"postgresql://user:pass@host:5432/db\"）。"
+                "テストで意図的にローカルSQLiteを使う場合のみ "
+                "KEIRIN_ALLOW_SQLITE_FALLBACK=1 を設定してください。"
+            )
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         raw = sqlite3.connect(str(DB_PATH), timeout=30)
         raw.row_factory = sqlite3.Row
