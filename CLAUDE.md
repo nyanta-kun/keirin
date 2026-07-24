@@ -190,3 +190,4 @@ Mac対話シェルも `~/.zshrc` に `KEIRIN_DB_URL=postgresql://...@sekito-stab
   （gap23 列が両方から漏れて本番 PG に手動ALTERだけで存在する「幽霊カラム」になった事故あり → 2026-07-12 に両側へ正式化済み: kiseki alembic `j6k7l8m9n0p1` / migrate_db）
 - **gap カラムのスケール**: gap12 / gap34 = 0-1 スケール、**gap23 のみ pt（%ポイント・×100済み）**。歴史的経緯によるもので変更不可。読み書き時に注意
 - 閾値定数（GAMI_THRESHOLD=7.0 等）は `src/cli/main.py` / `scripts/notify_prerace_wt.py` / `scripts/write_candidates_wt.py` に多重定義。**変更時は3ファイル + kiseki フロント（page.tsx）を必ず grep して揃える**
+- **新しいテーブルを追加したら `src/database.py::_pg_translate()` の keirin スキーマ自動付与regex（2箇所: INSERT系/通常SQL系）にもテーブル名を必ず追加する**。INSERT OR REPLACE/IGNORE文はテーブル名を直接展開するため regex 漏れでも動くが、素のSELECT/UPDATE/DELETEはこのregexだけが唯一のスキーマ付与経路なので、漏れると `relation "xxx" does not exist` で本番クラッシュする（2026-07-24発覚: `netkeirin_submissions`追加時にregexへの追加を忘れ、`_already_submitted()`のSELECTが機能追加以来一度もschema解決できず、netkeirin入稿が導入(2026-07-23)以来一度も成功していなかった。INSERT経路は正しく動いていたため気づかれなかった）
