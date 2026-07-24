@@ -300,7 +300,7 @@ def main():
     # 2026-07-17〜: 現行ランクは S2/S3 の2ペーパーのみ（S1/A は全廃）。
     header = (
         f"🚲 **{title_label} {target_date}**\n"
-        f"※S2/S3 は発走15分前に個別通知（全ランク ペーパー検証中）"
+        f"※S2/S3 は発走15分前に個別通知"
     )
     send(header)
 

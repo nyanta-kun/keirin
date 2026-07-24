@@ -698,7 +698,7 @@ def _main_inner(date, _db_url):
                 s1_mark = f"◎ ¥{s1_pay:,}" if s1_hit else "×"
                 results_7plus_s1.append(
                     f"[S1] {venue} {race_no}R {s1_tstr}  予:{s1_pred}"
-                    f"  実:{'-'.join(map(str, s1_order3))}  {s1_mark}（ペーパー）")
+                    f"  実:{'-'.join(map(str, s1_order3))}  {s1_mark}")
                 p7s1b += s1_bet
                 if s1_hit:
                     p7s1r += s1_pay
@@ -772,7 +772,7 @@ def _main_inner(date, _db_url):
                     s4_gate_label = dec_s4.get("gate_label") or "S4"
                     results_7plus_s4.append(
                         f"[{s4_gate_label}] {venue} {race_no}R {s4_tstr}  予:{s4_pred}"
-                        f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}（ペーパー）")
+                        f"  実:{'-'.join(map(str, s4_order[:3]))}  {s4_mark}")
                     p7s4b += s4_bet
                     if s4_gate_label == "SS+":
                         p7s4sspn += 1
@@ -1021,10 +1021,10 @@ def _main_inner(date, _db_url):
     ss_line = _rank_line("SS*", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 廃止済み旧方式（過去日再採点時のみ）
     s_line  = _rank_line("S*",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
     # S1（ペーパー）は独立行で表示（ヘッダー合計には不算入）
-    s1_line = _rank_line("S1(win軸固定・検証/ペーパー)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
-    s4ssp_line = _rank_line("SS+(波乱度選出・軸格上なし・検証/ペーパー)", p7s4sspn, p7s4sspb, p7s4sspr, p7s4ssph)
-    s4ss_line = _rank_line("SS(波乱度選出・検証/ペーパー)", p7s4ssn, p7s4ssb, p7s4ssr, p7s4ssh)
-    s4s_line = _rank_line("S(波乱度選出・検証/ペーパー)", p7s4sn, p7s4sb, p7s4sr, p7s4sh)
+    s1_line = _rank_line("S1(win軸固定)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
+    s4ssp_line = _rank_line("SS+(波乱度選出・軸格上なし)", p7s4sspn, p7s4sspb, p7s4sspr, p7s4ssph)
+    s4ss_line = _rank_line("SS(波乱度選出)", p7s4ssn, p7s4ssb, p7s4ssr, p7s4ssh)
+    s4s_line = _rank_line("S(波乱度選出)", p7s4sn, p7s4sb, p7s4sr, p7s4sh)
     for _l in (s1_line, s4ssp_line, s4ss_line, s4s_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
