@@ -12,7 +12,8 @@ wave_picks_wt_{date}.txt の公開買い目と prerace_decisions を、winticket
       他ランクとの重複排除はない（独立戦略）。
   S4(#7S4) = 単勝×複勝指数トップ3重なり軸×波乱度選出（内部rank SEVEN_S4・
     2026-07-21導入）三連複2軸総流し5点（オッズ下限なし）
-    ※ ペーパートレード検証中（実際の賭けなし・ヘッダー合計不算入）。
+    ※ ペーパートレード検証中（実際の賭けなし）。ヘッダー合計には算入する
+      （kiseki Webサマリーのトップライン=SEVEN_S1+SEVEN_S4と揃える）。
       正本は prerace_decisions の {rk}#S4。他ランクとの重複排除はない（独立戦略）。
       軸選定・当日上位15レースの選出は朝の候補生成（wave-picks-wt）時点で確定済み。
   旧A(#7A) = ◎一致×波乱×別ライン先頭軸の二連単
@@ -492,13 +493,13 @@ def _main_inner(date):
             existing_gami[_rk.split("#")[0]] = _pg
 
     results_7plus_ss, results_7plus_s, results_7plus_r, history = [], [], [], []
-    results_7plus_s1 = []     # S1=win軸1着固定（ペーパー）行 — 合計には含めない
-    results_7plus_s4 = []     # S4=単勝×複勝指数重なり軸×波乱度選出（ペーパー）行 — 合計には含めない
+    results_7plus_s1 = []     # S1=win軸1着固定（ペーパー）行 — ヘッダー合計(p7b/p7r/p7h/n7)には含める
+    results_7plus_s4 = []     # S4=単勝×複勝指数重なり軸×波乱度選出（ペーパー）行 — ヘッダー合計(p7b/p7r/p7h/n7)には含める
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 旧Sランク 合計
     p7rb = p7rr = p7rh = 0    # 旧S1（7PLUS_R・2026-07-16全廃・過去日再採点互換）合計
-    p7s1b = p7s1r = p7s1h = 0  # 7+車 S1=win軸（ペーパー・名目値。ヘッダー合計には不算入）
-    p7s4b = p7s4r = p7s4h = 0  # 7+車 S4=波乱度選出（ペーパー・名目値。ヘッダー合計には不算入）
+    p7s1b = p7s1r = p7s1h = 0  # 7+車 S1=win軸（ペーパー・名目値。ヘッダー合計に含む）
+    p7s4b = p7s4r = p7s4h = 0  # 7+車 S4=波乱度選出（ペーパー・名目値。ヘッダー合計に含む）
     # 2026-07-22: S4は表示ランクSS/Sに分離済み（gate_label）なので結果通知も内訳を分ける
     p7s4sspn = p7s4sspb = p7s4sspr = p7s4ssph = 0  # S4のうちgate_label="SS+"（重ならない・軸に格上クラスなし）
     p7s4ssn = p7s4ssb = p7s4ssr = p7s4ssh = 0  # S4のうちgate_label="SS"（軸2車がWT◎◯と全く重ならない）
@@ -514,8 +515,8 @@ def _main_inner(date):
             if _slot == "seven_s1":
                 # ── S1（新設計・win軸1着固定・ペーパートレード検証）採点 ──
                 # 正本は decisions の {rk}#S1。返還処理なし（実精算方式:
-                # 買い目確定後の落車・失格・欠車も外れ計上）。ペーパーのため
-                # ヘッダー合計（p7b/p7r/p7h・total_7plus）には算入しない。
+                # 買い目確定後の落車・失格・欠車も外れ計上）。ペーパーだが
+                # ヘッダー合計（p7b/p7r/p7h・n7）には含める（S1/S4のみが現行ランクのため）。
                 # 三連単のため的中判定は「実着順が買い目2点のいずれかと完全一致」。
                 dec_s1 = decisions.get(rk + "#S1")
                 if not (dec_s1 and dec_s1.get("decision") == "buy" and dec_s1.get("combos")):
@@ -563,8 +564,8 @@ def _main_inner(date):
             if _slot == "seven_s4":
                 # ── S4（単勝×複勝指数重なり軸×波乱度選出・ペーパートレード検証）採点 ──
                 # 正本は decisions の {rk}#S4。返還処理なし（実精算方式:
-                # 買い目確定後の落車・失格・欠車も外れ計上）。ペーパーのため
-                # ヘッダー合計（p7b/p7r/p7h・total_7plus）には算入しない。
+                # 買い目確定後の落車・失格・欠車も外れ計上）。ペーパーだが
+                # ヘッダー合計（p7b/p7r/p7h・n7）には含める（S1/S4のみが現行ランクのため）。
                 # 2026-07-21〜: オッズ見送り（decision=="skip"）も軸2車が実際に3着内へ
                 # 入ったかだけ参考採点する（miwokuri=True・bet=0でサマリー集計対象外の
                 # まま、見送りが「的中していたか」をWebで確認できるようにする）。
@@ -846,12 +847,14 @@ def _main_inner(date):
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         return
 
-    # ヘッダー合計（p7b/p7r/p7h・total_7plus）に S2/S3（ペーパー）は含めない
-    p7b = p7ssb + p7sb + p7rb
-    p7r = p7ssr + p7sr + p7rr
-    p7h = p7ssh + p7sh + p7rh
+    # ヘッダー合計（p7b/p7r/p7h・n7）は現行ランク S1(SEVEN_S1)/S4(SEVEN_S4) を含めて集計する
+    # （kiseki Web サマリーのトップライン = rank IN ('SEVEN_S1','SEVEN_S4') と揃える。
+    #  旧SS/旧S/旧S1(7PLUS_R)は全廃済みで現在は常に0件だが、過去日再採点の互換のため残置）
+    p7b = p7ssb + p7sb + p7rb + p7s1b + p7s4b
+    p7r = p7ssr + p7sr + p7rr + p7s1r + p7s4r
+    p7h = p7ssh + p7sh + p7rh + p7s1h + p7s4h
     p7roi = p7r / p7b * 100 if p7b else 0
-    n7 = len(total_7plus)
+    n7 = len(total_7plus) + len(results_7plus_s1) + len(results_7plus_s4)
     p7hit_pct = p7h / n7 * 100 if n7 else 0.0
     header = (
         f"📊 **競輪AI[wt]成績 {target_date}**  [7+車]\n"
@@ -871,7 +874,7 @@ def _main_inner(date):
     r_line   = _rank_line("旧S1*", len(results_7plus_r), p7rb, p7rr, p7rh)  # 旧S1（7PLUS_R・過去日再採点時のみ）
     ss_line = _rank_line("SS*", len(results_7plus_ss), p7ssb, p7ssr, p7ssh)  # 廃止済み旧方式（過去日再採点時のみ）
     s_line  = _rank_line("S*",  len(results_7plus_s),  p7sb,  p7sr,  p7sh)
-    # S1（ペーパー）は独立行で表示（ヘッダー合計には不算入）
+    # S1（ペーパー）はランク別内訳として独立行でも表示する（ヘッダー合計にも含む）
     s1_line = _rank_line("S1(win軸固定)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
     s4ssp_line = _rank_line("SS+(波乱度選出・軸格上なし)", p7s4sspn, p7s4sspb, p7s4sspr, p7s4ssph)
     s4ss_line = _rank_line("SS(波乱度選出)", p7s4ssn, p7s4ssb, p7s4ssr, p7s4ssh)

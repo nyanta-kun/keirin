@@ -794,7 +794,7 @@ def _build_s4_message(cand: dict, race_info: dict, detail: dict, gate_label: str
         "S": "WT◎◯と軸2車が片方だけ重なる",
     }.get(gate_label, "")
     return (
-        f"🎲 **[{label}・波乱度選出検証(記録のみ)]  {venue} {race_no}R  発走 {start}**\n"
+        f"🎲 **[{label}]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         + (f"（{label_desc}）" if label_desc else "") + "\n"
         f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S4_STAKE:,}円): "
