@@ -326,6 +326,22 @@ S4_AXIS_SUM_MAX = 1.3
 # 採用ペースは平均2.56件/日（S4_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
 S4_ENTROPY_MAX = 1.8329
 
+# 日次合計の上限（entropy昇順で採用・2026-07-26再導入）。
+# 件数capをentropyゲートに置換した初日（2026-07-26）、entropyフィールドを
+# 持たない旧形式の生候補JSON（デプロイ前に生成された朝バッチ分）が
+# s4_daily_select() の `c.get("entropy", 0.0)` フォールバックにより
+# entropy=0.0扱い＝常にゲート通過してしまい、1日26件という honest全期間
+# walk-forward(2024-01-01〜2026-07-25・832日、最大9件/日)では一度も
+# 発生しなかった規模の異常発生を招いた（原因判明後、フォールバックは
+# 安全側のfloat("inf")＝常に除外に修正済み）。
+# ユーザー要望「朝夕合わせて10レースちょっとに絞りたい・信頼度の高い方を残す」
+# を受け、entropyゲート通過候補が多い日はentropy昇順（＝最も自信がある順）で
+# 上位のみ採用する日次capを追加。honest全期間(832日)ではentropyゲート通過が
+# 最大9件/日のため、この上限は通常運用ではほぼ発火しない安全網であり、
+# capの値を8/10/12/15/無制限で振っても全期間ROI/件数は完全に同一
+# （exp_s4_daily_cap_by_entropy.py参照）。異常発生時のみ効く設計。
+S4_DAILY_CAP = 12
+
 
 def s4_field_entropy(top3_probs: dict[int, float]) -> float:
     """レース全体（出走7車）の指数エントロピー（占有率ベースの拮抗度）を返す。
@@ -427,7 +443,7 @@ def s4_gate_label(
 
 
 def s4_daily_select(candidates: list[dict]) -> list[dict]:
-    """S4の選出（2026-07-26改定: 件数capを撤廃しentropyゲートへ置換）。
+    """S4の選出（2026-07-26改定: 件数capを撤廃しentropy閾値ゲートへ置換）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"axis_sum": float, "wt_overlap_n": int | None, "entropy": float} を持つ dict。
@@ -438,8 +454,12 @@ def s4_daily_select(candidates: list[dict]) -> list[dict]:
       - entropy > S4_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
         いない）は除外（2026-07-26導入。低いentropy＝軸2車に予測確率が集中し
         残り5車が拮抗、という状態が三連複高配当の的中と強く相関することを
-        2024-2026の8四半期walk-forwardで確認。詳細はS4_ENTROPY_MAX定義部参照）
-      - wt_overlap_n == 0（◎◯と全く重ならない）: 上記ゲート通過分は無条件で全件採用
+        2024-2026の8四半期walk-forwardで確認。詳細はS4_ENTROPY_MAX定義部参照）。
+        entropyキー欠損時は float("inf")扱い＝必ず除外する（フェイルセーフ。
+        2026-07-26に0.0デフォルトだった旧実装が「欠損=常に通過」というフェイル
+        オープンな挙動になっており、デプロイ当日の旧形式生候補JSON経由で
+        entropyゲートが実質無効化される事故を招いたため修正済み）
+      - wt_overlap_n == 0（◎◯と全く重ならない）: 上記ゲート通過分は全件採用
       - wt_overlap_n == 1（片方だけ重なる）: 上記ゲート通過分を全件採用
         （2026-07-26以前は axis_sum昇順で日次/バッチ上限cap件のみ採用していたが、
         「capを解除した生プールでentropyゲートが機能するか」を検証した結果、
@@ -448,35 +468,45 @@ def s4_daily_select(candidates: list[dict]) -> list[dict]:
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
 
-    件数capが無くなったため、朝夕バッチをまたいだ再選出（旧 s4_evening_reselect の
-    トリム機能）は不要になった。同関数は朝夜の生プールを合算してこのゲートを
-    適用するだけの薄いラッパーとして残す。
+    日次件数の上限（S4_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
+    バッチだけでは日次合計が分からないため）。日次合計への適用は
+    s4_evening_reselect() を参照。
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
     pool = [
         c for c in candidates
         if c["axis_sum"] <= S4_AXIS_SUM_MAX
-        and c.get("entropy", 0.0) <= S4_ENTROPY_MAX
+        and c.get("entropy", float("inf")) <= S4_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
 
-def s4_evening_reselect(day_raw: list[dict], night_raw: list[dict]) -> list[dict]:
-    """S4の朝夜統合選出（2026-07-26改定: 件数capが無いため単純にゲートを適用するだけ）。
+def s4_evening_reselect(
+    day_raw: list[dict], night_raw: list[dict], locked_keys: set[str] = frozenset(),
+) -> list[dict]:
+    """S4の朝夜統合選出（2026-07-26改定: entropyゲート通過後、日次合計を
+    S4_DAILY_CAP件まで entropy昇順（＝最も自信がある順）でトリムする）。
 
     day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s4_select_axis+
-      s4_wt_overlap_n+entropy計算を通した dict のリスト）。
+      s4_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
+    locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
+      race_key の集合。トリムで除外しない（実購入は取り消せないため）。
 
-    件数capの撤廃に伴い「朝が先着で枠を使い切り夜の優良候補を取りこぼす」問題が
-    構造的に発生しなくなったため、旧来のロック考慮トリムは不要（買い判定済み
-    レースが除外される事態自体が起こらない）。s4_daily_select() を朝夜合算プール
-    に適用するだけの処理に簡素化した。
+    S4_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
+    ことから、通常運用ではほぼ発火しない安全網として設計されている
+    （exp_s4_daily_cap_by_entropy.py参照）。
 
     returns 採用された候補のリスト。
     """
-    return s4_daily_select(day_raw + night_raw)
+    pool = s4_daily_select(day_raw + night_raw)
+    locked = [c for c in pool if c.get("race_key") in locked_keys]
+    unlocked = sorted(
+        (c for c in pool if c.get("race_key") not in locked_keys),
+        key=lambda c: c["entropy"])
+    remaining_budget = max(0, S4_DAILY_CAP - len(locked))
+    return locked + unlocked[:remaining_budget]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

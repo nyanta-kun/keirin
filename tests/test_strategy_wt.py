@@ -163,7 +163,8 @@ def test_is_senbatsu():
 # ── S4 entropyゲート・件数cap撤廃（2026-07-26） ─────────────────────────────
 
 from src.strategy_wt import (  # noqa: E402
-    S4_AXIS_SUM_MAX, S4_ENTROPY_MAX, s4_daily_select, s4_evening_reselect, s4_field_entropy,
+    S4_AXIS_SUM_MAX, S4_DAILY_CAP, S4_ENTROPY_MAX, s4_daily_select, s4_evening_reselect,
+    s4_field_entropy,
 )
 
 
@@ -216,6 +217,13 @@ class TestS4DailySelect:
         ]
         assert {c["race_key"] for c in s4_daily_select(cands)} == {"ok"}
 
+    def test_missing_entropy_fails_safe(self):
+        # entropyキー欠損は「常に通過(0.0扱い)」ではなく「常に除外(inf扱い)」。
+        # 2026-07-26に旧形式(entropyフィールド無し)の生候補が誤って全通過した
+        # 事故の再発防止テスト。
+        cands = [{"race_key": "no_entropy", "axis_sum": 0.5, "wt_overlap_n": 0}]
+        assert s4_daily_select(cands) == []
+
     def test_no_count_cap(self):
         # 2026-07-26以前は重なり1候補が件数capで打ち切られていたが、現行は
         # 閾値ゲートを通過した候補は何件でも全件採用される。
@@ -228,17 +236,33 @@ class TestS4DailySelect:
 
 
 class TestS4EveningReselect:
-    def test_merges_day_and_night_without_trimming(self):
+    def test_merges_day_and_night_under_cap(self):
         day = [{"race_key": "d1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
         night = [{"race_key": "n1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
         merged = s4_evening_reselect(day, night)
         assert {c["race_key"] for c in merged} == {"d1", "n1"}
 
-    def test_no_budget_trim_even_with_many_candidates(self):
-        # 旧S4_DAILY_TOP_N=10のようなトリムはもう発生しない
-        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}
+    def test_trims_to_daily_cap_by_entropy_ascending(self):
+        # 2026-07-26再導入: 日次合計がS4_DAILY_CAP(=12)を超える場合のみ
+        # entropy昇順（最も自信がある順）で上位のみ残す。
+        # entropy値は全てゲート(S4_ENTROPY_MAX=1.8329)以下に収める。
+        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1}
                for i in range(8)]
-        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}
+        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (8 + i), "wt_overlap_n": 1}
                  for i in range(8)]
         merged = s4_evening_reselect(day, night)
-        assert len(merged) == 16
+        assert len(merged) == S4_DAILY_CAP
+        kept = {c["race_key"] for c in merged}
+        # entropy 0.00〜0.11（d0..d7, n0..n3）の12件が残り、0.12以降(n4..n7)は落ちる
+        assert kept == {f"d{i}" for i in range(8)} | {f"n{i}" for i in range(4)}
+
+    def test_locked_keys_survive_trim(self):
+        # 既に買い判定済み(bet_amount>0記録済み)のレースはトリムで除外しない
+        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1}
+               for i in range(8)]
+        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (100 + i), "wt_overlap_n": 1}
+                 for i in range(8)]
+        # n7はentropyが最も高く通常なら真っ先に落ちるが、ロック済みなら残る
+        merged = s4_evening_reselect(day, night, locked_keys={"n7"})
+        assert "n7" in {c["race_key"] for c in merged}
+        assert len(merged) == S4_DAILY_CAP

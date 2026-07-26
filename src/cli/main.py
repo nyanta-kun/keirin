@@ -1732,12 +1732,15 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
     # entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
     #   拡散度。オッズ非依存＝朝の時点で計算可能。2026-07-26導入）
-    # 選出 = strategy_wt.s4_daily_select()（2026-07-26改定・件数cap撤廃）
+    # 選出 = strategy_wt.s4_daily_select()（2026-07-26改定・axis_sum/wt_overlap の
+    #   件数capを撤廃しentropy閾値ゲートへ置換）
     #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
     #   axis_sum<=S4_AXIS_SUM_MAX かつ entropy<=S4_ENTROPY_MAX を満たす候補のうち、
     #   重なり0(全く重ならない)・重なり1(片方一致)は件数上限なしで全件採用、
-    #   重なり2(完全一致)は除外する。件数capが無いため朝夕の枠取り合いが発生せず、
-    #   s4_evening_reselect() は朝夜の生プールを合算してこのゲートを適用するだけ。
+    #   重なり2(完全一致)は除外する。この時点（朝または夜どちらか一方のバッチ）
+    #   では日次合計の枠取り合いが起きないため件数capは適用しない。
+    #   s4_evening_reselect() が朝夜の生プールを合算し、日次合計が S4_DAILY_CAP
+    #   （通常運用ではほぼ発火しない安全網）を超える場合のみentropy昇順でトリムする。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
         # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）

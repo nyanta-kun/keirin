@@ -11,12 +11,14 @@ S4 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
   波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
   entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
             拡散度。オッズ非依存。2026-07-26導入）
-  選出 = strategy_wt.s4_daily_select()（2026-07-26改定・件数cap撤廃）:
+  選出 = strategy_wt.s4_evening_reselect()（2026-07-26改定・axis_sum/entropy
+         閾値ゲート＋日次S4_DAILY_CAP件のentropy昇順トリム）:
          軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
          axis_sum<=S4_AXIS_SUM_MAX かつ entropy<=S4_ENTROPY_MAX の
          レース単位閾値ゲートを満たす候補のうち、重なり0(全く重ならない)・
-         重なり1(片方一致)は件数上限なしで全件採用、重なり2(完全一致)・
-         マーク欠損は除外
+         重なり1(片方一致)を採用（重なり2(完全一致)・マーク欠損は除外）。
+         日次合計がS4_DAILY_CAPを超える場合のみentropy昇順で上位のみ残す
+         （honest全期間ではほぼ発火しない安全網）
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。
@@ -43,7 +45,7 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S4_STAKE, s4_daily_select, s4_field_entropy, s4_gate_label, s4_select_axis, s4_wt_overlap_n,
+    S4_STAKE, s4_evening_reselect, s4_field_entropy, s4_gate_label, s4_select_axis, s4_wt_overlap_n,
 )
 
 
@@ -155,17 +157,17 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
 
-    # ── 日次選出: s4_daily_select()（2026-07-26改定・件数cap撤廃・axis_sum/entropy閾値ゲート） ──
+    # ── 日次選出: s4_evening_reselect()（axis_sum/entropy閾値ゲート＋日次S4_DAILY_CAP） ──
     by_day: dict[str, list[dict]] = defaultdict(list)
     for c_ in candidates:
         by_day[c_["race_date"]].append(c_)
 
     rows: list[dict] = []
     for d, day_cands in by_day.items():
-        # 件数capが無いため、本番の朝夕別プロセス+夕方統合(scripts/s4_evening_reselect.py)と
-        # バックフィルの1日一括処理は常に同じ結果になる（閾値ゲートのみのため分割方法に
-        # 依存しない）。
-        for c_ in s4_daily_select(day_cands):
+        # バックフィルはAM/PMバッチ分割を再現しないため、day_raw=day_cands・
+        # night_raw=空リスト・locked_keys=空集合（過去分に「既に買い判定済み」は
+        # 存在しない）で1日分をまとめて処理する。
+        for c_ in s4_evening_reselect(day_cands, [], set()):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
             combos = []
