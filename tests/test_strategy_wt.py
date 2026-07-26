@@ -266,3 +266,11 @@ class TestS4EveningReselect:
         merged = s4_evening_reselect(day, night, locked_keys={"n7"})
         assert "n7" in {c["race_key"] for c in merged}
         assert len(merged) == S4_DAILY_CAP
+
+    def test_locked_keys_survive_even_when_gate_would_reject(self):
+        # 2026-07-26修正: ロック済み候補はentropy欠損等でゲート自体に落ちても保護される
+        # （2026-07-26のデプロイ移行期に実際に起きた「旧形式raw candidatesがentropy
+        # フィールド無し」というケースを想定）。
+        day = [{"race_key": "locked_but_gate_fails", "axis_sum": 999.0, "wt_overlap_n": 0}]
+        merged = s4_evening_reselect(day, [], locked_keys={"locked_but_gate_fails"})
+        assert {c["race_key"] for c in merged} == {"locked_but_gate_fails"}

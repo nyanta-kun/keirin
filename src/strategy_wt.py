@@ -492,7 +492,10 @@ def s4_evening_reselect(
     day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s4_select_axis+
       s4_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
     locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
-      race_key の集合。トリムで除外しない（実購入は取り消せないため）。
+      race_key の集合。ゲート・トリムいずれでも除外しない（実購入は取り消せない
+      ため）。ロック済み候補は s4_daily_select() のゲート判定より前に分離する
+      （2026-07-26修正: ロック済みでもゲート内で先に弾かれれば結果的に未保護に
+      なる抜け穴があったため、ゲート適用前に確定で救済する設計に変更）。
 
     S4_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
     ことから、通常運用ではほぼ発火しない安全網として設計されている
@@ -500,11 +503,10 @@ def s4_evening_reselect(
 
     returns 採用された候補のリスト。
     """
-    pool = s4_daily_select(day_raw + night_raw)
-    locked = [c for c in pool if c.get("race_key") in locked_keys]
-    unlocked = sorted(
-        (c for c in pool if c.get("race_key") not in locked_keys),
-        key=lambda c: c["entropy"])
+    all_raw = day_raw + night_raw
+    locked = [c for c in all_raw if c.get("race_key") in locked_keys]
+    gated = s4_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
+    unlocked = sorted(gated, key=lambda c: c["entropy"])
     remaining_budget = max(0, S4_DAILY_CAP - len(locked))
     return locked + unlocked[:remaining_budget]
 
