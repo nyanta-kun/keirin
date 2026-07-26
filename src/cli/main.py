@@ -1209,7 +1209,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.database import get_connection
     from src.strategy_wt import (
         S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
-        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_overlap_n, ss_policy,
+        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_overlap_n,
+        s9_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1823,6 +1824,82 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(s4_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {s4_path}  (S4候補 {len(s4_candidates)}件/{len(s4_raw_candidates)}件中"
                    f"・波乱度選出/ペーパー検証)")
+
+    # ── S9候補（S4の9車立て版・独立ランク・2026-07-26導入）──
+    # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は
+    # S4と同じ車数非依存の汎用実装（s4_select_axis/s4_field_entropy）を再利用。
+    # 選出 = strategy_wt.s9_daily_select()（entropy<=S9_ENTROPY_MAX ∧ wt_overlap∈{0,1}
+    #   のみ。axis_sum閾値・日次capは9車では未導入＝低ボリュームのため現時点で不要）。
+    # 買い目 = 三連複 軸2車 + 残り7車のいずれか1車（7点・オッズ下限なし）
+    if include_7plus:
+        s9_pm_fallback = None
+        if "prediction_mark" not in df.columns:
+            s9_pm_fallback = {}
+            with get_connection() as conn_s9:
+                for _rk_s9, _fno_s9, _pm_s9 in conn_s9.execute(
+                    "SELECT e.race_key, e.frame_no, e.prediction_mark "
+                    "FROM wt_entries e JOIN wt_races r ON e.race_key = r.race_key "
+                    "WHERE r.race_date = ?", (target_date,)
+                ).fetchall():
+                    if _pm_s9 is not None:
+                        s9_pm_fallback.setdefault(_rk_s9, {})[int(_fno_s9)] = int(_pm_s9)
+
+        s9_candidates = []
+        if "pred_win" in df.columns:
+            for race_key, grp in df.groupby("race_key"):
+                if n_entries_map.get(race_key, 0) != 9:
+                    continue
+                grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
+                if len(grp_sorted) != 9 or grp_sorted["pred_win"].isna().any():
+                    continue
+                if _hour_skip(_hour_of(grp_sorted)):
+                    continue
+                win_probs = {int(r.frame_no): float(r.pred_win)
+                             for r in grp_sorted.itertuples(index=False)}
+                top3_probs = {int(r.frame_no): float(r.pred_prob)
+                              for r in grp_sorted.itertuples(index=False)}
+                sel = s4_select_axis(win_probs, top3_probs)
+                if sel is None:
+                    continue
+                axis1, axis2, axis_sum = sel
+                entropy = s4_field_entropy(top3_probs)
+
+                if s9_pm_fallback is None:
+                    _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
+                              for r in grp_sorted.itertuples(index=False)}
+                else:
+                    _marks = s9_pm_fallback.get(race_key, {})
+                wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
+                wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
+                wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+
+                _class_map_s9 = {int(r.frame_no): r.player_class
+                                  for r in grp_sorted.itertuples(index=False)}
+
+                s9_candidates.append({
+                    "race_key":   race_key,
+                    "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
+                    "race_no":    int(grp_sorted["race_no"].iloc[0]),
+                    "start_time": grp_sorted["start_time"].iloc[0],
+                    "axis1": axis1, "axis2": axis2,
+                    "axis_sum": round(axis_sum, 4),
+                    "entropy": round(entropy, 4),
+                    "wt_overlap_n": wt_overlap_n,
+                    "axis1_class": _class_map_s9.get(axis1),
+                    "axis2_class": _class_map_s9.get(axis2),
+                })
+        else:
+            click.echo("[wt] lgbm_wt_win が見つかりません。S9候補は生成しません。", err=True)
+
+        s9_raw_n = len(s9_candidates)
+        s9_candidates = s9_daily_select(s9_candidates)
+
+        s9_suffix = "_night_s9_candidates.json" if out_stem.endswith("_night") else "_s9_candidates.json"
+        s9_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s9_suffix}"
+        with open(s9_path, "w", encoding="utf-8") as f:
+            json.dump(s9_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s9_path}  (S9候補 {len(s9_candidates)}件/{s9_raw_n}件中"
+                   f"・9車entropy選出/ペーパー検証)")
 
     # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──
     # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の

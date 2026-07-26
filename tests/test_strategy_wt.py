@@ -274,3 +274,37 @@ class TestS4EveningReselect:
         day = [{"race_key": "locked_but_gate_fails", "axis_sum": 999.0, "wt_overlap_n": 0}]
         merged = s4_evening_reselect(day, [], locked_keys={"locked_but_gate_fails"})
         assert {c["race_key"] for c in merged} == {"locked_but_gate_fails"}
+
+
+# ── S9（S4の9車立て版・独立ランク・2026-07-26） ─────────────────────────────
+
+from src.strategy_wt import S9_ENTROPY_MAX, s9_daily_select  # noqa: E402
+
+
+class TestS9DailySelect:
+    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0):
+        return {"race_key": race_key, "axis_sum": axis_sum, "entropy": entropy,
+                "wt_overlap_n": wt_overlap_n}
+
+    def test_overlap0_and_overlap1_pass(self):
+        cands = [self._cand("r1", wt_overlap_n=0), self._cand("r2", wt_overlap_n=1)]
+        assert {c["race_key"] for c in s9_daily_select(cands)} == {"r1", "r2"}
+
+    def test_overlap2_and_none_excluded(self):
+        cands = [self._cand("r1", wt_overlap_n=2), self._cand("r2", wt_overlap_n=None)]
+        assert s9_daily_select(cands) == []
+
+    def test_entropy_gate(self):
+        cands = [
+            self._cand("ok", entropy=S9_ENTROPY_MAX),
+            self._cand("ng", entropy=S9_ENTROPY_MAX + 0.01),
+        ]
+        assert {c["race_key"] for c in s9_daily_select(cands)} == {"ok"}
+
+    def test_missing_entropy_fails_safe(self):
+        cands = [{"race_key": "no_entropy", "axis_sum": 0.5, "wt_overlap_n": 0}]
+        assert s9_daily_select(cands) == []
+
+    def test_no_count_cap(self):
+        cands = [self._cand(f"r{i}", wt_overlap_n=1) for i in range(50)]
+        assert len(s9_daily_select(cands)) == 50
