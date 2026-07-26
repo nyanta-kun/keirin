@@ -189,6 +189,17 @@ S1W_AXIS_WIN_PROB_MAX = 0.50  # 軸の単勝勝率 上限（本命決着＝低�
 S1W_DENY_AXIS_CLASS = {"S1", "A1"}  # 軸級班denyフィルター（2026-07-22新設）
 S1W_STAKE = 100              # 円/点（ペーパー）
 
+# フィールド全体の指数エントロピー上限（2026-07-27導入）。S4/S9で有効だった
+# entropyシグナル（exp_upset_trio30_v2_wt.py等）がS1でも独立に機能するか
+# exp_s1w_entropy_wt.pyで検証: S1w_gate通過済み母集団(n=6,502)で2024Q1のみ
+# entropy下位25%点(=1.7571)を決定→残り9四半期へブラインド適用（真のwalk-forward・
+# 9四半期**全て**で方向一致）:
+#   entropy<=1.7571: n=1,686 的中14.9% ROI454.7%（30倍+的中47/107=44%を独占）
+#   entropy> 1.7571: n=4,203 的中8.5%  ROI71.5%（赤字帯）
+# axis_win_prob<=0.50・軸級班denyとは独立な追加ゲート（S4のentropyがaxis_sumと
+# ほぼ無相関だったのと同型）。
+S1W_ENTROPY_MAX = 1.7571
+
 
 def s1w_select(
     win_probs: dict[int, float], top3_probs: dict[int, float],
@@ -214,7 +225,7 @@ def s1w_select(
 
 def s1w_gate(
     top3_gap: float, axis_win_prob: float | None = None,
-    axis_player_class: str | None = None,
+    axis_player_class: str | None = None, entropy: float | None = None,
 ) -> bool:
     """S1(新設計)のゲート判定。
 
@@ -228,12 +239,19 @@ def s1w_gate(
       （honest全期間: 的中率は変化なし・ROI 138.5%→173.5%・5万円以上配当の
       再現率85.7%を維持しつつ母数を約半分に絞る）。
       axis_player_class=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
+    - entropy（フィールド全体の指数エントロピー）が渡された場合は
+      <= S1W_ENTROPY_MAX も要求（2026-07-27新設。S4/S9で有効だったentropy
+      シグナルがS1でも独立に機能することをexp_s1w_entropy_wt.pyで確認：
+      entropy<=1.7571 ROI454.7% / entropy>1.7571 ROI71.5%）。
+      entropy=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
     """
     if top3_gap < S1W_TOP3_GAP_MIN:
         return False
     if axis_win_prob is not None and axis_win_prob > S1W_AXIS_WIN_PROB_MAX:
         return False
     if axis_player_class is not None and axis_player_class in S1W_DENY_AXIS_CLASS:
+        return False
+    if entropy is not None and entropy > S1W_ENTROPY_MAX:
         return False
     return True
 

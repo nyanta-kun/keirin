@@ -1683,7 +1683,11 @@ def wave_picks_wt(target_date, output_path, model_name,
     # WT◎/システム◎の一致・不一致は問わない。7車全レース対象。
     #   軸 = win model(lgbm_wt_win) レース内1位
     #   相手 = 3着内モデルで軸を除いた残り車の上位2頭(p1,p2)
-    #   ゲート: top3_gap(p1-p2の3着内確率差) >= S1W_TOP3_GAP_MIN
+    #   ゲート: top3_gap(p1-p2の3着内確率差) >= S1W_TOP3_GAP_MIN ∧
+    #     axis_win_prob<=S1W_AXIS_WIN_PROB_MAX ∧ 軸級班denyフィルター ∧
+    #     entropy<=S1W_ENTROPY_MAX（フィールド全体のpred_prob分布拡散度・
+    #     オッズ非依存。2026-07-27導入・S4/S9と同じentropyシグナルがS1でも
+    #     独立に機能することを確認）
     #   買い目: 三連単 軸→p1→p2, 軸→p2→p1 の2点流し（目オッズ下限なし）
     if include_7plus:
         s1_candidates = []
@@ -1707,7 +1711,8 @@ def wave_picks_wt(target_date, output_path, model_name,
                 axis_win_prob = win_probs[axis]
                 _axis_rows = grp_sorted.loc[grp_sorted["frame_no"] == axis, "player_class"]
                 axis_player_class = _axis_rows.iloc[0] if not _axis_rows.empty else None
-                if not s1w_gate(top3_gap, axis_win_prob, axis_player_class):
+                entropy = s4_field_entropy(top3_probs)
+                if not s1w_gate(top3_gap, axis_win_prob, axis_player_class, entropy):
                     continue
                 s1_candidates.append({
                     "race_key":   race_key,
@@ -1716,6 +1721,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "start_time": grp_sorted["start_time"].iloc[0],
                     "top3_gap":   round(top3_gap, 4),
                     "axis_win_prob": round(axis_win_prob, 4),
+                    "entropy":    round(entropy, 4),
                     "axis": axis, "p1": p1, "p2": p2,
                 })
         else:

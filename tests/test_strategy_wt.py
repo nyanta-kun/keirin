@@ -350,3 +350,35 @@ class TestS4WtMark3OverlapN:
     def test_missing_any_mark_returns_none(self):
         assert s4_wt_mark3_overlap_n(1, 2, wt_honmei=1, wt_taikou=2, wt_ana=None) is None
         assert s4_wt_mark3_overlap_n(1, 2, wt_honmei=None, wt_taikou=2, wt_ana=3) is None
+
+
+# ── S1w_gate（win軸1着固定・2026-07-27にentropy条件追加） ───────────────────
+
+from src.strategy_wt import S1W_ENTROPY_MAX, S1W_TOP3_GAP_MIN, s1w_gate  # noqa: E402
+
+
+class TestS1wGate:
+    def test_top3_gap_gate(self):
+        assert s1w_gate(S1W_TOP3_GAP_MIN) is True
+        assert s1w_gate(S1W_TOP3_GAP_MIN - 0.01) is False
+
+    def test_axis_win_prob_gate_optional(self):
+        # axis_win_prob=None（省略時）はこの条件をスキップ
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_win_prob=None) is True
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_win_prob=0.9) is False
+
+    def test_axis_player_class_gate_optional(self):
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_player_class="S1") is False
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_player_class="A2") is True
+
+    def test_entropy_gate(self):
+        # 2026-07-27新設: entropy<=S1W_ENTROPY_MAXを要求。省略時はスキップ。
+        assert s1w_gate(S1W_TOP3_GAP_MIN, entropy=None) is True
+        assert s1w_gate(S1W_TOP3_GAP_MIN, entropy=S1W_ENTROPY_MAX) is True
+        assert s1w_gate(S1W_TOP3_GAP_MIN, entropy=S1W_ENTROPY_MAX + 0.01) is False
+
+    def test_all_gates_combined(self):
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_win_prob=0.3,
+                         axis_player_class="A2", entropy=1.5) is True
+        assert s1w_gate(S1W_TOP3_GAP_MIN, axis_win_prob=0.3,
+                         axis_player_class="A2", entropy=2.0) is False
