@@ -270,7 +270,8 @@ def main():
         text = ""
 
     ss_n = len(picks_by_rank["SS"])  # 旧S1(7PLUS_R)・2026-07-16全廃につき常に0
-    # 新S1（6車三連単）は 2026-07-17 全廃（現行ペーパーランクは S1/S4(SS+/SS/S) のみ）
+    # 新S1（6車三連単）は 2026-07-17 全廃（現行ペーパーランクは S1 / SS+・SS・S(7車)
+    # / S9-SS+・S9-SS・S9-S(9車) のみ。表示ランク名はkiseki Web(page.tsx)と一致させること）
     total = ss_n
 
     md = f"{int(target_date[5:7])}/{int(target_date[8:10])}"
@@ -297,10 +298,11 @@ def main():
             print("[notify_picks] PDF 生成失敗")
 
     # ── ヘッダー送信 ──────────────────────────────────────────────────────────
-    # 2026-07-21〜: 現行ランクは S1/S4(SS+/SS/S) の2ペーパーのみ（S2/S3は全廃）。
+    # 2026-07-27〜: 現行ランクは S1／SS+・SS・S(7車)／S9-SS+・S9-SS・S9-S(9車)（S2/S3は全廃）。
+    # 表示ランク名はWeb（kiseki frontend/src/app/keirin/page.tsx RANK_STYLE）と一致させること。
     header = (
         f"🚲 **{title_label} {target_date}**\n"
-        f"※S1/S4 は発走15分前に個別通知"
+        f"※S1／SS+・SS・S／S9-SS+・S9-SS・S9-S は発走15分前に個別通知"
     )
     send(header, channel="picks")
 

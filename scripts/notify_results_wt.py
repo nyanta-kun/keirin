@@ -1038,9 +1038,9 @@ def _main_inner(date):
 
     print(f"[notify_results_wt] {target_date} "
           f"S1(ペーパー) {len(results_7plus_s1)}R 的中{p7s1h} / "
-          f"S4-SS+(ペーパー) {p7s4sspn}R 的中{p7s4ssph} / "
-          f"S4-SS(ペーパー) {p7s4ssn}R 的中{p7s4ssh} / "
-          f"S4-S(ペーパー) {p7s4sn}R 的中{p7s4sh} / "
+          f"SS+(ペーパー) {p7s4sspn}R 的中{p7s4ssph} / "
+          f"SS(ペーパー) {p7s4ssn}R 的中{p7s4ssh} / "
+          f"S(ペーパー) {p7s4sn}R 的中{p7s4sh} / "
           f"S9(ペーパー) {len(results_s9)}R / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
 
