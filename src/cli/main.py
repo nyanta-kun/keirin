@@ -1209,8 +1209,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.database import get_connection
     from src.strategy_wt import (
         S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
-        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_overlap_n,
-        s9_daily_select, ss_policy,
+        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_mark3_overlap_n,
+        s4_wt_overlap_n, s9_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1784,7 +1784,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     _marks = s4_pm_fallback.get(race_key, {})
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
+                wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
                 wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
@@ -1798,6 +1800,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "axis_sum": round(axis_sum, 4),
                     "entropy": round(entropy, 4),
                     "wt_overlap_n": wt_overlap_n,
+                    "wt_mark3_overlap_n": wt_mark3_overlap_n,
                     "axis1_class": _class_map_s4.get(axis1),
                     "axis2_class": _class_map_s4.get(axis2),
                 })
@@ -1871,7 +1874,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     _marks = s9_pm_fallback.get(race_key, {})
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
+                wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
                 wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _class_map_s9 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
@@ -1885,6 +1890,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "axis_sum": round(axis_sum, 4),
                     "entropy": round(entropy, 4),
                     "wt_overlap_n": wt_overlap_n,
+                    "wt_mark3_overlap_n": wt_mark3_overlap_n,
                     "axis1_class": _class_map_s9.get(axis1),
                     "axis2_class": _class_map_s9.get(axis2),
                 })

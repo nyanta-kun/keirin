@@ -409,6 +409,36 @@ def s4_wt_overlap_n(
     return len({axis1, axis2} & {wt_honmei, wt_taikou})
 
 
+# 2026-07-27: 軸2車がWINTICKET公式印◎◯△（mark1/2/3）のうち2つと一致する場合、
+# 市場人気と重なり払戻が下がりやすいという仮説を検証（exp_s4s9_3mark_overlap_wt.py・
+# S4+S9現行ライブ採用条件と同一母集団・n=2,560）:
+#   軸2車のうち2車が◎◯△のいずれかと一致: n=1,357 ROI182.9%
+#   それ以外                          : n=1,203 ROI434.4%
+# 払戻トップ5は全てこの「2車一致」に該当しない側（overlap3<=1）に集中しており、
+# 「2車一致」側でも黒字(183%)ではあるが明確にROIが低い。ただし軸2車のうち
+# **1車のみ**が◎◯△のいずれかと一致するのは既存のwt_overlap_n==1（S）の定義上
+# 常に発生する（除外しない）。除外対象は軸2車**両方**が◎◯△のいずれかと一致する
+# ケースのみ。既存のwt_overlap_n（◎◯=mark1/2のみで判定・完全一致=2を既に除外）
+# とは独立な追加ゲート（mark3=△も加味）。
+S4_MARK3_OVERLAP_MAX = 1
+
+
+def s4_wt_mark3_overlap_n(
+    axis1: int, axis2: int,
+    wt_honmei: int | None, wt_taikou: int | None, wt_ana: int | None,
+) -> int | None:
+    """S4/S9の軸2車とWINTICKET公式印◎◯△（mark1/2/3・honmei/taikou/ana）との
+    重なり数を返す（s4_wt_overlap_nの◎◯のみの判定に△を加えた拡張版）。
+
+    wt_ana: prediction_mark==3（△）の frame_no。
+    いずれか欠損時は None（判定不能・s4_daily_select/s9_daily_select では
+    フェイルセーフとして除外対象扱いにする）。
+    """
+    if wt_honmei is None or wt_taikou is None or wt_ana is None:
+        return None
+    return len({axis1, axis2} & {wt_honmei, wt_taikou, wt_ana})
+
+
 # S4のSS(重なり0)のうち、軸2車のいずれかが各グレード最上位クラス（S1/A1）だと
 # 配当が下がりやすい傾向を確認（2026-07-23・honest全期間検証）。SSは無制限採用
 # （日次cap無し）のため、S1と異なり「除外→繰り上がり」の副作用がなく単純に
@@ -467,6 +497,10 @@ def s4_daily_select(candidates: list[dict]) -> list[dict]:
         確認したため、件数capそのものを廃止した）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
+      - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が
+        2（軸2車の両方が◎◯△のいずれかと一致）は除外（2026-07-27導入。
+        S4+S9合算honest検証でROI434.4%→182.9%まで低下すると判明。欠損時は
+        フェイルセーフとして2扱い＝除外。詳細はS4_MARK3_OVERLAP_MAX定義部参照）
 
     日次件数の上限（S4_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
     バッチだけでは日次合計が分からないため）。日次合計への適用は
@@ -479,6 +513,7 @@ def s4_daily_select(candidates: list[dict]) -> list[dict]:
         if c["axis_sum"] <= S4_AXIS_SUM_MAX
         and c.get("entropy", float("inf")) <= S4_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
+        and c.get("wt_mark3_overlap_n", 2) <= S4_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
@@ -560,6 +595,8 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
         上記ゲート通過分を全件採用（件数capなし。S9は元々低ボリュームのため
         S4のようなS9_DAILY_CAP安全網は現時点で不要と判断）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
+      - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が2は
+        除外（2026-07-27導入・S4と共通のゲート。詳細はS4_MARK3_OVERLAP_MAX参照）
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
@@ -567,6 +604,7 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
         c for c in candidates
         if c.get("entropy", float("inf")) <= S9_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
+        and c.get("wt_mark3_overlap_n", 2) <= S4_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 

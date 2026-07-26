@@ -164,7 +164,7 @@ def test_is_senbatsu():
 
 from src.strategy_wt import (  # noqa: E402
     S4_AXIS_SUM_MAX, S4_DAILY_CAP, S4_ENTROPY_MAX, s4_daily_select, s4_evening_reselect,
-    s4_field_entropy,
+    s4_field_entropy, s4_wt_mark3_overlap_n,
 )
 
 
@@ -185,9 +185,9 @@ class TestS4FieldEntropy:
 
 
 class TestS4DailySelect:
-    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0):
+    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0, wt_mark3_overlap_n=0):
         return {"race_key": race_key, "axis_sum": axis_sum, "entropy": entropy,
-                "wt_overlap_n": wt_overlap_n}
+                "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n}
 
     def test_overlap0_and_overlap1_pass_gates(self):
         cands = [
@@ -234,11 +234,25 @@ class TestS4DailySelect:
         cands = [self._cand("b", axis_sum=0.9), self._cand("a", axis_sum=0.5)]
         assert [c["race_key"] for c in s4_daily_select(cands)] == ["a", "b"]
 
+    def test_mark3_overlap_gate(self):
+        # 2026-07-27導入: 軸2車の両方が◎◯△(mark1/2/3)のいずれかと一致(=2)は除外
+        cands = [
+            self._cand("ok0", wt_mark3_overlap_n=0),
+            self._cand("ok1", wt_mark3_overlap_n=1),
+            self._cand("ng2", wt_mark3_overlap_n=2),
+        ]
+        assert {c["race_key"] for c in s4_daily_select(cands)} == {"ok0", "ok1"}
+
+    def test_missing_mark3_overlap_fails_safe(self):
+        # wt_mark3_overlap_nキー欠損は2扱い(除外)。entropyの欠損フェイルセーフと同じ設計。
+        cands = [{"race_key": "no_mark3", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 0}]
+        assert s4_daily_select(cands) == []
+
 
 class TestS4EveningReselect:
     def test_merges_day_and_night_under_cap(self):
-        day = [{"race_key": "d1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
-        night = [{"race_key": "n1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
+        day = [{"race_key": "d1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}]
+        night = [{"race_key": "n1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}]
         merged = s4_evening_reselect(day, night)
         assert {c["race_key"] for c in merged} == {"d1", "n1"}
 
@@ -246,9 +260,9 @@ class TestS4EveningReselect:
         # 2026-07-26再導入: 日次合計がS4_DAILY_CAP(=12)を超える場合のみ
         # entropy昇順（最も自信がある順）で上位のみ残す。
         # entropy値は全てゲート(S4_ENTROPY_MAX=1.8329)以下に収める。
-        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1}
+        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                for i in range(8)]
-        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (8 + i), "wt_overlap_n": 1}
+        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (8 + i), "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                  for i in range(8)]
         merged = s4_evening_reselect(day, night)
         assert len(merged) == S4_DAILY_CAP
@@ -258,9 +272,9 @@ class TestS4EveningReselect:
 
     def test_locked_keys_survive_trim(self):
         # 既に買い判定済み(bet_amount>0記録済み)のレースはトリムで除外しない
-        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1}
+        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                for i in range(8)]
-        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (100 + i), "wt_overlap_n": 1}
+        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (100 + i), "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                  for i in range(8)]
         # n7はentropyが最も高く通常なら真っ先に落ちるが、ロック済みなら残る
         merged = s4_evening_reselect(day, night, locked_keys={"n7"})
@@ -282,9 +296,9 @@ from src.strategy_wt import S9_ENTROPY_MAX, s9_daily_select  # noqa: E402
 
 
 class TestS9DailySelect:
-    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0):
+    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0, wt_mark3_overlap_n=0):
         return {"race_key": race_key, "axis_sum": axis_sum, "entropy": entropy,
-                "wt_overlap_n": wt_overlap_n}
+                "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n}
 
     def test_overlap0_and_overlap1_pass(self):
         cands = [self._cand("r1", wt_overlap_n=0), self._cand("r2", wt_overlap_n=1)]
@@ -308,3 +322,31 @@ class TestS9DailySelect:
     def test_no_count_cap(self):
         cands = [self._cand(f"r{i}", wt_overlap_n=1) for i in range(50)]
         assert len(s9_daily_select(cands)) == 50
+
+    def test_mark3_overlap_gate(self):
+        cands = [
+            self._cand("ok0", wt_mark3_overlap_n=0),
+            self._cand("ok1", wt_mark3_overlap_n=1),
+            self._cand("ng2", wt_mark3_overlap_n=2),
+        ]
+        assert {c["race_key"] for c in s9_daily_select(cands)} == {"ok0", "ok1"}
+
+    def test_missing_mark3_overlap_fails_safe(self):
+        cands = [{"race_key": "no_mark3", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 0}]
+        assert s9_daily_select(cands) == []
+
+
+class TestS4WtMark3OverlapN:
+    def test_both_axis_match_marks(self):
+        # axis1=◎(mark1相当) axis2=△(mark3相当) → 2車ともマッチ=2
+        assert s4_wt_mark3_overlap_n(1, 3, wt_honmei=1, wt_taikou=2, wt_ana=3) == 2
+
+    def test_one_axis_matches(self):
+        assert s4_wt_mark3_overlap_n(1, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 1
+
+    def test_no_axis_matches(self):
+        assert s4_wt_mark3_overlap_n(8, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 0
+
+    def test_missing_any_mark_returns_none(self):
+        assert s4_wt_mark3_overlap_n(1, 2, wt_honmei=1, wt_taikou=2, wt_ana=None) is None
+        assert s4_wt_mark3_overlap_n(1, 2, wt_honmei=None, wt_taikou=2, wt_ana=3) is None

@@ -45,7 +45,8 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S4_STAKE, s4_evening_reselect, s4_field_entropy, s4_gate_label, s4_select_axis, s4_wt_overlap_n,
+    S4_STAKE, s4_evening_reselect, s4_field_entropy, s4_gate_label, s4_select_axis,
+    s4_wt_mark3_overlap_n, s4_wt_overlap_n,
 )
 
 
@@ -147,13 +148,15 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         mk = marks.get(rk, {})
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
+        wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
         wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
             "others": others, "trio": trio, "actual_top3": actual_top3,
-            "wt_overlap_n": wt_overlap_n,
+            "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
             "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
 
