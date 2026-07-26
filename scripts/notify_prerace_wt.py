@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    S1W_STAKE, S1W_TOP3_GAP_MIN, S4_STAKE, SS_STAKE,
+    S1W_STAKE, S1W_TOP3_GAP_MIN, S4_STAKE, S9_STAKE, SS_STAKE,
     line_score_features, s4_gate_label, ss_policy,
 )
 
@@ -894,6 +894,242 @@ def _process_s4_candidates(today: str, now_unix: int, notified: set[str]) -> tup
     return messages, newly_done
 
 
+def judge_s9(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+    """S9（S4の9車立て版）の発走前ライブオッズ判定（純関数・DB非依存）。
+
+    judge_s4 の9車版（盤面判定が9車・買い目が残り7車流し=7点になる点のみ異なる）。
+    """
+    detail: dict = {"axis1": None, "axis2": None, "combos": [], "leg_odds": {}, "skip_reason": None}
+    try:
+        axis1 = int(cand["axis1"])
+        axis2 = int(cand["axis2"])
+    except (KeyError, TypeError, ValueError):
+        detail["skip_reason"] = "候補情報不正"
+        return "skip", detail
+    detail["axis1"] = axis1
+    detail["axis2"] = axis2
+
+    if not trio_lookup:
+        return "不明", detail
+
+    valid: dict[frozenset, float] = {}
+    for k, ov in trio_lookup.items():
+        try:
+            fv = float(ov)
+        except (TypeError, ValueError):
+            continue
+        if 0 < fv < 9000:
+            valid[k] = fv
+    if not valid:
+        return "不明", detail
+
+    board: set[int] = set()
+    for k in valid:
+        board |= set(k)
+
+    if len(board) != 9:
+        detail["skip_reason"] = f"盤面{len(board)}車（欠車）"
+        return "skip", detail
+
+    if axis1 not in board or axis2 not in board:
+        detail["skip_reason"] = "軸が盤面に不在"
+        return "skip", detail
+
+    leg_odds: dict[str, float | None] = {}
+    combos: list[str] = []
+    for t in sorted(board - {axis1, axis2}):
+        label = "-".join(map(str, sorted((axis1, axis2, t))))
+        ov = valid.get(frozenset({axis1, axis2, t}))
+        leg_odds[label] = ov
+        if ov is not None:
+            combos.append(label)
+    detail["leg_odds"] = leg_odds
+    detail["combos"] = combos
+    if not combos:
+        detail["skip_reason"] = "対象目のオッズなし"
+        return "skip", detail
+
+    return "buy", detail
+
+
+def _load_s9_candidates(today: str) -> list[dict]:
+    """当日のS9候補 JSON（昼 + 夜）を読み込む。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s9_candidates.json",
+                  f"wave_picks_wt_{today}_night_s9_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("S9候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
+
+
+def _insert_s9_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
+                     gate_label: str | None = None) -> None:
+    """S9（9車entropy選出・ペーパー）の記録行 {base}#9S9 を picks_history に即時反映する。
+
+    _insert_s4_pick の9車版（rank='NINE_S9'・race_key末尾#9S9・S9_STAKE）。
+    """
+    store_key = race_key + "#9S9"
+    bet = n_combos * S9_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False,?)",
+                (race_date, store_key, "NINE_S9", pred_combo, n_combos, bet, gate_label),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("S9 pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE,%s) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE, "
+                        "gate_label=EXCLUDED.gate_label",
+                        (race_date, store_key, "NINE_S9", pred_combo, n_combos, bet, gate_label),
+                    )
+        except Exception as e:
+            logger.warning("S9 pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_s9_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
+    """S9（9車entropy選出・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1 = detail.get("axis1")
+    axis2 = detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    axis_sum = cand.get("axis_sum")
+    axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    label = f"S9-{gate_label}" if gate_label else "S9"
+    label_desc = {
+        "SS+": "WT◎◯と軸2車が全く重ならない・軸に格上クラスなし",
+        "SS": "WT◎◯と軸2車が全く重ならない",
+        "S": "WT◎◯と軸2車が片方だけ重なる",
+    }.get(gate_label, "")
+    return (
+        f"🎲 **[{label}]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
+        + (f"（{label_desc}）" if label_desc else "") + "\n"
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S9_STAKE:,}円): "
+        f"`{axis1}={axis2}流し`\n"
+        f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """S9候補の発走前判定・記録・通知メッセージ生成（_process_s4_candidates の9車版）。
+
+    returns (messages, newly_done)
+      messages:   [(s9_key, msg)]（buy 成立分のみ）
+      newly_done: 処理完了キー {race_key}#S9 の集合（オッズ取得失敗は含めない=再試行）
+    """
+    cands = _load_s9_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#S9" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 9:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        s9_key = f"{rk}#S9"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(S9) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} S9候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_s9(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} S9候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        wt_overlap_n = cand.get("wt_overlap_n")
+        gate_label = s4_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
+
+        _save_decision(today, s9_key, {
+            "decision": decision,
+            "rank": "NINE_S9",
+            "paper": True,
+            "stake": S9_STAKE,
+            "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": wt_overlap_n,
+            "gate_label": gate_label,
+            **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_s9_pick(rk, today, pred, len(combos), gate_label)
+            messages.append((s9_key, _build_s9_message(cand, ri, detail, gate_label)))
+            print(f"[prerace] {rk} S9候補 → buy（ペーパー・{len(combos)}点・{gate_label}）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#9S9")  # 候補行をオッズ見送り表示に更新
+            print(f"[prerace] {rk} S9候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(s9_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 
 def _mark_paper_miwokuri(race_key: str, suffix: str) -> None:
     """ペーパー候補行（{rk}#7U/#7M/#7A・bet_amount=0）をオッズ見送りに更新する。
@@ -1448,6 +1684,15 @@ def main():
         newly_done |= s4_done
     except Exception as e:
         logger.exception("S4候補処理失敗（SS/U/M/S1通知には影響しない）: %s", e)
+
+    # ── S9候補（S4の9車立て版・独立ランク・ペーパー）処理 ────────────────────
+    # 2026-07-26導入。S4等との重複排除はない（独立戦略・車数も異なる）。
+    try:
+        s9_messages, s9_done = _process_s9_candidates(today, now_unix, notified)
+        messages += s9_messages
+        newly_done |= s9_done
+    except Exception as e:
+        logger.exception("S9候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # 旧A候補・旧S1候補（6車三連単）の処理は 2026-07-17 全廃
 
