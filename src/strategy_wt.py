@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 # TRAIN(2023-07-01〜2026-02-28) の top3_sum 四分位カット（既定値＝コミット済フォールバック）。
@@ -281,10 +282,6 @@ def s1w_gate(
 # ═══════════════════════════════════════════════════════════════════════════
 
 S4_NE = 7                  # 対象車数（7車ちょうど）
-S4_DAILY_TOP_N = 10        # 重なり1（片方一致）候補の1日あたり最終固定採用件数（axis_sum昇順）
-                           # 2026-07-21: 「N件」の意味が変更された（旧: 全候補中の上位N件 →
-                           # 新: 重なり0は別枠で全件採用・本値は重なり1のみに適用する固定枠）
-S4_HALF_CAP = 6            # 朝/夜それぞれの生候補プールからの一次選出上限（重なり1のみ・2026-07-22新設）
 S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 
 # 三連複が安くなりやすい（極端な人気決着になりやすい）レースの除外上限
@@ -304,6 +301,48 @@ S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 # 重なり0(SS/SS+)はcap無しのため単純カット、重なり1(S)はaxis_sum昇順選出後の
 # 末尾が削れるだけで繰り上がり由来のROI悪化は発生しない）。
 S4_AXIS_SUM_MAX = 1.3
+
+# フィールド全体の指数エントロピー上限（2026-07-26・ユーザー要望「30倍以上の
+# 高配当が見込めるレースに絞りたい」への対応。exp_upset_trio30_v2_wt.py /
+# exp_s4_entropy_walkforward.py / exp_s4_entropy_uncapped_wt.py 参照）。
+#
+# 注意: 2026-07-21のS4設計時点では「レース全体のエントロピーで絞るとROIが
+# 悪化する（絞り込みなし85.7%→73.5%）」という逆方向（entropy**高い**ほど波乱＝
+# 採用、旧Uランクu_entropyと同じ発想でaxis_sumの代替ランキング基準として試行）
+# の検証結果が残っているが、本フィルタはそれとは別物: **低い**entropy
+# （軸2車に予測確率が集中＝残り5車が拮抗）を、axis_sum/wt_overlap等の既存ゲート
+# を通過した候補への**追加ゲート**として使う。方向も用途も異なるため矛盾しない。
+#
+# 検証（2026-07-26・quarterly walk-forwardモデルの pred_prob のみ使用＝発走前
+# 確定情報のみ・オッズ非依存）: 2024Q1(n=1125, 件数cap解除後の生プール)の
+# entropy下位25%点(=1.8329)だけを閾値として固定し、2024Q2〜2026Q2-3の残り
+# 7四半期へブラインド適用（真のwalk-forward・8四半期全てで方向一致）:
+#   entropy<=1.8329: n=1,617 的中38.2% ROI266.1%（30倍+的中187/252件=74%を独占）
+#   entropy> 1.8329: n=2,605 的中29.9% ROI 78.1%（構造的な赤字帯）
+#   フィルタなし全体: n=4,222 的中33.1% ROI150.1%
+# 同数条件での比較（axis_sum昇順で同じ件数を採用した場合）でも、entropy選定は
+# 7四半期中6四半期で明確に上回り、残り1四半期も同水準（axis_sumの代替ではなく
+# 独立した追加情報。spearman相関≈-0.08で axis_sum とはほぼ無相関）。
+# 採用ペースは平均2.56件/日（S4_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
+S4_ENTROPY_MAX = 1.8329
+
+
+def s4_field_entropy(top3_probs: dict[int, float]) -> float:
+    """レース全体（出走7車）の指数エントロピー（占有率ベースの拮抗度）を返す。
+
+    top3_probs: {frame_no: pred_prob}（s4_select_axis と同じ入力）。
+    値が低いほど予測確率が一部の車（主に軸2車）に集中している状態。
+    オッズを一切使わないため、発走前・オッズ非公開の朝の時点でも計算可能。
+    """
+    vals = list(top3_probs.values())
+    total = sum(vals)
+    if total <= 0:
+        return 0.0
+    ent = 0.0
+    for v in vals:
+        s = max(v / total, 1e-9)
+        ent -= s * math.log(s)
+    return ent
 
 
 def s4_select_axis(
@@ -387,74 +426,57 @@ def s4_gate_label(
     return None
 
 
-def s4_daily_select(candidates: list[dict], cap: int = S4_HALF_CAP) -> list[dict]:
-    """S4の一次選出（朝または夜、片方のバッチ内での選出・2026-07-22改定）。
+def s4_daily_select(candidates: list[dict]) -> list[dict]:
+    """S4の選出（2026-07-26改定: 件数capを撤廃しentropyゲートへ置換）。
 
-    candidates: 同一バッチ（朝races または 夜races）の候補レースのリスト。
-      各要素は最低限 {"axis_sum": float, "wt_overlap_n": int | None} を持つ dict。
+    candidates: 候補レースのリスト。各要素は最低限
+      {"axis_sum": float, "wt_overlap_n": int | None, "entropy": float} を持つ dict。
 
-    選出ロジック:
-      - wt_overlap_n == 0（◎◯と全く重ならない）: 該当があれば無条件で全件採用
-        （的中率は変わらずROIを押し上げる区分のため最優先・本数上限なし）
-      - wt_overlap_n == 1（片方だけ重なる）: axis_sum昇順で上位 cap 件を採用
+    選出ロジック（全て閾値ゲート。件数による打ち切りは行わない）:
+      - axis_sum > S4_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
+        想定レース）は除外（2026-07-24導入）
+      - entropy > S4_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
+        いない）は除外（2026-07-26導入。低いentropy＝軸2車に予測確率が集中し
+        残り5車が拮抗、という状態が三連複高配当の的中と強く相関することを
+        2024-2026の8四半期walk-forwardで確認。詳細はS4_ENTROPY_MAX定義部参照）
+      - wt_overlap_n == 0（◎◯と全く重ならない）: 上記ゲート通過分は無条件で全件採用
+      - wt_overlap_n == 1（片方だけ重なる）: 上記ゲート通過分を全件採用
+        （2026-07-26以前は axis_sum昇順で日次/バッチ上限cap件のみ採用していたが、
+        「capを解除した生プールでentropyゲートが機能するか」を検証した結果、
+        cap無しでentropyゲート単体の方が同数条件のaxis_sum選定より優れることを
+        確認したため、件数capそのものを廃止した）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
-      - axis_sum > S4_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
-        想定レース）は上記いずれの区分でも除外（2026-07-24導入。次点繰り上げなし）
 
-    2026-07-21〜07-22の変遷: 当初は日次上限をそのままバッチ単位に適用していたが、
-    朝夕2回が独立にTOP_N件ずつ選ぶと1日で最大20件になるバグを発見（07-21）。
-    「朝が先着で枠を使い切り、夜の優良候補を取りこぼす」というユーザー指摘を受け、
-    朝夕それぞれの一次選出をS4_HALF_CAP(=6)件に縮小し、夕方バッチで
-    s4_evening_reselect() により朝夜合算のaxis_sumランキングへ組み直す方式へ
-    07-22に再設計した（honest全期間バックテストでROI120.8%・理論上限120.6%と
-    ほぼ同等・選出一致率89.5%を確認）。
+    件数capが無くなったため、朝夕バッチをまたいだ再選出（旧 s4_evening_reselect の
+    トリム機能）は不要になった。同関数は朝夜の生プールを合算してこのゲートを
+    適用するだけの薄いラッパーとして残す。
 
-    cap: 重なり1の一次選出上限。朝夕バッチでは既定のS4_HALF_CAP(6)を使う。
-
-    returns 採用された候補のリスト（重なり0が前・重なり1がaxis_sum昇順で続く）。
+    returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
-    pool = [c for c in candidates if c["axis_sum"] <= S4_AXIS_SUM_MAX]
-    tier0 = [c for c in pool if c.get("wt_overlap_n") == 0]
-    tier1 = sorted(
-        (c for c in pool if c.get("wt_overlap_n") == 1),
-        key=lambda c: c["axis_sum"])
-    return tier0 + tier1[:cap]
+    pool = [
+        c for c in candidates
+        if c["axis_sum"] <= S4_AXIS_SUM_MAX
+        and c.get("entropy", 0.0) <= S4_ENTROPY_MAX
+        and c.get("wt_overlap_n") in (0, 1)
+    ]
+    return sorted(pool, key=lambda c: c["axis_sum"])
 
 
-def s4_evening_reselect(
-    day_raw: list[dict], night_raw: list[dict], locked_keys: set[str],
-) -> list[dict]:
-    """S4の夕方最終選出（朝夜統合→ロック考慮で日次S4_DAILY_TOP_N件へトリム・2026-07-22新設）。
+def s4_evening_reselect(day_raw: list[dict], night_raw: list[dict]) -> list[dict]:
+    """S4の朝夜統合選出（2026-07-26改定: 件数capが無いため単純にゲートを適用するだけ）。
 
     day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s4_select_axis+
-      s4_wt_overlap_n を通した dict のリスト。各要素に "race_key" キーが必要）。
-    locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
-      race_key の集合。この夕方の組み直しでは変更しない（実購入は取り消せないため）。
+      s4_wt_overlap_n+entropy計算を通した dict のリスト）。
 
-    手順:
-      1. 朝夜それぞれの生候補（重なり1のみ）から s4_daily_select() でS4_HALF_CAP件ずつ
-         一次選出し、最大12件の統合プールを作る（重なり0は別枠で無条件採用のまま）。
-      2. 統合プールのうちロック済み（既に買い判定済み）のものは無条件で残す。
-      3. 残り（未判定）はaxis_sum昇順で、日次合計が S4_DAILY_TOP_N 件に収まる範囲だけ
-         採用し、それ以外は候補から外す（次点繰り上げなし＝質で足切り）。
+    件数capの撤廃に伴い「朝が先着で枠を使い切り夜の優良候補を取りこぼす」問題が
+    構造的に発生しなくなったため、旧来のロック考慮トリムは不要（買い判定済み
+    レースが除外される事態自体が起こらない）。s4_daily_select() を朝夜合算プール
+    に適用するだけの処理に簡素化した。
 
-    returns 最終採用候補のリスト（重なり0全件 + 重なり1の最終選出）。
+    returns 採用された候補のリスト。
     """
-    day_sel = s4_daily_select(day_raw, cap=S4_HALF_CAP)
-    night_sel = s4_daily_select(night_raw, cap=S4_HALF_CAP)
-
-    tier0 = [c for c in day_sel + night_sel if c.get("wt_overlap_n") == 0]
-    tier1_union = [c for c in day_sel + night_sel if c.get("wt_overlap_n") == 1]
-
-    locked = [c for c in tier1_union if c.get("race_key") in locked_keys]
-    unlocked = sorted(
-        (c for c in tier1_union if c.get("race_key") not in locked_keys),
-        key=lambda c: c["axis_sum"])
-    remaining_budget = max(0, S4_DAILY_TOP_N - len(locked))
-    tier1_final = locked + unlocked[:remaining_budget]
-
-    return tier0 + tier1_final
+    return s4_daily_select(day_raw + night_raw)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

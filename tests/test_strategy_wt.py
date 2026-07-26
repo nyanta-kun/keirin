@@ -158,3 +158,87 @@ def test_is_senbatsu():
     assert not is_senbatsu("Ａ級特選")  # 特選は選抜ではない
     assert not is_senbatsu("Ａ級一般")
     assert not is_senbatsu(None)
+
+
+# ── S4 entropyゲート・件数cap撤廃（2026-07-26） ─────────────────────────────
+
+from src.strategy_wt import (  # noqa: E402
+    S4_AXIS_SUM_MAX, S4_ENTROPY_MAX, s4_daily_select, s4_evening_reselect, s4_field_entropy,
+)
+
+
+class TestS4FieldEntropy:
+    def test_concentrated_distribution_low_entropy(self):
+        # 1車に確率が集中 → entropyはほぼ0
+        probs = {1: 1.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0}
+        assert s4_field_entropy(probs) < 0.01
+
+    def test_uniform_distribution_max_entropy(self):
+        # 7車均等 → entropy = ln(7)
+        import math
+        probs = {i: 1.0 for i in range(1, 8)}
+        assert s4_field_entropy(probs) == pytest.approx(math.log(7), abs=1e-6)
+
+    def test_zero_total_returns_zero(self):
+        assert s4_field_entropy({1: 0.0, 2: 0.0}) == 0.0
+
+
+class TestS4DailySelect:
+    def _cand(self, race_key, axis_sum=1.0, entropy=1.0, wt_overlap_n=0):
+        return {"race_key": race_key, "axis_sum": axis_sum, "entropy": entropy,
+                "wt_overlap_n": wt_overlap_n}
+
+    def test_overlap0_and_overlap1_pass_gates(self):
+        cands = [
+            self._cand("r1", wt_overlap_n=0),
+            self._cand("r2", wt_overlap_n=1),
+        ]
+        assert {c["race_key"] for c in s4_daily_select(cands)} == {"r1", "r2"}
+
+    def test_overlap2_and_none_excluded(self):
+        cands = [
+            self._cand("r1", wt_overlap_n=2),
+            self._cand("r2", wt_overlap_n=None),
+        ]
+        assert s4_daily_select(cands) == []
+
+    def test_axis_sum_gate(self):
+        cands = [
+            self._cand("ok", axis_sum=S4_AXIS_SUM_MAX),
+            self._cand("ng", axis_sum=S4_AXIS_SUM_MAX + 0.01),
+        ]
+        assert {c["race_key"] for c in s4_daily_select(cands)} == {"ok"}
+
+    def test_entropy_gate(self):
+        cands = [
+            self._cand("ok", entropy=S4_ENTROPY_MAX),
+            self._cand("ng", entropy=S4_ENTROPY_MAX + 0.01),
+        ]
+        assert {c["race_key"] for c in s4_daily_select(cands)} == {"ok"}
+
+    def test_no_count_cap(self):
+        # 2026-07-26以前は重なり1候補が件数capで打ち切られていたが、現行は
+        # 閾値ゲートを通過した候補は何件でも全件採用される。
+        cands = [self._cand(f"r{i}", wt_overlap_n=1) for i in range(50)]
+        assert len(s4_daily_select(cands)) == 50
+
+    def test_sorted_by_axis_sum(self):
+        cands = [self._cand("b", axis_sum=0.9), self._cand("a", axis_sum=0.5)]
+        assert [c["race_key"] for c in s4_daily_select(cands)] == ["a", "b"]
+
+
+class TestS4EveningReselect:
+    def test_merges_day_and_night_without_trimming(self):
+        day = [{"race_key": "d1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
+        night = [{"race_key": "n1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}]
+        merged = s4_evening_reselect(day, night)
+        assert {c["race_key"] for c in merged} == {"d1", "n1"}
+
+    def test_no_budget_trim_even_with_many_candidates(self):
+        # 旧S4_DAILY_TOP_N=10のようなトリムはもう発生しない
+        day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}
+               for i in range(8)]
+        night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1}
+                 for i in range(8)]
+        merged = s4_evening_reselect(day, night)
+        assert len(merged) == 16

@@ -1209,7 +1209,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.database import get_connection
     from src.strategy_wt import (
         S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
-        s1w_select, s4_daily_select, s4_select_axis, s4_wt_overlap_n, ss_policy,
+        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_overlap_n, ss_policy,
     )
     from pathlib import Path
 
@@ -1730,14 +1730,14 @@ def wave_picks_wt(target_date, output_path, model_name,
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
     #         strategy_wt.s4_select_axis() で選定
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-    # 一次選出 = strategy_wt.s4_daily_select()（WT◎◯重なり考慮版・バッチ単位選出）
+    # entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
+    #   拡散度。オッズ非依存＝朝の時点で計算可能。2026-07-26導入）
+    # 選出 = strategy_wt.s4_daily_select()（2026-07-26改定・件数cap撤廃）
     #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
-    #   重なり0(全く重ならない)は無条件で全件採用、重なり1(片方一致)は
-    #   axis_sum昇順で上位S4_HALF_CAP件、重なり2(完全一致)は除外する。
-    # 最終選出 = 2026-07-22〜: 朝夕それぞれで上記の一次選出を行った後、夕方バッチで
-    #   scripts/s4_evening_reselect.py が朝夜の生候補を統合し、既に買い判定済みの
-    #   レースは維持したまま日次合計S4_DAILY_TOP_N件へ組み直す（朝の先着で
-    #   夜の優良候補を取りこぼす問題への対処）。
+    #   axis_sum<=S4_AXIS_SUM_MAX かつ entropy<=S4_ENTROPY_MAX を満たす候補のうち、
+    #   重なり0(全く重ならない)・重なり1(片方一致)は件数上限なしで全件採用、
+    #   重なり2(完全一致)は除外する。件数capが無いため朝夕の枠取り合いが発生せず、
+    #   s4_evening_reselect() は朝夜の生プールを合算してこのゲートを適用するだけ。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
         # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
@@ -1771,6 +1771,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
+                entropy = s4_field_entropy(top3_probs)
 
                 if s4_pm_fallback is None:
                     _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
@@ -1791,6 +1792,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "start_time": grp_sorted["start_time"].iloc[0],
                     "axis1": axis1, "axis2": axis2,
                     "axis_sum": round(axis_sum, 4),
+                    "entropy": round(entropy, 4),
                     "wt_overlap_n": wt_overlap_n,
                     "axis1_class": _class_map_s4.get(axis1),
                     "axis2_class": _class_map_s4.get(axis2),
@@ -1798,10 +1800,10 @@ def wave_picks_wt(target_date, output_path, model_name,
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
 
-        # 2026-07-22再設計: 朝夕それぞれの生候補プールから一次選出（重なり0は全件・
-        # 重なり1はaxis_sum昇順でS4_HALF_CAP件）。夕方バッチ実行後、
-        # scripts/s4_evening_reselect.py が朝夜の生候補を統合して日次S4_DAILY_TOP_N件へ
-        # 組み直す（先着順による取りこぼしを解消するため、生候補も別途保存する）。
+        # 2026-07-26再設計: 件数capを撤廃したためこの時点の s4_daily_select() 適用結果が
+        # そのまま最終候補になる（朝夕の枠取り合いが発生しないため先着問題も解消）。
+        # 生候補も別途保存する（scripts/s4_evening_reselect.py が朝夜の生プールを
+        # 合算してゲートを再適用する処理は引き続き行うが、単純併合になった）。
         is_night = out_stem.endswith("_night")
         s4_raw_path = Path(output_path).parent / (
             f"wave_picks_wt_{target_date}_night_s4_raw_candidates.json" if is_night
