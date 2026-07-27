@@ -38,7 +38,7 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    S1W_STAKE, S1W_TOP3_GAP_MIN, S7_STAKE, S9_STAKE, SS_STAKE,
+    S1W_STAKE, S1W_TOP3_GAP_MIN, S7_STAKE, S7A_STAKE, S9_STAKE, S9A_STAKE, SS_STAKE,
     line_score_features, s7_gate_label, ss_policy,
 )
 
@@ -1130,6 +1130,323 @@ def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tup
     return messages, newly_done
 
 
+# ── 7A/9A（S7/S9の境界ランク・3ゲート/2ゲート中1つだけ不合格・2026-07-27導入） ──
+# 盤面判定・買い目構成のロジックは車数依存部分のみで、S7/S9本体と全く同一
+# （軸2車+残り流し）のため judge_s7()/judge_s9() をそのまま再利用する。
+
+def _load_s7a_candidates(today: str) -> list[dict]:
+    """当日の7A候補 JSON（昼 + 夜）を読み込む。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s7a_candidates.json",
+                  f"wave_picks_wt_{today}_night_s7a_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("7A候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
+
+
+def _insert_s7a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """7A（境界ランク・ペーパー）の記録行 {base}#7A を picks_history に即時反映する。
+
+    _insert_s7_pick の7A版（rank='SEVEN_7A'・race_key末尾#7A・S7A_STAKE・gate_labelなし）。
+    """
+    store_key = race_key + "#7A"
+    bet = n_combos * S7A_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "SEVEN_7A", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("7A pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "SEVEN_7A", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("7A pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_s7a_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """7A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1 = detail.get("axis1")
+    axis2 = detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    axis_sum = cand.get("axis_sum")
+    axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    return (
+        f"🎲 **[7A]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
+        f"（S7の境界ランク・3ゲート中1つだけ不合格）\n"
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S7A_STAKE:,}円): "
+        f"`{axis1}={axis2}流し`\n"
+        f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_s7a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """7A候補の発走前判定・記録・通知メッセージ生成（_process_s7_candidates の7A版）。"""
+    cands = _load_s7a_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#7A" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        s7a_key = f"{rk}#7A"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(7A) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} 7A候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_s7(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} 7A候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        _save_decision(today, s7a_key, {
+            "decision": decision, "rank": "SEVEN_7A", "paper": True,
+            "stake": S7A_STAKE, "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_s7a_pick(rk, today, pred, len(combos))
+            messages.append((s7a_key, _build_s7a_message(cand, ri, detail)))
+            print(f"[prerace] {rk} 7A候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#7A")
+            print(f"[prerace] {rk} 7A候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(s7a_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
+def _load_s9a_candidates(today: str) -> list[dict]:
+    """当日の9A候補 JSON（昼 + 夜）を読み込む。"""
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s9a_candidates.json",
+                  f"wave_picks_wt_{today}_night_s9a_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("9A候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
+
+
+def _insert_s9a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """9A（境界ランク・ペーパー）の記録行 {base}#9A を picks_history に即時反映する。
+
+    _insert_s9_pick の9A版（rank='NINE_9A'・race_key末尾#9A・S9A_STAKE・gate_labelなし）。
+    """
+    store_key = race_key + "#9A"
+    bet = n_combos * S9A_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "NINE_9A", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("9A pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "NINE_9A", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("9A pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_s9a_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """9A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1 = detail.get("axis1")
+    axis2 = detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    axis_sum = cand.get("axis_sum")
+    axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    return (
+        f"🎲 **[9A]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
+        f"（S9の境界ランク・2ゲート中1つだけ不合格）\n"
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S9A_STAKE:,}円): "
+        f"`{axis1}={axis2}流し`\n"
+        f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_s9a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """9A候補の発走前判定・記録・通知メッセージ生成（_process_s9_candidates の9A版）。"""
+    cands = _load_s9a_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#9A" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 9:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        s9a_key = f"{rk}#9A"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(9A) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} 9A候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_s9(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} 9A候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        _save_decision(today, s9a_key, {
+            "decision": decision, "rank": "NINE_9A", "paper": True,
+            "stake": S9A_STAKE, "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_s9a_pick(rk, today, pred, len(combos))
+            messages.append((s9a_key, _build_s9a_message(cand, ri, detail)))
+            print(f"[prerace] {rk} 9A候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#9A")
+            print(f"[prerace] {rk} 9A候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(s9a_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
 
 def _mark_paper_miwokuri(race_key: str, suffix: str) -> None:
     """ペーパー候補行（{rk}#7U/#7M/#7A・bet_amount=0）をオッズ見送りに更新する。
@@ -1693,6 +2010,24 @@ def main():
         newly_done |= s9_done
     except Exception as e:
         logger.exception("S9候補処理失敗（他ランク通知には影響しない）: %s", e)
+
+    # ── 7A候補（S7の境界ランク・ペーパー）処理 ──────────────────────────────
+    # 2026-07-27導入。S7とは論理的に排他（3ゲート中1つだけ不合格）。
+    try:
+        s7a_messages, s7a_done = _process_s7a_candidates(today, now_unix, notified)
+        messages += s7a_messages
+        newly_done |= s7a_done
+    except Exception as e:
+        logger.exception("7A候補処理失敗（他ランク通知には影響しない）: %s", e)
+
+    # ── 9A候補（S9の境界ランク・ペーパー）処理 ──────────────────────────────
+    # 2026-07-27導入。S9とは論理的に排他（2ゲート中1つだけ不合格）。
+    try:
+        s9a_messages, s9a_done = _process_s9a_candidates(today, now_unix, notified)
+        messages += s9a_messages
+        newly_done |= s9a_done
+    except Exception as e:
+        logger.exception("9A候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # 旧A候補・旧S1候補（6車三連単）の処理は 2026-07-17 全廃
 

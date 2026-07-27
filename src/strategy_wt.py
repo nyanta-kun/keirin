@@ -628,6 +628,95 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 7A/9A（S7/S9の「惜しい」境界ランク・ボリューム拡大用）— 2026-07-27 導入
+#
+# ユーザー要望: S7/S9(SS+/SS/S)は日次ボリュームが小さい（7車合計約1.2件/日・
+# 9車約0.25件/日）。ROIはS7/S9ほど高くなくてよいので、的中率のあるゾーンを
+# フィルタして推奨レースを増やしたい（三連複2軸のまま・低〜中配当帯を狙う）。
+#
+# 検証（exp_7a9a_boundary_wt.py / exp_7a9a_deep_dive.py / exp_7a9a_combo_check.py・
+# quarterly walk-forward・honest全期間2024-01-01〜2026-07-25）:
+#   まず wt_overlap==2（◎◯完全一致）側を含めた単純なaxis_sum区切りを検討したが、
+#   全10四半期でROI70〜96%と一度も100%を安定して超えず、市場効率の壁で不採用と判断。
+#   代わりに「S7の3ゲート（axis_sum<=1.3・entropy<=1.8329・mark3<=1）のうち
+#   "ちょうど1つだけ"不合格の"惜しいレース"」を三連複2軸のまま評価したところ、
+#   直近7四半期連続でROI100%超（101.7〜172.9%）・直近4四半期合算ROI150.3%
+#   （n=778・約2.3〜4.0件/日）という頑健な結果を確認。wt_overlap==2は依然として
+#   対象外（この条件でも常にROI<100%）。
+#
+# 設計:
+#   母集団 = s7_select_axis()/s9相当で軸選定成功 ∧ wt_overlap_n∈{0,1}（◎◯完全一致
+#     と印欠損は既存同様に除外）。
+#   7A: axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX
+#       の3条件のうち、不合格がちょうど1個（0個=S7・2個以上=対象外）。
+#   9A: 9車はaxis_sum閾値が未導入のため、entropy<=S9_ENTROPY_MAX・
+#       mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち、不合格がちょうど1個。
+#   S7/S9とは論理的に排他（全条件合格=S7/S9、ちょうど1条件のみ不合格=7A/9A）。
+#   買い目 = 三連複 軸2車+残り流し（7車5点・9車7点。S7/S9と同一構造）。
+#
+# 直近実力（honest全期間の四半期別ボリューム減衰を踏まえた直近4四半期基準）:
+#   7A 約2.3〜4.0件/日 + S7 約1.15件/日 ≈ 7車合計 約3.5〜5件/日
+#   9A 約0.5〜1.7件/日 + S9 約0.25件/日 ≈ 9車合計 約0.75〜2件/日
+# ═══════════════════════════════════════════════════════════════════════════
+
+S7A_STAKE = 100  # 円/点（ペーパー・7車5点=500円/レース）
+S9A_STAKE = 100  # 円/点（ペーパー・9車7点=700円/レース）
+
+
+def s7a_daily_select(candidates: list[dict]) -> list[dict]:
+    """7Aの選出: S7の3ゲート(axis_sum/entropy/mark3)のうちちょうど1つだけ不合格の候補。
+
+    candidates: 各要素は最低限
+      {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None,
+       "wt_mark3_overlap_n": int | None} を持つ dict。
+
+    - wt_overlap_n ∈ {0,1} 必須（◎◯完全一致=2・マーク欠損=None は対象外、S7と同様）
+    - wt_mark3_overlap_n が欠損（None）の場合も対象外（フェイルセーフ、S7と同様）
+    - axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX
+      の3条件のうち、不合格の個数がちょうど1個の候補のみ採用
+      （0個=S7本体の対象・2個以上は市場効率の壁でROI不採用、詳細は本セクション冒頭参照）
+
+    returns 採用された候補のリスト（axis_sum昇順）。
+    """
+    pool = []
+    for c in candidates:
+        if c.get("wt_overlap_n") not in (0, 1):
+            continue
+        mark3 = c.get("wt_mark3_overlap_n")
+        if mark3 is None:
+            continue
+        axis_ok = c["axis_sum"] <= S7_AXIS_SUM_MAX
+        ent_ok = c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
+        mark3_ok = mark3 <= S7_MARK3_OVERLAP_MAX
+        n_fail = (not axis_ok) + (not ent_ok) + (not mark3_ok)
+        if n_fail == 1:
+            pool.append(c)
+    return sorted(pool, key=lambda c: c["axis_sum"])
+
+
+def s9a_daily_select(candidates: list[dict]) -> list[dict]:
+    """9Aの選出: S9の2ゲート(entropy/mark3)のうちちょうど1つだけ不合格の候補。
+
+    s7a_daily_select() の9車版。9車はaxis_sum閾値が未導入（S9同様）のため、
+    entropy<=S9_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち
+    不合格がちょうど1個の候補のみ採用する。
+    """
+    pool = []
+    for c in candidates:
+        if c.get("wt_overlap_n") not in (0, 1):
+            continue
+        mark3 = c.get("wt_mark3_overlap_n")
+        if mark3 is None:
+            continue
+        ent_ok = c.get("entropy", float("inf")) <= S9_ENTROPY_MAX
+        mark3_ok = mark3 <= S7_MARK3_OVERLAP_MAX
+        n_fail = (not ent_ok) + (not mark3_ok)
+        if n_fail == 1:
+            pool.append(c)
+    return sorted(pool, key=lambda c: c["axis_sum"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # A（◎一致×波乱×別ライン先頭・二連単）戦略 — 2026-07-17 全廃
 #
 # 正規プロトコル（学習〜2025-03-31・検証2025-04-01〜2026-03-31の1年）の再検証で

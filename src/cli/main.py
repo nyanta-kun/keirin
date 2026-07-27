@@ -1210,7 +1210,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.strategy_wt import (
         S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
         s1w_select, s7_daily_select, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
-        s7_wt_overlap_n, s9_daily_select, ss_policy,
+        s7_wt_overlap_n, s7a_daily_select, s9_daily_select, s9a_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1834,6 +1834,17 @@ def wave_picks_wt(target_date, output_path, model_name,
         click.echo(f"[保存先] {s7_path}  (S7候補 {len(s7_candidates)}件/{len(s7_raw_candidates)}件中"
                    f"・波乱度選出/ペーパー検証)")
 
+        # ── 7A候補（S7の境界ランク・3ゲート中1つだけ不合格・2026-07-27導入）──
+        # 同じ s7_raw_candidates（軸選定成功した全7車候補）から、S7とは論理的に
+        # 排他な「惜しいレース」を選出する（詳細は strategy_wt.s7a_daily_select 参照）
+        s7a_candidates = s7a_daily_select(s7_raw_candidates)
+        s7a_suffix = "_night_s7a_candidates.json" if is_night else "_s7a_candidates.json"
+        s7a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s7a_suffix}"
+        with open(s7a_path, "w", encoding="utf-8") as f:
+            json.dump(s7a_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s7a_path}  (7A候補 {len(s7a_candidates)}件/{len(s7_raw_candidates)}件中"
+                   f"・境界ランク/ペーパー検証)")
+
     # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
     # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は
     # S7と同じ車数非依存の汎用実装（s7_select_axis/s7_field_entropy）を再利用。
@@ -1903,8 +1914,9 @@ def wave_picks_wt(target_date, output_path, model_name,
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S9候補は生成しません。", err=True)
 
-        s9_raw_n = len(s9_candidates)
-        s9_candidates = s9_daily_select(s9_candidates)
+        s9_raw_candidates = s9_candidates
+        s9_raw_n = len(s9_raw_candidates)
+        s9_candidates = s9_daily_select(s9_raw_candidates)
 
         s9_suffix = "_night_s9_candidates.json" if out_stem.endswith("_night") else "_s9_candidates.json"
         s9_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s9_suffix}"
@@ -1912,6 +1924,15 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(s9_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {s9_path}  (S9候補 {len(s9_candidates)}件/{s9_raw_n}件中"
                    f"・9車entropy選出/ペーパー検証)")
+
+        # ── 9A候補（S9の境界ランク・2ゲート中1つだけ不合格・2026-07-27導入）──
+        s9a_candidates = s9a_daily_select(s9_raw_candidates)
+        s9a_suffix = "_night_s9a_candidates.json" if out_stem.endswith("_night") else "_s9a_candidates.json"
+        s9a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s9a_suffix}"
+        with open(s9a_path, "w", encoding="utf-8") as f:
+            json.dump(s9a_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s9a_path}  (9A候補 {len(s9a_candidates)}件/{s9_raw_n}件中"
+                   f"・境界ランク/ペーパー検証)")
 
     # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──
     # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の
