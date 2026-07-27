@@ -299,10 +299,17 @@ def _stats_line(label, s):
 
 
 def _query_stats(like):
+    """月間/年間サマリー用の集計（メッセージ末尾の📅/🗓行）。
+
+    2026-07-16に全廃されたrank='7PLUS_R'をハードコードしたまま放置されており、
+    それ以降ずっと0件（"データなし"）を返し続けていたバグを2026-07-28に修正。
+    ヘッダー（p7b/p7r/p7h）と同じ対象範囲＝現行ランク S1(SEVEN_S1)+S7(SEVEN_S7)に揃える
+    （7A/9A・S9はヘッダーと同様この集計にも含めない・詳細は各rank_line参照）。
+    """
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*) AS races, SUM(hit) AS hits, SUM(payout) AS returns_, SUM(bet_amount) AS bets "
-            "FROM picks_history WHERE route='wt' AND rank = '7PLUS_R' "
+            "FROM picks_history WHERE route='wt' AND rank IN ('SEVEN_S1', 'SEVEN_S7') "
             "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r["races"] or 0, "hits": r["hits"] or 0, "returns": r["returns_"] or 0, "bets": r["bets"] or 0}
 
