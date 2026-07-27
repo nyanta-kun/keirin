@@ -24,7 +24,8 @@ _PG_CONFLICT_COLS: dict[str, tuple[str, ...]] = {
     "wt_weather":       ("venue_id", "dt_hour"),
     "venue_info":       ("venue_code",),
     "picks_history":    ("race_key",),
-    "netkeirin_submissions": ("race_key",),
+    "netkeirin_submissions": ("race_key", "rank_key"),
+    "netkeirin_settings": ("rank_key",),
     "races":            ("race_key",),
     "odds":             ("race_key", "bet_type", "combination"),
     "race_entries":     ("race_key", "frame_no"),
@@ -71,6 +72,7 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
         #   未変換で relation "wt_odds" does not exist になっていた・2026-07-16 修正）
         rest = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds_snapshot|wt_odds"
                       r"|wt_weather|venue_info|picks_history|model_evaluation"
+                      r"|netkeirin_settings"
                       r"|netkeirin_submissions)\b",
                       r"keirin.\1", rest, flags=re.IGNORECASE)
 
@@ -100,6 +102,7 @@ def _pg_translate(sql: str, params: tuple | list | dict) -> tuple[str | None, ob
     # テーブル名に keirin. プレフィックスを付ける（既についている場合はスキップ）
     sql = re.sub(r"(?<!\w)(?:keirin\.)?(wt_races|wt_entries|wt_odds_snapshot|wt_odds"
                  r"|wt_weather|venue_info|picks_history|model_evaluation"
+                 r"|netkeirin_settings"
                  r"|netkeirin_submissions)\b",
                  r"keirin.\1", sql, flags=re.IGNORECASE)
     # psycopg2 は % をフォーマット文字として扱う。
@@ -611,11 +614,13 @@ def migrate_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_race    ON wt_odds(race_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_wt_odds_snap_race ON wt_odds_snapshot(race_key)")
 
-        # netkeirin（ウマい車券）自動入稿の送信済み記録（2026-07-23新設）。
-        # race_key 単位で1回だけ入稿する（重複入稿防止・Discordサマリー集計用）。
+        # netkeirin（ウマい車券）自動入稿の送信済み記録（2026-07-23新設・2026-07-28に
+        # rank_key を追加し (race_key, rank_key) 複合PKへ変更。同一レースが複数ランク
+        # （例: S1と7A）で同時に選ばれる実例があり race_key単独PKだと後勝ちが上書きしていたため）。
         conn.execute("""
             CREATE TABLE IF NOT EXISTS netkeirin_submissions (
-                race_key          TEXT PRIMARY KEY,
+                race_key          TEXT NOT NULL,
+                rank_key          TEXT NOT NULL,
                 submitted_at      TEXT DEFAULT (datetime('now')),
                 session           TEXT,
                 venue_name        TEXT,
@@ -623,7 +628,21 @@ def migrate_db():
                 gate_label        TEXT,
                 axis1             INTEGER,
                 axis2             INTEGER,
-                netkeirin_race_id TEXT
+                netkeirin_race_id TEXT,
+                PRIMARY KEY (race_key, rank_key)
+            )
+        """)
+
+        # netkeirin自動入稿のランク別ON/OFF・タイトル/コメントテンプレート設定
+        # （2026-07-28新設。本番はkiseki alembic migration s2t3u4v5w6x7が正本・
+        # このCREATE TABLEはテスト用SQLiteフォールバックのみに適用される）。
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS netkeirin_settings (
+                rank_key          TEXT PRIMARY KEY,
+                enabled           INTEGER NOT NULL DEFAULT 1,
+                title_template    TEXT NOT NULL DEFAULT '',
+                comment_template  TEXT NOT NULL DEFAULT '',
+                updated_at        TEXT DEFAULT (datetime('now'))
             )
         """)
 

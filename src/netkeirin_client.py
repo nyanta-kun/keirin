@@ -1,12 +1,10 @@
 """netkeirin「ウマい車券」入稿ツール（tool.syakenv2.netkeiba.com/bettool/）への
 下書き自動入稿クライアント。
 
-仕様の根拠は docs/netkeirin-input-api-spec.md（2026-07-23実機検証で確定。
-ログインURL/フィールド名・type/pointパラメータの正体は同日の追加検証
-（認証済みセッションで race.html / auth/login.html の実ソースを直接取得）で
-確定済み — 詳細はdocs参照）。
-「二軸探偵」方式（軸1=◎・軸2=○・残り全馬=△、三連複2軸ながし・各2,000円・5点）
-専用のシンプルなクライアントであり、汎用の全券種対応は意図していない。
+仕様の根拠は docs/netkeirin-input-api-spec.md（2026-07-23実機検証で確定・
+2026-07-28に3連単1着ながし(S1)・9車waku_checkを追加実測 — 詳細はdocs参照）。
+「二軸探偵」方式（軸1=◎・軸2=○、三連複2軸ながし）と、S1方式（軸=◎・1着固定、
+三連単1着ながし）の2種類の買い目構造に対応する。汎用の全券種対応は意図していない。
 """
 from __future__ import annotations
 
@@ -33,9 +31,16 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 SESSION_FILE = DATA_DIR / "netkeirin_session.json"
 VENUE_CACHE_FILE = DATA_DIR / "netkeirin_venue_codes.json"
 
-STAKE_PER_LINE = 2000  # 円/点（三連複2軸ながし・各2,000円・5点=10,000円=上限ぴったり）
-SHIKIBETU_TRIO = "8"   # 3連複（bet_id内の b トークン）
-HOUSHIKI_AXIS2_NAGASHI = "6"  # 軸2頭ながし（bet_id内の c トークン）
+# 買い目構造（bet_kind）。式別(shikibetu)・方式(houshiki)はdocs 2.3節で実機確定済み。
+BET_KIND_TRIO_AXIS2 = "trio_axis2"          # 3連複・軸2頭ながし（7SS/7S/7A/9SS/9S/9A）
+BET_KIND_TRIFECTA_AXIS1 = "trifecta_axis1"  # 3連単・1着ながし（S1）
+
+_SHIKIBETU = {BET_KIND_TRIO_AXIS2: "8", BET_KIND_TRIFECTA_AXIS1: "9"}
+_HOUSHIKI = {BET_KIND_TRIO_AXIS2: "6", BET_KIND_TRIFECTA_AXIS1: "3"}
+
+# 車数ごとの枠割当（keirin固有の固定ルール・車数のみに依存しレース非依存。
+# 7車=[6]は2026-07-23佐世保1R、9車=[4,5,6]は2026-07-28豊橋4R/5Rで実測確定）。
+_WAKU_CHECK = {7: [6], 9: [4, 5, 6]}
 
 # race.html の実ソース確認済み（2026-07-23）: param.type = $('#act-type').val()
 # （勝負アイコン: 0=指定しない/1=自信あり/2=穴狙い）、param.point = $('#act-point').val()
@@ -61,23 +66,42 @@ def _env(key: str) -> str:
     return os.environ.get(key, "")
 
 
-def build_bet_id(race_date: date, venue_code: str, race_no: int,
-                  axis1: int, axis2: int, partners: list[int]) -> str:
-    """3連複・軸2頭ながしのbet_idを組み立てる。
+def waku_check_for(n_cars: int) -> list[int]:
+    """車数から waku_check（同一枠に2車以上入る枠のリスト）を返す。"""
+    if n_cars not in _WAKU_CHECK:
+        raise ValueError(f"未対応の車数: {n_cars}（7/9のみ対応）")
+    return _WAKU_CHECK[n_cars]
 
-    実データ確認済み（2026-07-23・佐世保1R・2026-07-24=金曜）:
-        "a5-85-1_b8_c6_1_2_3-4-5-6-7"
-    曜日コードは isoweekday()%7（月=1…土=6・日=0）。月〜土はJSのgetDay()と
-    一致するため、この1点の実測だけで月〜土は確定している。日曜のみ
-    2つの規約(ISO=7 / JS=0)が分岐しうるため要目視確認（未検証）。
+
+def build_bet_id(
+    race_date: date, venue_code: str, race_no: int, bet_kind: str,
+    axis1: int, axis2: int | None, partners: list[int],
+) -> str:
+    """bet_idを組み立てる。
+
+    trio_axis2（3連複・軸2頭ながし）実データ確認済み（2026-07-23・佐世保1R）:
+        "a5-85-1_b8_c6_1_2_3-4-5-6-7"  （軸1=1・軸2=2・相手=3,4,5,6,7）
+        → a{曜日}-{場}-{R}_b{式別}_c{方式}_{軸1}_{軸2}_{相手(ハイフン区切り)}
+
+    trifecta_axis1（3連単・1着ながし）実データ確認済み（2026-07-28・取手1R）:
+        "a2-23-1_b9_c3_1_2-3"  （1着軸=1・相手=2,3・マルチOFF）
+        → a{曜日}-{場}-{R}_b{式別}_c{方式}_{1着軸}_{相手(ハイフン区切り)}
+        （軸2頭ながしと異なり軸スロットは1つのみ。マルチはOFFにすること
+        ＝ONだと1着固定を無視した全順序展開＝ボックス相当になる）
+
+    曜日コードは isoweekday()%7（月=1…土=6・日=0）。日曜のみ要目視確認（未検証・docs 3節）。
     レース番号はrace_id内ではゼロ埋めだが、bet_id内はゼロ埋めなし。
     """
     weekday = race_date.isoweekday() % 7
+    shikibetu = _SHIKIBETU[bet_kind]
+    houshiki = _HOUSHIKI[bet_kind]
     partners_str = "-".join(str(p) for p in sorted(partners))
-    return (
-        f"a{weekday}-{venue_code}-{race_no}"
-        f"_b{SHIKIBETU_TRIO}_c{HOUSHIKI_AXIS2_NAGASHI}_{axis1}_{axis2}_{partners_str}"
-    )
+    prefix = f"a{weekday}-{venue_code}-{race_no}_b{shikibetu}_c{houshiki}"
+    if bet_kind == BET_KIND_TRIO_AXIS2:
+        return f"{prefix}_{axis1}_{axis2}_{partners_str}"
+    if bet_kind == BET_KIND_TRIFECTA_AXIS1:
+        return f"{prefix}_{axis1}_{partners_str}"
+    raise ValueError(f"未対応のbet_kind: {bet_kind}")
 
 
 class NetkeirinClient:
@@ -212,16 +236,26 @@ class NetkeirinClient:
 
     def submit_pick(
         self, *, race_date: date, venue_name: str, race_no: int,
-        axis1: int, axis2: int, n_entries: int, gate_label: str,
+        n_cars: int, bet_kind: str,
+        axis1: int, partners: list[int], axis2: int | None = None,
+        stake_per_line: int,
         title: str, comment: str = DEFAULT_COMMENT,
     ) -> tuple[bool, str]:
         """1レース分の下書き（action=add）を入稿する。
 
+        bet_kind=BET_KIND_TRIO_AXIS2（三連複・軸2頭ながし）: axis1・axis2 が軸2車、
+          partners は残り流し対象車（n_cars-2台）。
+        bet_kind=BET_KIND_TRIFECTA_AXIS1（三連単・1着ながし＝S1）: axis1 が1着軸、
+          axis2 は使わない（None固定）、partners は相手2車ちょうど。
+
         戻り値: (成功したか, メッセージ)
-        「二軸探偵」方式専用（7車ちょうど・3連複軸2頭ながし）のため n_entries!=7 は対象外。
         """
-        if n_entries != 7:
-            return False, f"対象外(n_entries={n_entries}、7車のみ対応)"
+        if n_cars not in _WAKU_CHECK:
+            return False, f"対象外(n_cars={n_cars}、7/9車のみ対応)"
+        if bet_kind == BET_KIND_TRIO_AXIS2 and axis2 is None:
+            return False, "trio_axis2にはaxis2が必須です"
+        if bet_kind == BET_KIND_TRIFECTA_AXIS1 and len(partners) != 2:
+            return False, f"trifecta_axis1のpartnersは2車必須(実際={len(partners)})"
         if not comment:
             comment = DEFAULT_COMMENT
 
@@ -232,19 +266,28 @@ class NetkeirinClient:
         if venue_code is None:
             return False, f"場コード解決失敗: {venue_name}"
 
-        partners = [c for c in range(1, 8) if c not in (axis1, axis2)]
         race_id = f"{race_date.strftime('%Y%m%d')}{venue_code}{race_no:02d}"
-        bet_id = build_bet_id(race_date, venue_code, race_no, axis1, axis2, partners)
+        bet_id = build_bet_id(race_date, venue_code, race_no, bet_kind, axis1, axis2, partners)
 
         # mark の値は race.html 実装上 DOM id (id="act-mark_{車番}_{code}") を
         # split した文字列がそのままセットされる（数値ではなく文字列）。
-        mark = {str(axis1): "1", str(axis2): "2"}
-        for p in partners:
-            mark[str(p)] = "4"
+        mark: dict[str, str] = {}
+        if bet_kind == BET_KIND_TRIO_AXIS2:
+            assert axis2 is not None
+            mark[str(axis1)] = "1"
+            mark[str(axis2)] = "2"
+            marked = {axis1, axis2}
+        else:
+            p1, p2 = partners[0], partners[1]
+            mark[str(axis1)] = "1"
+            mark[str(p1)] = "2"
+            mark[str(p2)] = "3"
+            marked = {axis1, p1, p2}
+        for c in range(1, n_cars + 1):
+            if c not in marked:
+                mark[str(c)] = "4"
 
-        # 7車ちょうどの場合、車6・7は常に同一枠(枠番6)を共有する（keirin固有の固定ルール。
-        # 2026-07-23、佐世保1R(7車)の実ページソースで waku_check = [6] を直接確認済み）。
-        waku_check = [6]
+        waku_check = waku_check_for(n_cars)
 
         payload = {
             "output": "json",
@@ -264,7 +307,7 @@ class NetkeirinClient:
             "point": SALE_PRICE_DEFAULT,
             "waku_check": json.dumps(waku_check),
             "kaime": json.dumps(
-                [{"bet_id": bet_id, "bet_money": STAKE_PER_LINE}], ensure_ascii=False,
+                [{"bet_id": bet_id, "bet_money": stake_per_line}], ensure_ascii=False,
             ),
         }
 
