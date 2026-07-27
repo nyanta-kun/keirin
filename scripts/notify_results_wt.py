@@ -303,13 +303,14 @@ def _query_stats(like):
 
     2026-07-16に全廃されたrank='7PLUS_R'をハードコードしたまま放置されており、
     それ以降ずっと0件（"データなし"）を返し続けていたバグを2026-07-28に修正。
-    ヘッダー（p7b/p7r/p7h）と同じ対象範囲＝現行ランク S1(SEVEN_S1)+S7(SEVEN_S7)に揃える
-    （7A/9A・S9はヘッダーと同様この集計にも含めない・詳細は各rank_line参照）。
+    ヘッダー（p7b/p7r/p7h・S1+S7のみ）とは異なり、こちらは現行の全ペーパーランク
+    （S1・S7・S9・7A・9A）を合算する（ユーザー要望・2026-07-28）。
     """
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*) AS races, SUM(hit) AS hits, SUM(payout) AS returns_, SUM(bet_amount) AS bets "
-            "FROM picks_history WHERE route='wt' AND rank IN ('SEVEN_S1', 'SEVEN_S7') "
+            "FROM picks_history WHERE route='wt' "
+            "AND rank IN ('SEVEN_S1', 'SEVEN_S7', 'NINE_S9', 'SEVEN_7A', 'NINE_9A') "
             "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r["races"] or 0, "hits": r["hits"] or 0, "returns": r["returns_"] or 0, "bets": r["bets"] or 0}
 
