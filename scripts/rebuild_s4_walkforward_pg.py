@@ -66,16 +66,29 @@ QUARTERS = [
 ]
 
 
+TAIL_FROM = "2026-04-13"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--end", default=None, help="末尾窓の終了日（省略時は昨日）")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--tail-only", action="store_true",
+                     help="末尾窓（現行eval modelのholdout範囲）のみ再構築する日次軽量運用向け"
+                          "オプション。四半期vintageモデル分は既に確定済みで結果が変わらない"
+                          "ため毎日再計算する必要がなく、これのみ再実行すれば直近日を"
+                          "honestな状態に保てる。")
     args = ap.parse_args()
     if not args.end:
         args.end = (date.today() - timedelta(days=1)).isoformat()
 
-    quarters = list(QUARTERS)
-    quarters.append(("2026-04-13", args.end, "lgbm_wt_eval", "lgbm_wt_win_eval"))
+    if args.tail_only:
+        quarters = [(TAIL_FROM, args.end, "lgbm_wt_eval", "lgbm_wt_win_eval")]
+        wipe_from = TAIL_FROM
+    else:
+        quarters = list(QUARTERS)
+        quarters.append((TAIL_FROM, args.end, "lgbm_wt_eval", "lgbm_wt_win_eval"))
+        wipe_from = "2024-01-01"
 
     all_rows: list[dict] = []
     for date_from, date_to, eval_model, win_model in quarters:
@@ -99,7 +112,7 @@ def main() -> None:
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")
 
-    wipe_rows_pg("2024-01-01", args.end, args.dry_run)
+    wipe_rows_pg(wipe_from, args.end, args.dry_run)
     insert_rows_pg(all_rows, args.dry_run)
     if args.dry_run:
         print("[rebuild-s4-pg] DRY RUN（書き込みなし）")
