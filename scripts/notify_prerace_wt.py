@@ -765,12 +765,11 @@ def _insert_s7_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
 def _build_s7_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
     """S7（波乱度選出・ペーパー）の15分前 Discord 通知メッセージ。
 
-    gate_label: "SS+"（軸2車がWT◎◯と全く重ならない・かつ軸2車に各グレード
-    最上位クラス=S1/A1が含まれない）/ "SS"（重ならないが格上軸を含む）/
-    "S"（片方だけ重なる）。2026-07-21〜、軸2車とWT◎◯の重なりに応じてSS/Sの
-    2段階でランク表示する（honest全期間検証で重なりが増えるほどROIが悪化す
-    ると判明したため）。2026-07-23〜、SSはさらに軸級班で分岐しSS+を観察用
-    サブランクとして追加した（買い目・実際の購入対象は変更しない表示分岐）。
+    gate_label: "SS"（軸2車がWT◎◯と全く重ならない）/ "S"（片方だけ重なる）。
+    2026-07-21〜、軸2車とWT◎◯の重なりに応じてSS/Sの2段階でランク表示する
+    （honest全期間検証で重なりが増えるほどROIが悪化すると判明したため）。
+    2026-07-23〜2026-07-27の間、SSはさらに軸級班で分岐したSS+観察用サブランクを
+    持っていたが、サンプル数不足のためユーザー判断で廃止・SSへ統合した。
     """
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
@@ -789,7 +788,6 @@ def _build_s7_message(cand: dict, race_info: dict, detail: dict, gate_label: str
     axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
     label = f"7{gate_label}" if gate_label else "S7"
     label_desc = {
-        "SS+": "WT◎◯と軸2車が全く重ならない・軸に格上クラスなし",
         "SS": "WT◎◯と軸2車が全く重ならない",
         "S": "WT◎◯と軸2車が片方だけ重なる",
     }.get(gate_label, "")
@@ -1026,7 +1024,6 @@ def _build_s9_message(cand: dict, race_info: dict, detail: dict, gate_label: str
     axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
     label = f"9{gate_label}" if gate_label else "S9"
     label_desc = {
-        "SS+": "WT◎◯と軸2車が全く重ならない・軸に格上クラスなし",
         "SS": "WT◎◯と軸2車が全く重ならない",
         "S": "WT◎◯と軸2車が片方だけ重なる",
     }.get(gate_label, "")

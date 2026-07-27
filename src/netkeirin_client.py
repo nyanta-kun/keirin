@@ -44,7 +44,7 @@ HOUSHIKI_AXIS2_NAGASHI = "6"  # 軸2頭ながし（bet_id内の c トークン�
 ACT_TYPE_CONFIDENT = "1"
 ACT_TYPE_DEFAULT = "0"
 SALE_PRICE_DEFAULT = "300"
-CONFIDENT_GATE_LABELS = {"SS+", "SS"}  # 勝負アイコン「自信あり」対象
+CONFIDENT_GATE_LABELS = {"SS"}  # 勝負アイコン「自信あり」対象（SS+は2026-07-27にSSへ統合・廃止）
 
 # race.html の check_goods_data() 実装確認済み: comment/titleは必須（空文字だと
 # クライアント側バリデーションで弾かれる）。

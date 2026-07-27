@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""S7（SS+/SS/S）候補をnetkeirin「ウマい車券」へ下書き自動入稿する（2026-07-23新設）。
+"""S7（SS/S）候補をnetkeirin「ウマい車券」へ下書き自動入稿する（2026-07-23新設）。
 
 朝バッチ(daily_picks_wt.sh)・夕バッチ(evening_picks_wt.sh)それぞれの候補生成
 直後に呼ばれる。候補生成時点で確定しているgate_label（wt_overlap_n由来。
-notify_prerace_wt.pyのT-15分判定を待たない）で SS+/SS/S を抽出し、
+notify_prerace_wt.pyのT-15分判定を待たない）で SS/S を抽出し、
 未入稿のレースのみ netkeirin へ下書き保存する。同一race_idへの再送信は
 上書きされるだけなので、朝夕で対象が重複しても無害。
 
@@ -30,7 +30,7 @@ from src.netkeirin_client import NetkeirinClient, RACE_AUTH_URL
 from src.notify.discord import send
 from src.strategy_wt import s7_gate_label
 
-TARGET_GATE_LABELS = ("SS+", "SS", "S")
+TARGET_GATE_LABELS = ("SS", "S")  # SS+は2026-07-27にSSへ統合・廃止
 SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
 
 
@@ -118,7 +118,7 @@ def main() -> None:
             targets.append((cand, gate_label))
 
     if not targets:
-        print(f"[netkeirin_submit] {target_date} {session}: SS+/SS/S該当なし（スキップ）", flush=True)
+        print(f"[netkeirin_submit] {target_date} {session}: SS/S該当なし（スキップ）", flush=True)
         return
 
     already = _already_submitted([c["race_key"] for c, _ in targets])
@@ -128,7 +128,7 @@ def main() -> None:
         return
 
     client = NetkeirinClient()
-    submitted_counts: dict[str, int] = {"SS+": 0, "SS": 0, "S": 0}
+    submitted_counts: dict[str, int] = {"SS": 0, "S": 0}
     failures: list[str] = []
 
     for cand, gate_label in pending:

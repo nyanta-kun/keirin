@@ -458,14 +458,12 @@ def s7_wt_mark3_overlap_n(
 
 
 # S7のSS(重なり0)のうち、軸2車のいずれかが各グレード最上位クラス（S1/A1）だと
-# 配当が下がりやすい傾向を確認（2026-07-23・honest全期間検証）。SSは無制限採用
-# （日次cap無し）のため、S1と異なり「除外→繰り上がり」の副作用がなく単純に
-# 効く: train+val ROI222.3%→351.6%・全期間237.1%→362.2%（的中率は不変〜微増）。
-# 一方Sは日次axis_sum上位10件のcap付き選出のため、除外すると繰り上がり候補で
-# ROIが悪化する（train+val 116.3%→111.5%・test 132.6%→119.2%）ことを確認済み。
-# → SS内の格上非該当サブセットを新表示ランク"SS+"として観察する（実際の
-# 購入対象・買い目は変更しない。あくまで表示分岐）。
-S7_TOP_CLASS = {"S1", "A1"}
+# 配当が下がりやすい傾向を確認（2026-07-23・honest全期間検証）。当初はSS内の
+# 格上非該当サブセットを観察用サブランク"SS+"として分岐表示していたが、
+# サンプル数が少なすぎる（全期間で数十件規模）という理由でユーザー判断により
+# 2026-07-27に廃止・SSへ統合した（picks_history.gate_label='SS+'の既存行も
+# 'SS'へ一括更新済み。買い目・投資額は元々SSと同一のため実害はない）。
+# axis1_class/axis2_classパラメータは廃止後もコール側の互換のため残置（未使用）。
 
 
 def s7_gate_label(
@@ -474,16 +472,12 @@ def s7_gate_label(
 ) -> str | None:
     """S7の表示ランク(gate_label)を返す。
 
-    - wt_overlap_n == 0: 軸2車の級班情報が両方揃っており、いずれもS7_TOP_CLASS
-      でなければ "SS+"（観察用サブランク）、そうでなければ "SS"。
-      級班情報が欠損している場合は従来通り "SS"（後方互換）。
+    - wt_overlap_n == 0: "SS"（2026-07-27以前は軸2車の級班により"SS+"観察用
+      サブランクへさらに分岐していたが、サンプル不足のため廃止・SSへ統合）。
     - wt_overlap_n == 1: "S"
     - それ以外（重なり2・None）: None（除外対象）
     """
     if wt_overlap_n == 0:
-        if axis1_class is not None and axis2_class is not None:
-            has_top = axis1_class in S7_TOP_CLASS or axis2_class in S7_TOP_CLASS
-            return "SS" if has_top else "SS+"
         return "SS"
     if wt_overlap_n == 1:
         return "S"
