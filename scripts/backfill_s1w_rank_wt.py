@@ -36,7 +36,7 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
-from src.strategy_wt import S1W_STAKE, s1w_gate, s1w_select, s4_field_entropy
+from src.strategy_wt import S1W_STAKE, s1w_gate, s1w_select, s7_field_entropy
 
 
 def _load_trifecta_boards(race_keys: list[str]) -> dict:
@@ -119,7 +119,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if sel is None:
             continue
         axis, p1, p2, top3_gap = sel
-        entropy = s4_field_entropy(top3_probs)
+        entropy = s7_field_entropy(top3_probs)
         if not s1w_gate(top3_gap, win_probs[axis], class_map.get(axis), entropy):
             continue
         if axis not in board or p1 not in board or p2 not in board:

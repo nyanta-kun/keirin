@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S4（SS+/SS/S）候補をnetkeirin「ウマい車券」へ下書き自動入稿する（2026-07-23新設）。
+"""S7（SS+/SS/S）候補をnetkeirin「ウマい車券」へ下書き自動入稿する（2026-07-23新設）。
 
 朝バッチ(daily_picks_wt.sh)・夕バッチ(evening_picks_wt.sh)それぞれの候補生成
 直後に呼ばれる。候補生成時点で確定しているgate_label（wt_overlap_n由来。
@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.database import get_connection
 from src.netkeirin_client import NetkeirinClient, RACE_AUTH_URL
 from src.notify.discord import send
-from src.strategy_wt import s4_gate_label
+from src.strategy_wt import s7_gate_label
 
 TARGET_GATE_LABELS = ("SS+", "SS", "S")
 SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
@@ -36,7 +36,7 @@ SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
 
 def _load_candidates(target_date: str, session: str) -> list[dict]:
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
-    suffix = "_night_s4_candidates.json" if session == "evening" else "_s4_candidates.json"
+    suffix = "_night_s7_candidates.json" if session == "evening" else "_s7_candidates.json"
     path = picks_dir / f"wave_picks_wt_{target_date}{suffix}"
     if not path.exists():
         return []
@@ -77,7 +77,20 @@ def _build_title(venue_name: str, race_no: int) -> str:
 
 
 def _build_comment() -> str:
-    return ""
+    # 全体設計（タイトル出し分け・出走全選手の単勝率/複勝率表・approach_text等）は
+    # 2026-07-23 netkeirin_title_comment_design で保留中・未承認。
+    # 本文はそのうち「オッズ下限カットの開示」部分のみ先行実装（2026-07-25）。
+    # 買い目5点(軸2車流し)自体は据え置き、購入者側の任意カスタマイズとして案内する。
+    return (
+        "本日の二軸をお届けします。\n\n"
+        "買い目は三連複・軸2車流し（5点均等）です。独自の検証では、この5点のうち"
+        "最終オッズが低い（目安5〜10倍以下）組み合わせを購入対象から外すと、"
+        "的中率は下がる一方で回収率は上昇する傾向を確認しています。"
+        "二軸探偵の入稿は発走前の最終オッズを確認できないタイミングで行っているため、"
+        "この絞り込みは行っておりません。\n\n"
+        "レース直前の最終オッズをご自身でご確認いただき、低倍率の目を外すなど、"
+        "回収率を意識したアレンジにもぜひご活用ください。"
+    )
 
 
 def main() -> None:
@@ -98,7 +111,7 @@ def main() -> None:
 
     targets = []
     for cand in candidates:
-        gate_label = s4_gate_label(
+        gate_label = s7_gate_label(
             cand.get("wt_overlap_n"), cand.get("axis1_class"), cand.get("axis2_class"),
         )
         if gate_label in TARGET_GATE_LABELS:

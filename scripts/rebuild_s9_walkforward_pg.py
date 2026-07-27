@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """S9(NINE_S9) の全期間honest再構築（quarterly walk-forwardモデル使用）。
 
-rebuild_s4_walkforward_pg.py の9車版。VPS PG一本化（2026-07-22〜）に伴い、
+rebuild_s7_walkforward_pg.py の9車版。VPS PG一本化（2026-07-22〜）に伴い、
 環境変数をpopしないPG直読みの単発スクリプトとして実行する。
 
 使い方:

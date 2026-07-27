@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""picks_history の自動完全性保証（2026-07-20・2026-07-21 S4対応追加・S3全廃対応）。
+"""picks_history の自動完全性保証（2026-07-20・2026-07-21 S7対応追加・S3全廃対応）。
 
 notify_prerace_wt.py のT-15分ライブ判定が何らかの理由（scraper障害・
 システム停止・rebuild_*_walkforward.py の事故等）で実行されず picks_history
 に記録が残らなかった日を検知し、最終オッズを使った build_rows() で
-S1(SEVEN_S1) / S4(SEVEN_S4) の該当日分を後追いで補完する。
+S1(SEVEN_S1) / S7(SEVEN_S7) の該当日分を後追いで補完する。
 
 2026-07-21: S3(7PLUS_M)は対象レース数・的中率・期待値の観点で全廃したため
 このスクリプトの補完対象からも除外した（残していると本番候補生成が停止した
@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.backfill_s1w_rank_wt import build_rows as build_rows_s1
-from scripts.backfill_s4_rank_wt import build_rows as build_rows_s4
+from scripts.backfill_s7_rank_wt import build_rows as build_rows_s4
 from src.database import get_connection
 from src.notify.discord import send as discord_send
 
@@ -68,7 +68,7 @@ def _pick_counts(rank: str, date_from: str, date_to: str) -> dict[str, int]:
 def _insert_additive(rows: list[dict]) -> int:
     """race_key が未存在の場合のみ INSERT する（既存行は一切変更しない）。
 
-    gate_label は S4(SEVEN_S4)行のみ有効（SS/S表示ランクの分岐に必須）。
+    gate_label は S7(SEVEN_S7)行のみ有効（SS/S表示ランクの分岐に必須）。
     win_rank/ratio は全廃済みS3(旧M)専用の列でこのスクリプトの対象外（常にNone）。
     """
     if not rows:
@@ -76,7 +76,7 @@ def _insert_additive(rows: list[dict]) -> int:
     with get_connection() as c:
         inserted = 0
         for r in rows:
-            is_s4 = r["rank"] == "SEVEN_S4"
+            is_s4 = r["rank"] == "SEVEN_S7"
             cur = c.execute(
                 "INSERT OR IGNORE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
@@ -114,18 +114,18 @@ def main() -> None:
 
     race_counts = _race_counts(date_from, date_to)
     s1_counts = _pick_counts("SEVEN_S1", date_from, date_to)
-    s4_counts = _pick_counts("SEVEN_S4", date_from, date_to)
+    s7_counts = _pick_counts("SEVEN_S7", date_from, date_to)
 
     gap_dates_s1 = sorted(
         d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s1_counts.get(d, 0) == 0
     )
     gap_dates_s4 = sorted(
-        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s4_counts.get(d, 0) == 0
+        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s7_counts.get(d, 0) == 0
     )
 
     print(f"[gap-heal] 確認期間: {date_from}〜{date_to}")
     print(f"[gap-heal] S1 欠損日: {gap_dates_s1}")
-    print(f"[gap-heal] S4 欠損日: {gap_dates_s4}")
+    print(f"[gap-heal] S7 欠損日: {gap_dates_s4}")
 
     if not gap_dates_s1 and not gap_dates_s4:
         print("[gap-heal] 欠損なし。終了。")
@@ -152,12 +152,12 @@ def main() -> None:
         if args.dry_run:
             n = len(rows)
         total_new_s4 += n
-        print(f"[gap-heal] S4 {d}: 候補{len(rows)}件 → 挿入{n}件"
+        print(f"[gap-heal] S7 {d}: 候補{len(rows)}件 → 挿入{n}件"
               f"{'（dry-run）' if args.dry_run else ''}")
         if n:
-            healed_summary.append(f"S4 {d}: {n}件")
+            healed_summary.append(f"S7 {d}: {n}件")
 
-    print(f"\n[gap-heal] 合計: S1 +{total_new_s1}件 / S4 +{total_new_s4}件")
+    print(f"\n[gap-heal] 合計: S1 +{total_new_s1}件 / S7 +{total_new_s4}件")
 
     if healed_summary and not args.dry_run:
         msg = (

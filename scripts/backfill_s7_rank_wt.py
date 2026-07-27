@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""S4（単勝×複勝指数トップ3重なり軸×波乱度選出・SEVEN_S4）の過去分バックフィル。
+"""S7（単勝×複勝指数トップ3重なり軸×波乱度選出・SEVEN_S7）の過去分バックフィル。
 
-S4 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
-判定は本番（wave-picks-wt の候補選定 + notify_prerace_wt.judge_s4）と
+S7 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
+判定は本番（wave-picks-wt の候補選定 + notify_prerace_wt.judge_s7）と
 同一条件を最終オッズ盤面で再現する:
 
   7車ちょうど ∧ 盤面(trio)7車
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-          strategy_wt.s4_select_axis() で選定
+          strategy_wt.s7_select_axis() で選定
   波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-  entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
+  entropy = strategy_wt.s7_field_entropy()（フィールド全体のpred_prob分布の
             拡散度。オッズ非依存。2026-07-26導入）
-  選出 = strategy_wt.s4_evening_reselect()（2026-07-26改定・axis_sum/entropy
-         閾値ゲート＋日次S4_DAILY_CAP件のentropy昇順トリム）:
+  選出 = strategy_wt.s7_evening_reselect()（2026-07-26改定・axis_sum/entropy
+         閾値ゲート＋日次S7_DAILY_CAP件のentropy昇順トリム）:
          軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
-         axis_sum<=S4_AXIS_SUM_MAX かつ entropy<=S4_ENTROPY_MAX の
+         axis_sum<=S7_AXIS_SUM_MAX かつ entropy<=S7_ENTROPY_MAX の
          レース単位閾値ゲートを満たす候補のうち、重なり0(全く重ならない)・
          重なり1(片方一致)を採用（重なり2(完全一致)・マーク欠損は除外）。
-         日次合計がS4_DAILY_CAPを超える場合のみentropy昇順で上位のみ残す
+         日次合計がS7_DAILY_CAPを超える場合のみentropy昇順で上位のみ残す
          （honest全期間ではほぼ発火しない安全網）
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
@@ -25,7 +25,7 @@ S4 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
 払戻 = 的中時 trio 最終オッズ×100。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/backfill_s4_rank_wt.py \
+    PYTHONPATH=. .venv/bin/python scripts/backfill_s7_rank_wt.py \
         --start 2024-01-01 --end 2026-07-10 [--model lgbm_wt_eval] \
         [--wipe] [--dry-run]
 """
@@ -45,8 +45,8 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S4_STAKE, s4_evening_reselect, s4_field_entropy, s4_gate_label, s4_select_axis,
-    s4_wt_mark3_overlap_n, s4_wt_overlap_n,
+    S7_STAKE, s7_evening_reselect, s7_field_entropy, s7_gate_label, s7_select_axis,
+    s7_wt_mark3_overlap_n, s7_wt_overlap_n,
 )
 
 
@@ -76,7 +76,7 @@ def _load_trio_boards(race_keys: list[str]) -> dict:
 
 def build_rows(model_name: str, date_from: str, date_to: str,
                 win_model_name: str = "lgbm_wt_win") -> list[dict]:
-    """バックフィル対象の S4(#7S4) 行（採点済み）を構築する。"""
+    """バックフィル対象の S7(#7S7) 行（採点済み）を構築する。"""
     model = load_model(model_name)
     win_model = load_model(win_model_name)
     df = build_features_wt(load_raw_data_wt(min_date=date_from, max_date=date_to))
@@ -130,11 +130,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
         class_map = {int(r.frame_no): r.player_class for r in g.itertuples(index=False)}
-        sel = s4_select_axis(win_probs, top3_probs)
+        sel = s7_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
-        entropy = s4_field_entropy(top3_probs)
+        entropy = s7_field_entropy(top3_probs)
         if axis1 not in board or axis2 not in board:
             continue
 
@@ -149,8 +149,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
         wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
-        wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-        wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+        wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
@@ -160,7 +160,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
 
-    # ── 日次選出: s4_evening_reselect()（axis_sum/entropy閾値ゲート＋日次S4_DAILY_CAP） ──
+    # ── 日次選出: s7_evening_reselect()（axis_sum/entropy閾値ゲート＋日次S7_DAILY_CAP） ──
     by_day: dict[str, list[dict]] = defaultdict(list)
     for c_ in candidates:
         by_day[c_["race_date"]].append(c_)
@@ -170,7 +170,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         # バックフィルはAM/PMバッチ分割を再現しないため、day_raw=day_cands・
         # night_raw=空リスト・locked_keys=空集合（過去分に「既に買い判定済み」は
         # 存在しない）で1日分をまとめて処理する。
-        for c_ in s4_evening_reselect(day_cands, [], set()):
+        for c_ in s7_evening_reselect(day_cands, [], set()):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
             combos = []
@@ -183,12 +183,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             rk = c_["race_key"]
             hit = c_["actual_top3"] in combos
             trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-            pay = trio_pay * S4_STAKE // 100 if hit else 0
-            bet = len(combos) * S4_STAKE
-            gate_label = s4_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
+            pay = trio_pay * S7_STAKE // 100 if hit else 0
+            bet = len(combos) * S7_STAKE
+            gate_label = s7_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
             rows.append({
                 "race_date": d,
-                "race_key": f"{rk}#7S4", "rank": "SEVEN_S4",
+                "race_key": f"{rk}#7S7", "rank": "SEVEN_S7",
                 "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in c_["others"])
                               + f" (axis_sum={c_['axis_sum']:.1f})",
                 "n_combos": len(combos), "hit": int(hit), "payout": pay,
@@ -198,12 +198,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
 
 def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='SEVEN_S4' AND race_key LIKE '%#7S4' AND race_date BETWEEN ? AND ?"
+    cond = "rank='SEVEN_S7' AND race_key LIKE '%#7S7' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
             (date_from, date_to)).fetchone()[0]
-        print(f"[backfill] 既存 #7S4 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[backfill] 既存 #7S7 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
@@ -213,16 +213,16 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='SEVEN_S4' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='SEVEN_S7' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
-                        ("%#7S4", date_from, date_to))
+                        ("%#7S7", date_from, date_to))
             n = cur.fetchone()[0]
-            print(f"[backfill] VPS PG 既存 #7S4 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            print(f"[backfill] VPS PG 既存 #7S7 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
-                            ("%#7S4", date_from, date_to))
+                            ("%#7S7", date_from, date_to))
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
@@ -273,7 +273,7 @@ def main() -> None:
     ap.add_argument("--model", default="lgbm_wt_eval")
     ap.add_argument("--win-model", default="lgbm_wt_win")
     ap.add_argument("--wipe", action="store_true",
-                    help="書き込み前に対象期間の既存 #7S4 行を削除")
+                    help="書き込み前に対象期間の既存 #7S7 行を削除")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -290,7 +290,7 @@ def main() -> None:
     bet = sum(r["bet_amount"] for r in rows)
     ret = sum(r["payout"] for r in rows)
     roi = ret / bet * 100 if bet else 0
-    print(f"[backfill] S4(波乱度選出): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
+    print(f"[backfill] S7(波乱度選出): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
           f"投資{bet:,} → 回収{ret:,} ROI {roi:.1f}%", flush=True)
 
     insert_rows(rows, args.dry_run)

@@ -124,7 +124,7 @@ echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 候補書き込みに失敗（継続）"
 
-# --- 2b. netkeirin（ウマい車券）へS4(SS+/SS/S)候補を下書き自動入稿（2026-07-23新設）---
+# --- 2b. netkeirin（ウマい車券）へS7(SS+/SS/S)候補を下書き自動入稿（2026-07-23新設）---
 echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（朝）..."
 .venv/bin/python3 scripts/netkeirin_submit_wt.py "$TODAY" morning \
   2>&1 | tee -a "$LOG_DIR/netkeirin_${TODAY}.log" \

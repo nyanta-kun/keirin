@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""S9（S4の9車立て版・単勝×複勝指数トップ3重なり軸×entropy選出・NINE_S9）の
+"""S9（S7の9車立て版・単勝×複勝指数トップ3重なり軸×entropy選出・NINE_S9）の
 過去分バックフィル。
 
 S9 の検証期間実績を picks_history（VPS PG）に構築する。
 
   9車ちょうど ∧ 盤面(trio)9車
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-          strategy_wt.s4_select_axis() で選定（車数非依存の汎用実装を再利用）
-  entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
+          strategy_wt.s7_select_axis() で選定（車数非依存の汎用実装を再利用）
+  entropy = strategy_wt.s7_field_entropy()（フィールド全体のpred_prob分布の
             拡散度。オッズ非依存）
   選出 = strategy_wt.s9_daily_select():
          軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
@@ -40,8 +40,8 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S9_STAKE, s4_field_entropy, s4_gate_label, s4_select_axis, s4_wt_mark3_overlap_n,
-    s4_wt_overlap_n, s9_daily_select,
+    S9_STAKE, s7_field_entropy, s7_gate_label, s7_select_axis, s7_wt_mark3_overlap_n,
+    s7_wt_overlap_n, s9_daily_select,
 )
 
 N_CAR = 9
@@ -126,11 +126,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
         class_map = {int(r.frame_no): r.player_class for r in g.itertuples(index=False)}
-        sel = s4_select_axis(win_probs, top3_probs)
+        sel = s7_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
-        entropy = s4_field_entropy(top3_probs)
+        entropy = s7_field_entropy(top3_probs)
         if axis1 not in board or axis2 not in board:
             continue
 
@@ -145,8 +145,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
         wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
-        wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-        wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+        wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
@@ -172,7 +172,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
         pay = trio_pay * S9_STAKE // 100 if hit else 0
         bet = len(combos) * S9_STAKE
-        gate_label = s4_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
+        gate_label = s7_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
         rows.append({
             "race_date": c_["race_date"],
             "race_key": f"{rk}#9S9", "rank": "NINE_S9",

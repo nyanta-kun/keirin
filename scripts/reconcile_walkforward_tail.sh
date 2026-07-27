@@ -1,5 +1,5 @@
 #!/bin/bash
-# 毎日00:50実行: S1/S4/S9の直近ウィンドウ（2026-04-13〜昨日）のみを
+# 毎日00:50実行: S1/S7/S9の直近ウィンドウ（2026-04-13〜昨日）のみを
 # 現行eval model（lgbm_wt_eval/lgbm_wt_win_eval）でhonestに再構築する。
 #
 # 背景: daily_picks_wt.sh/evening_picks_wt.sh が書き込む当日の候補行
@@ -27,8 +27,8 @@ echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a 
 .venv/bin/python3 scripts/rebuild_s1_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
   || echo "[$(date '+%H:%M:%S')] S1 tail再構築 失敗（継続）" | tee -a "$LOG"
 
-.venv/bin/python3 scripts/rebuild_s4_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
-  || echo "[$(date '+%H:%M:%S')] S4 tail再構築 失敗（継続）" | tee -a "$LOG"
+.venv/bin/python3 scripts/rebuild_s7_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
+  || echo "[$(date '+%H:%M:%S')] S7 tail再構築 失敗（継続）" | tee -a "$LOG"
 
 .venv/bin/python3 scripts/rebuild_s9_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
   || echo "[$(date '+%H:%M:%S')] S9 tail再構築 失敗（継続）" | tee -a "$LOG"

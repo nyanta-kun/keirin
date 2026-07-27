@@ -4,7 +4,7 @@
 rebuild_s1_walkforward.py はローカルSQLite前提（KEIRIN_DB_URLをpopして
 ローカル読み取り）だが、2026-07-22にローカルSQLiteは廃止されVPS PGへ
 一本化済み（wt_odds含め2024-01-01〜のtrifectaオッズを確認済み）。
-S4/S9のrebuild_s4_walkforward_pg.py/rebuild_s9_walkforward_pg.pyと同じ設計で、
+S7/S9のrebuild_s7_walkforward_pg.py/rebuild_s9_walkforward_pg.pyと同じ設計で、
 環境変数をpopしないPG直読みの単発スクリプトとして実行する（get_connection()
 単一経路のみ使用。backfill_s1w_rank_wt.wipe_rows/insert_rowsをそのまま使うと
 「ローカル+VPSミラー」二重書き込みが同一PGへ二重に当たるため専用実装）。

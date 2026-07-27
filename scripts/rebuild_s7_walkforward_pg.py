@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""S4(SEVEN_S4) axis_sum<=1.3 フィルタ導入(2026-07-24)反映のための全期間honest再構築。
+"""S7(SEVEN_S7) axis_sum<=1.3 フィルタ導入(2026-07-24)反映のための全期間honest再構築。
 
-rebuild_s4_walkforward.py はローカル完全SQLite前提（KEIRIN_DB_URLをpopして
+rebuild_s7_walkforward.py はローカル完全SQLite前提（KEIRIN_DB_URLをpopして
 ローカル読み取り）だが、2026-07-22にローカルSQLiteは廃止されVPS PGへ一本化済み
 （wt_odds含め2024-01-01〜のtrioオッズを確認済み）。S1のhonest再構築時と同様、
 環境変数をpopしないPG直読みの単発スクリプトとして実行する。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/rebuild_s4_walkforward_pg.py [--dry-run]
+    PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py [--dry-run]
 """
 from __future__ import annotations
 
@@ -18,20 +18,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.backfill_s4_rank_wt import build_rows
+from scripts.backfill_s7_rank_wt import build_rows
 from src.database import get_connection
 
 
 def wipe_rows_pg(date_from: str, date_to: str, dry_run: bool) -> None:
-    """backfill_s4_rank_wt.wipe_rows と違い get_connection() 単一経路のみ使う
+    """backfill_s7_rank_wt.wipe_rows と違い get_connection() 単一経路のみ使う
     （KEIRIN_DB_URLをpopしないためget_connection()自体が既にVPS PGを指しており、
     そのままだと元のwipe_rows/insert_rowsの「ローカル+VPSミラー」二重書き込みが
     同一PGへ二重に当たり、insert側はUNIQUE(race_key)違反で失敗するため）。"""
-    cond = "rank='SEVEN_S4' AND race_key LIKE '%#7S4' AND race_date BETWEEN ? AND ?"
+    cond = "rank='SEVEN_S7' AND race_key LIKE '%#7S7' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
                           (date_from, date_to)).fetchone()[0]
-        print(f"[rebuild-s4-pg] 既存 #7S4 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[rebuild-s4-pg] 既存 #7S7 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
@@ -98,7 +98,7 @@ def main() -> None:
         bet = sum(r["bet_amount"] for r in rows)
         pay = sum(r["payout"] for r in rows)
         n_days = (date.fromisoformat(date_to) - date.fromisoformat(date_from)).days + 1
-        print(f"[rebuild-s4-pg]   S4: {len(rows)}R ({len(rows)/n_days:.1f}R/日) 的中{n_hit} "
+        print(f"[rebuild-s4-pg]   S7: {len(rows)}R ({len(rows)/n_days:.1f}R/日) 的中{n_hit} "
               f"({n_hit / len(rows) * 100 if rows else 0:.1f}%) "
               f"投資{bet:,} → 回収{pay:,} ROI {pay / bet * 100 if bet else 0:.1f}%", flush=True)
         all_rows.extend(rows)
@@ -107,7 +107,7 @@ def main() -> None:
     total_bet = sum(r["bet_amount"] for r in all_rows)
     total_pay = sum(r["payout"] for r in all_rows)
     print(f"\n[rebuild-s4-pg] ===== 全期間合計 =====")
-    print(f"[rebuild-s4-pg] S4: {len(all_rows)}R 的中{total_hit} "
+    print(f"[rebuild-s4-pg] S7: {len(all_rows)}R 的中{total_hit} "
           f"({total_hit / len(all_rows) * 100 if all_rows else 0:.1f}%) "
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")

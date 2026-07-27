@@ -55,16 +55,16 @@ HOLD = ("2026-03-01", "2026-06-30")
 # 2026-07-16: 旧S1（7PLUS_R・実賭け）全廃 → 全ランクがペーパー。
 # 2026-07-17: S1(SIX_S1)/A(7PLUS_A) 全廃・S3(7PLUS_M) は新定義（不一致×gap12≥0.10）。
 # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) を対象レース数・的中率・期待値の観点で全廃。
-# 2026-07-21: S4(SEVEN_S4)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
+# 2026-07-21: S7(SEVEN_S7)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
 # 再編。picks_history.gate_label列（SS/S）で絞り込む（4要素目・Noneならフィルタなし）。
 # 2026-07-23: SS のうち軸2車が各グレード最上位クラス(S1/A1)を含まないサブセットを
 # "SS+" として観察用に追加（実際の購入対象は変更しない表示分岐）。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
 PAPER_RANKS = [
     ("S1", "SEVEN_S1", "#7S1", None),
-    ("SS+", "SEVEN_S4", "#7S4", "SS+"),
-    ("SS", "SEVEN_S4", "#7S4", "SS"),
-    ("S", "SEVEN_S4", "#7S4", "S"),
+    ("SS+", "SEVEN_S7", "#7S7", "SS+"),
+    ("SS", "SEVEN_S7", "#7S7", "SS"),
+    ("S", "SEVEN_S7", "#7S7", "S"),
 ]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
@@ -285,7 +285,7 @@ def paper_rank_stats() -> dict:
     """picks_history からペーパーランク（S1/SS/S）の検証期間集計を返す。
 
     バックフィル済みの picks_history（実精算）を PAPER_HOLD 期間で集計する。
-    候補行（bet_amount=0）・見送り行は含めない。SS/S は同一rank(SEVEN_S4)を
+    候補行（bet_amount=0）・見送り行は含めない。SS/S は同一rank(SEVEN_S7)を
     gate_label列（"SS"/"S"）で絞り込んで区別する。
     """
     out: dict[str, dict] = {}
@@ -430,9 +430,9 @@ def main() -> None:
             # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) 全廃
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7U'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7M'")
-            # 2026-07-21: S4を軸2車とWT◎◯の重なりでSS/Sへ再編したため、
-            # 旧統合S4行（"#7S4"で終わる。"#7SS"/"#7S"とは末尾一致で衝突しない）を削除
-            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S4'")
+            # 2026-07-21: S7を軸2車とWT◎◯の重なりでSS/Sへ再編したため、
+            # 旧統合S7行（"#7S7"で終わる。"#7SS"/"#7S"とは末尾一致で衝突しない）を削除
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S7'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:

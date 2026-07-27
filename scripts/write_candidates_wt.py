@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
-from src.strategy_wt import s4_gate_label
+from src.strategy_wt import s7_gate_label
 
 GAMI_THRESHOLD = 7.0  # レース単位ガミ閾値（min全目。main.py / notify_prerace_wt.py と揃える）
 
@@ -256,11 +256,11 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
 
 
 def _write_paper_candidates(target_date: str) -> None:
-    """S1/S4（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
+    """S1/S7（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
 
     2026-07-16〜: 候補時点で {rk}#7S1 行（bet_amount=0・miwokuri=False・
     pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
-    2026-07-21〜: S4（{rk}#7S4）も同様に候補時点で書き込む。以前は発走15分前の
+    2026-07-21〜: S7（{rk}#7S7）も同様に候補時点で書き込む。以前は発走15分前の
     買い判定が成立して初めて行が生成されるため、それ以前は他の推奨外レースと
     区別がつかず、また15分前判定がオッズ条件で見送りになった場合は行自体が
     存在せず _mark_paper_miwokuri() のUPDATEが対象0件で空振りしていた
@@ -300,16 +300,16 @@ def _write_paper_candidates(target_date: str) -> None:
         # 表記: axis→p1=p2（U/Mの "=" 記法と統一・ユーザーフィードバック反映）
         rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}={p2}", None))
 
-    for c in _load((f"wave_picks_wt_{target_date}_s4_candidates.json",
-                    f"wave_picks_wt_{target_date}_night_s4_candidates.json")):
+    for c in _load((f"wave_picks_wt_{target_date}_s7_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7_candidates.json")):
         rk = c.get("race_key")
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        gate_label = s4_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
+        gate_label = s7_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
-            continue  # 重なり2・不明は候補として表示しない（s4_daily_select と同じ除外対象）
-        rows.append((f"{rk}#7S4", "SEVEN_S4", f"{axis1}={axis2}-候補", gate_label))
+            continue  # 重なり2・不明は候補として表示しない（s7_daily_select と同じ除外対象）
+        rows.append((f"{rk}#7S7", "SEVEN_S7", f"{axis1}={axis2}-候補", gate_label))
 
     if not rows:
         return
@@ -328,7 +328,7 @@ def _write_paper_candidates(target_date: str) -> None:
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S1/S4) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(S1/S7) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")

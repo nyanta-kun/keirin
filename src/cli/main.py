@@ -1209,8 +1209,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.database import get_connection
     from src.strategy_wt import (
         S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
-        s1w_select, s4_daily_select, s4_field_entropy, s4_select_axis, s4_wt_mark3_overlap_n,
-        s4_wt_overlap_n, s9_daily_select, ss_policy,
+        s1w_select, s7_daily_select, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
+        s7_wt_overlap_n, s9_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1686,7 +1686,7 @@ def wave_picks_wt(target_date, output_path, model_name,
     #   ゲート: top3_gap(p1-p2の3着内確率差) >= S1W_TOP3_GAP_MIN ∧
     #     axis_win_prob<=S1W_AXIS_WIN_PROB_MAX ∧ 軸級班denyフィルター ∧
     #     entropy<=S1W_ENTROPY_MAX（フィールド全体のpred_prob分布拡散度・
-    #     オッズ非依存。2026-07-27導入・S4/S9と同じentropyシグナルがS1でも
+    #     オッズ非依存。2026-07-27導入・S7/S9と同じentropyシグナルがS1でも
     #     独立に機能することを確認）
     #   買い目: 三連単 軸→p1→p2, 軸→p2→p1 の2点流し（目オッズ下限なし）
     if include_7plus:
@@ -1711,7 +1711,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 axis_win_prob = win_probs[axis]
                 _axis_rows = grp_sorted.loc[grp_sorted["frame_no"] == axis, "player_class"]
                 axis_player_class = _axis_rows.iloc[0] if not _axis_rows.empty else None
-                entropy = s4_field_entropy(top3_probs)
+                entropy = s7_field_entropy(top3_probs)
                 if not s1w_gate(top3_gap, axis_win_prob, axis_player_class, entropy):
                     continue
                 s1_candidates.append({
@@ -1733,27 +1733,27 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・win軸1着固定/ペーパー検証)")
 
-    # ── S4候補（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し・2026-07-21導入）──
+    # ── S7候補（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し・2026-07-21導入）──
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-    #         strategy_wt.s4_select_axis() で選定
+    #         strategy_wt.s7_select_axis() で選定
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-    # entropy = strategy_wt.s4_field_entropy()（フィールド全体のpred_prob分布の
+    # entropy = strategy_wt.s7_field_entropy()（フィールド全体のpred_prob分布の
     #   拡散度。オッズ非依存＝朝の時点で計算可能。2026-07-26導入）
-    # 選出 = strategy_wt.s4_daily_select()（2026-07-26改定・axis_sum/wt_overlap の
+    # 選出 = strategy_wt.s7_daily_select()（2026-07-26改定・axis_sum/wt_overlap の
     #   件数capを撤廃しentropy閾値ゲートへ置換）
     #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
-    #   axis_sum<=S4_AXIS_SUM_MAX かつ entropy<=S4_ENTROPY_MAX を満たす候補のうち、
+    #   axis_sum<=S7_AXIS_SUM_MAX かつ entropy<=S7_ENTROPY_MAX を満たす候補のうち、
     #   重なり0(全く重ならない)・重なり1(片方一致)は件数上限なしで全件採用、
     #   重なり2(完全一致)は除外する。この時点（朝または夜どちらか一方のバッチ）
     #   では日次合計の枠取り合いが起きないため件数capは適用しない。
-    #   s4_evening_reselect() が朝夜の生プールを合算し、日次合計が S4_DAILY_CAP
+    #   s7_evening_reselect() が朝夜の生プールを合算し、日次合計が S7_DAILY_CAP
     #   （通常運用ではほぼ発火しない安全網）を超える場合のみentropy昇順でトリムする。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
         # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
-        s4_pm_fallback = None
+        s7_pm_fallback = None
         if "prediction_mark" not in df.columns:
-            s4_pm_fallback = {}
+            s7_pm_fallback = {}
             with get_connection() as conn_s4:
                 for _rk_s4, _fno_s4, _pm_s4 in conn_s4.execute(
                     "SELECT e.race_key, e.frame_no, e.prediction_mark "
@@ -1761,9 +1761,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "WHERE r.race_date = ?", (target_date,)
                 ).fetchall():
                     if _pm_s4 is not None:
-                        s4_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
+                        s7_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
 
-        s4_raw_candidates = []
+        s7_raw_candidates = []
         if "pred_win" in df.columns:
             for race_key, grp in df.groupby("race_key"):
                 if n_entries_map.get(race_key, 0) != 7:
@@ -1777,27 +1777,27 @@ def wave_picks_wt(target_date, output_path, model_name,
                              for r in grp_sorted.itertuples(index=False)}
                 top3_probs = {int(r.frame_no): float(r.pred_prob)
                               for r in grp_sorted.itertuples(index=False)}
-                sel = s4_select_axis(win_probs, top3_probs)
+                sel = s7_select_axis(win_probs, top3_probs)
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
-                entropy = s4_field_entropy(top3_probs)
+                entropy = s7_field_entropy(top3_probs)
 
-                if s4_pm_fallback is None:
+                if s7_pm_fallback is None:
                     _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
                               for r in grp_sorted.itertuples(index=False)}
                 else:
-                    _marks = s4_pm_fallback.get(race_key, {})
+                    _marks = s7_pm_fallback.get(race_key, {})
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
                 wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
-                wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-                wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+                wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
-                s4_raw_candidates.append({
+                s7_raw_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                     "race_no":    int(grp_sorted["race_no"].iloc[0]),
@@ -1811,32 +1811,32 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "axis2_class": _class_map_s4.get(axis2),
                 })
         else:
-            click.echo("[wt] lgbm_wt_win が見つかりません。S4候補は生成しません。", err=True)
+            click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
 
-        # 2026-07-26再設計: 件数capを撤廃したためこの時点の s4_daily_select() 適用結果が
+        # 2026-07-26再設計: 件数capを撤廃したためこの時点の s7_daily_select() 適用結果が
         # そのまま最終候補になる（朝夕の枠取り合いが発生しないため先着問題も解消）。
-        # 生候補も別途保存する（scripts/s4_evening_reselect.py が朝夜の生プールを
+        # 生候補も別途保存する（scripts/s7_evening_reselect.py が朝夜の生プールを
         # 合算してゲートを再適用する処理は引き続き行うが、単純併合になった）。
         is_night = out_stem.endswith("_night")
-        s4_raw_path = Path(output_path).parent / (
-            f"wave_picks_wt_{target_date}_night_s4_raw_candidates.json" if is_night
-            else f"wave_picks_wt_{target_date}_s4_raw_candidates.json")
-        with open(s4_raw_path, "w", encoding="utf-8") as f:
-            json.dump(s4_raw_candidates, f, ensure_ascii=False, indent=2)
+        s7_raw_path = Path(output_path).parent / (
+            f"wave_picks_wt_{target_date}_night_s7_raw_candidates.json" if is_night
+            else f"wave_picks_wt_{target_date}_s7_raw_candidates.json")
+        with open(s7_raw_path, "w", encoding="utf-8") as f:
+            json.dump(s7_raw_candidates, f, ensure_ascii=False, indent=2)
 
-        s4_candidates = s4_daily_select(s4_raw_candidates)
-        s4_candidates.sort(key=lambda c: c["axis_sum"])
+        s7_candidates = s7_daily_select(s7_raw_candidates)
+        s7_candidates.sort(key=lambda c: c["axis_sum"])
 
-        s4_suffix = "_night_s4_candidates.json" if is_night else "_s4_candidates.json"
-        s4_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s4_suffix}"
-        with open(s4_path, "w", encoding="utf-8") as f:
-            json.dump(s4_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s4_path}  (S4候補 {len(s4_candidates)}件/{len(s4_raw_candidates)}件中"
+        s7_suffix = "_night_s7_candidates.json" if is_night else "_s7_candidates.json"
+        s7_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s7_suffix}"
+        with open(s7_path, "w", encoding="utf-8") as f:
+            json.dump(s7_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {s7_path}  (S7候補 {len(s7_candidates)}件/{len(s7_raw_candidates)}件中"
                    f"・波乱度選出/ペーパー検証)")
 
-    # ── S9候補（S4の9車立て版・独立ランク・2026-07-26導入）──
+    # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
     # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は
-    # S4と同じ車数非依存の汎用実装（s4_select_axis/s4_field_entropy）を再利用。
+    # S7と同じ車数非依存の汎用実装（s7_select_axis/s7_field_entropy）を再利用。
     # 選出 = strategy_wt.s9_daily_select()（entropy<=S9_ENTROPY_MAX ∧ wt_overlap∈{0,1}
     #   のみ。axis_sum閾値・日次capは9車では未導入＝低ボリュームのため現時点で不要）。
     # 買い目 = 三連複 軸2車 + 残り7車のいずれか1車（7点・オッズ下限なし）
@@ -1867,11 +1867,11 @@ def wave_picks_wt(target_date, output_path, model_name,
                              for r in grp_sorted.itertuples(index=False)}
                 top3_probs = {int(r.frame_no): float(r.pred_prob)
                               for r in grp_sorted.itertuples(index=False)}
-                sel = s4_select_axis(win_probs, top3_probs)
+                sel = s7_select_axis(win_probs, top3_probs)
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
-                entropy = s4_field_entropy(top3_probs)
+                entropy = s7_field_entropy(top3_probs)
 
                 if s9_pm_fallback is None:
                     _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
@@ -1881,8 +1881,8 @@ def wave_picks_wt(target_date, output_path, model_name,
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
                 wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
-                wt_overlap_n = s4_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-                wt_mark3_overlap_n = s4_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+                wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _class_map_s9 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}

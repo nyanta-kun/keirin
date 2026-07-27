@@ -189,14 +189,14 @@ S1W_AXIS_WIN_PROB_MAX = 0.50  # 軸の単勝勝率 上限（本命決着＝低�
 S1W_DENY_AXIS_CLASS = {"S1", "A1"}  # 軸級班denyフィルター（2026-07-22新設）
 S1W_STAKE = 100              # 円/点（ペーパー）
 
-# フィールド全体の指数エントロピー上限（2026-07-27導入）。S4/S9で有効だった
+# フィールド全体の指数エントロピー上限（2026-07-27導入）。S7/S9で有効だった
 # entropyシグナル（exp_upset_trio30_v2_wt.py等）がS1でも独立に機能するか
 # exp_s1w_entropy_wt.pyで検証: S1w_gate通過済み母集団(n=6,502)で2024Q1のみ
 # entropy下位25%点(=1.7571)を決定→残り9四半期へブラインド適用（真のwalk-forward・
 # 9四半期**全て**で方向一致）:
 #   entropy<=1.7571: n=1,686 的中14.9% ROI454.7%（30倍+的中47/107=44%を独占）
 #   entropy> 1.7571: n=4,203 的中8.5%  ROI71.5%（赤字帯）
-# axis_win_prob<=0.50・軸級班denyとは独立な追加ゲート（S4のentropyがaxis_sumと
+# axis_win_prob<=0.50・軸級班denyとは独立な追加ゲート（S7のentropyがaxis_sumと
 # ほぼ無相関だったのと同型）。
 S1W_ENTROPY_MAX = 1.7571
 
@@ -240,7 +240,7 @@ def s1w_gate(
       再現率85.7%を維持しつつ母数を約半分に絞る）。
       axis_player_class=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
     - entropy（フィールド全体の指数エントロピー）が渡された場合は
-      <= S1W_ENTROPY_MAX も要求（2026-07-27新設。S4/S9で有効だったentropy
+      <= S1W_ENTROPY_MAX も要求（2026-07-27新設。S7/S9で有効だったentropy
       シグナルがS1でも独立に機能することをexp_s1w_entropy_wt.pyで確認：
       entropy<=1.7571 ROI454.7% / entropy>1.7571 ROI71.5%）。
       entropy=None の場合はこの条件をスキップ（過去分析スクリプト互換）。
@@ -257,7 +257,7 @@ def s1w_gate(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# S4（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し）— 2026-07-21 導入
+# S7（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し）— 2026-07-21 導入
 #
 # ユーザー仮説の検証（exp_upset_axis_trio.py 相当・正規プロトコル: 検証2025-04-01〜
 # 2026-03-31／テスト2026-04-01〜07-10）で発見:
@@ -269,7 +269,7 @@ def s1w_gate(
 # 波乱度指数 = 軸2車のpred_top3_pct合計（axis_sum）。低いほど「軸自体が本命でない」
 #   ＝波乱度が高いレースと解釈する。レース全体のエントロピー（拮抗度）で絞ると
 #   ROIが悪化する（絞り込みなし85.7%→73.5%）ことを確認済みで不採用。
-# 選出 = 当日の該当レースをaxis_sum昇順に並べ、上位 S4_DAILY_TOP_N 件を採用
+# 選出 = 当日の該当レースをaxis_sum昇順に並べ、上位 S7_DAILY_TOP_N 件を採用
 #   （1レース単位の閾値ゲートではなく日次クロスレースランキング）。
 # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）。
 #
@@ -292,15 +292,15 @@ def s1w_gate(
 # 的中率はほぼ横ばいなのにROIが重なり数に応じて単調に悪化する構造を確認
 # （完全一致時は市場に織り込まれ済みで払戻が縮む＝コンセンサスピックの低配当化）。
 # ユーザー指示により、重なり0は無条件で全件採用・重なり1はaxis_sum昇順で固定
-# S4_DAILY_TOP_N件・重なり2は完全除外という選出方式へ変更（1日の採用本数は
+# S7_DAILY_TOP_N件・重なり2は完全除外という選出方式へ変更（1日の採用本数は
 # 重なり0の発生数に応じて可変・honest全期間で平均10.77R/日）。
 # honest全期間再構築（この方式）: 9,927R（922日・10.77R/日）・的中36.3%・
 # **ROI131.3%**（旧方式の128.1%から改善）。内訳: 重なり0(943R)的中39.4%/ROI232.8%・
 # 重なり1(8984R)的中36.0%/ROI120.6%。
 # ═══════════════════════════════════════════════════════════════════════════
 
-S4_NE = 7                  # 対象車数（7車ちょうど）
-S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
+S7_NE = 7                  # 対象車数（7車ちょうど）
+S7_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 
 # 三連複が安くなりやすい（極端な人気決着になりやすい）レースの除外上限
 # （2026-07-24・ユーザー要望「三連複5倍未満は購入対象から除外したい」への対応）。
@@ -314,17 +314,17 @@ S4_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 # axis_sum<=1.3 全期間シミュレーション: 全体 10.75件/日→7.83件/日(-27%)・
 #   的中36.3%→34.4%・ROI 131.3%→147.1%（SS+ 363→444%・SS 150→185%・S 121→132%）。
 # ユーザー判断で 1.3 を採用（1.2はROI182%まで伸びるが件数-59%と減りすぎ、
-# 1.4は件数維持だがROI改善が+5pt程度に留まる）。次点繰り上げなし（S4_HALF_CAP/
-# S4_DAILY_TOP_N の cap 内で足切りするだけ＝S1のS1/A1級班denyフィルタと同じ設計。
+# 1.4は件数維持だがROI改善が+5pt程度に留まる）。次点繰り上げなし（S7_HALF_CAP/
+# S7_DAILY_TOP_N の cap 内で足切りするだけ＝S1のS1/A1級班denyフィルタと同じ設計。
 # 重なり0(SS/SS+)はcap無しのため単純カット、重なり1(S)はaxis_sum昇順選出後の
 # 末尾が削れるだけで繰り上がり由来のROI悪化は発生しない）。
-S4_AXIS_SUM_MAX = 1.3
+S7_AXIS_SUM_MAX = 1.3
 
 # フィールド全体の指数エントロピー上限（2026-07-26・ユーザー要望「30倍以上の
 # 高配当が見込めるレースに絞りたい」への対応。exp_upset_trio30_v2_wt.py /
 # exp_s4_entropy_walkforward.py / exp_s4_entropy_uncapped_wt.py 参照）。
 #
-# 注意: 2026-07-21のS4設計時点では「レース全体のエントロピーで絞るとROIが
+# 注意: 2026-07-21のS7設計時点では「レース全体のエントロピーで絞るとROIが
 # 悪化する（絞り込みなし85.7%→73.5%）」という逆方向（entropy**高い**ほど波乱＝
 # 採用、旧Uランクu_entropyと同じ発想でaxis_sumの代替ランキング基準として試行）
 # の検証結果が残っているが、本フィルタはそれとは別物: **低い**entropy
@@ -341,13 +341,13 @@ S4_AXIS_SUM_MAX = 1.3
 # 同数条件での比較（axis_sum昇順で同じ件数を採用した場合）でも、entropy選定は
 # 7四半期中6四半期で明確に上回り、残り1四半期も同水準（axis_sumの代替ではなく
 # 独立した追加情報。spearman相関≈-0.08で axis_sum とはほぼ無相関）。
-# 採用ペースは平均2.56件/日（S4_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
-S4_ENTROPY_MAX = 1.8329
+# 採用ペースは平均2.56件/日（S7_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
+S7_ENTROPY_MAX = 1.8329
 
 # 日次合計の上限（entropy昇順で採用・2026-07-26再導入）。
 # 件数capをentropyゲートに置換した初日（2026-07-26）、entropyフィールドを
 # 持たない旧形式の生候補JSON（デプロイ前に生成された朝バッチ分）が
-# s4_daily_select() の `c.get("entropy", 0.0)` フォールバックにより
+# s7_daily_select() の `c.get("entropy", 0.0)` フォールバックにより
 # entropy=0.0扱い＝常にゲート通過してしまい、1日26件という honest全期間
 # walk-forward(2024-01-01〜2026-07-25・832日、最大9件/日)では一度も
 # 発生しなかった規模の異常発生を招いた（原因判明後、フォールバックは
@@ -358,13 +358,13 @@ S4_ENTROPY_MAX = 1.8329
 # 最大9件/日のため、この上限は通常運用ではほぼ発火しない安全網であり、
 # capの値を8/10/12/15/無制限で振っても全期間ROI/件数は完全に同一
 # （exp_s4_daily_cap_by_entropy.py参照）。異常発生時のみ効く設計。
-S4_DAILY_CAP = 12
+S7_DAILY_CAP = 12
 
 
-def s4_field_entropy(top3_probs: dict[int, float]) -> float:
+def s7_field_entropy(top3_probs: dict[int, float]) -> float:
     """レース全体（出走7車）の指数エントロピー（占有率ベースの拮抗度）を返す。
 
-    top3_probs: {frame_no: pred_prob}（s4_select_axis と同じ入力）。
+    top3_probs: {frame_no: pred_prob}（s7_select_axis と同じ入力）。
     値が低いほど予測確率が一部の車（主に軸2車）に集中している状態。
     オッズを一切使わないため、発走前・オッズ非公開の朝の時点でも計算可能。
     """
@@ -379,10 +379,10 @@ def s4_field_entropy(top3_probs: dict[int, float]) -> float:
     return ent
 
 
-def s4_select_axis(
+def s7_select_axis(
     win_probs: dict[int, float], top3_probs: dict[int, float],
 ) -> tuple[int, int, float] | None:
-    """S4の軸2車とaxis_sum（波乱度指数の元）を選定する。
+    """S7の軸2車とaxis_sum（波乱度指数の元）を選定する。
 
     win_probs / top3_probs: {frame_no: 確率(0-1 or pct、比較にのみ使うのでスケール不問)}
       レース内全車分。
@@ -413,14 +413,14 @@ def s4_select_axis(
     return axis1, axis2, axis_sum
 
 
-def s4_wt_overlap_n(
+def s7_wt_overlap_n(
     axis1: int, axis2: int, wt_honmei: int | None, wt_taikou: int | None,
 ) -> int | None:
-    """S4の軸2車とWINTICKET公式予想の◎◯（honmei/taikou）との重なり数を返す。
+    """S7の軸2車とWINTICKET公式予想の◎◯（honmei/taikou）との重なり数を返す。
 
     wt_honmei: prediction_mark==1（◎）の frame_no。
     wt_taikou: prediction_mark==2（◯）の frame_no。
-    いずれか欠損時は None（重なり判定不能・s4_daily_select では除外対象）。
+    いずれか欠損時は None（重なり判定不能・s7_daily_select では除外対象）。
     """
     if wt_honmei is None or wt_taikou is None:
         return None
@@ -429,7 +429,7 @@ def s4_wt_overlap_n(
 
 # 2026-07-27: 軸2車がWINTICKET公式印◎◯△（mark1/2/3）のうち2つと一致する場合、
 # 市場人気と重なり払戻が下がりやすいという仮説を検証（exp_s4s9_3mark_overlap_wt.py・
-# S4+S9現行ライブ採用条件と同一母集団・n=2,560）:
+# S7+S9現行ライブ採用条件と同一母集団・n=2,560）:
 #   軸2車のうち2車が◎◯△のいずれかと一致: n=1,357 ROI182.9%
 #   それ以外                          : n=1,203 ROI434.4%
 # 払戻トップ5は全てこの「2車一致」に該当しない側（overlap3<=1）に集中しており、
@@ -438,18 +438,18 @@ def s4_wt_overlap_n(
 # 常に発生する（除外しない）。除外対象は軸2車**両方**が◎◯△のいずれかと一致する
 # ケースのみ。既存のwt_overlap_n（◎◯=mark1/2のみで判定・完全一致=2を既に除外）
 # とは独立な追加ゲート（mark3=△も加味）。
-S4_MARK3_OVERLAP_MAX = 1
+S7_MARK3_OVERLAP_MAX = 1
 
 
-def s4_wt_mark3_overlap_n(
+def s7_wt_mark3_overlap_n(
     axis1: int, axis2: int,
     wt_honmei: int | None, wt_taikou: int | None, wt_ana: int | None,
 ) -> int | None:
-    """S4/S9の軸2車とWINTICKET公式印◎◯△（mark1/2/3・honmei/taikou/ana）との
-    重なり数を返す（s4_wt_overlap_nの◎◯のみの判定に△を加えた拡張版）。
+    """S7/S9の軸2車とWINTICKET公式印◎◯△（mark1/2/3・honmei/taikou/ana）との
+    重なり数を返す（s7_wt_overlap_nの◎◯のみの判定に△を加えた拡張版）。
 
     wt_ana: prediction_mark==3（△）の frame_no。
-    いずれか欠損時は None（判定不能・s4_daily_select/s9_daily_select では
+    いずれか欠損時は None（判定不能・s7_daily_select/s9_daily_select では
     フェイルセーフとして除外対象扱いにする）。
     """
     if wt_honmei is None or wt_taikou is None or wt_ana is None:
@@ -457,7 +457,7 @@ def s4_wt_mark3_overlap_n(
     return len({axis1, axis2} & {wt_honmei, wt_taikou, wt_ana})
 
 
-# S4のSS(重なり0)のうち、軸2車のいずれかが各グレード最上位クラス（S1/A1）だと
+# S7のSS(重なり0)のうち、軸2車のいずれかが各グレード最上位クラス（S1/A1）だと
 # 配当が下がりやすい傾向を確認（2026-07-23・honest全期間検証）。SSは無制限採用
 # （日次cap無し）のため、S1と異なり「除外→繰り上がり」の副作用がなく単純に
 # 効く: train+val ROI222.3%→351.6%・全期間237.1%→362.2%（的中率は不変〜微増）。
@@ -465,16 +465,16 @@ def s4_wt_mark3_overlap_n(
 # ROIが悪化する（train+val 116.3%→111.5%・test 132.6%→119.2%）ことを確認済み。
 # → SS内の格上非該当サブセットを新表示ランク"SS+"として観察する（実際の
 # 購入対象・買い目は変更しない。あくまで表示分岐）。
-S4_TOP_CLASS = {"S1", "A1"}
+S7_TOP_CLASS = {"S1", "A1"}
 
 
-def s4_gate_label(
+def s7_gate_label(
     wt_overlap_n: int | None,
     axis1_class: str | None = None, axis2_class: str | None = None,
 ) -> str | None:
-    """S4の表示ランク(gate_label)を返す。
+    """S7の表示ランク(gate_label)を返す。
 
-    - wt_overlap_n == 0: 軸2車の級班情報が両方揃っており、いずれもS4_TOP_CLASS
+    - wt_overlap_n == 0: 軸2車の級班情報が両方揃っており、いずれもS7_TOP_CLASS
       でなければ "SS+"（観察用サブランク）、そうでなければ "SS"。
       級班情報が欠損している場合は従来通り "SS"（後方互換）。
     - wt_overlap_n == 1: "S"
@@ -482,7 +482,7 @@ def s4_gate_label(
     """
     if wt_overlap_n == 0:
         if axis1_class is not None and axis2_class is not None:
-            has_top = axis1_class in S4_TOP_CLASS or axis2_class in S4_TOP_CLASS
+            has_top = axis1_class in S7_TOP_CLASS or axis2_class in S7_TOP_CLASS
             return "SS" if has_top else "SS+"
         return "SS"
     if wt_overlap_n == 1:
@@ -490,19 +490,19 @@ def s4_gate_label(
     return None
 
 
-def s4_daily_select(candidates: list[dict]) -> list[dict]:
-    """S4の選出（2026-07-26改定: 件数capを撤廃しentropy閾値ゲートへ置換）。
+def s7_daily_select(candidates: list[dict]) -> list[dict]:
+    """S7の選出（2026-07-26改定: 件数capを撤廃しentropy閾値ゲートへ置換）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"axis_sum": float, "wt_overlap_n": int | None, "entropy": float} を持つ dict。
 
     選出ロジック（全て閾値ゲート。件数による打ち切りは行わない）:
-      - axis_sum > S4_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
+      - axis_sum > S7_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
         想定レース）は除外（2026-07-24導入）
-      - entropy > S4_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
+      - entropy > S7_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
         いない）は除外（2026-07-26導入。低いentropy＝軸2車に予測確率が集中し
         残り5車が拮抗、という状態が三連複高配当の的中と強く相関することを
-        2024-2026の8四半期walk-forwardで確認。詳細はS4_ENTROPY_MAX定義部参照）。
+        2024-2026の8四半期walk-forwardで確認。詳細はS7_ENTROPY_MAX定義部参照）。
         entropyキー欠損時は float("inf")扱い＝必ず除外する（フェイルセーフ。
         2026-07-26に0.0デフォルトだった旧実装が「欠損=常に通過」というフェイル
         オープンな挙動になっており、デプロイ当日の旧形式生候補JSON経由で
@@ -517,40 +517,40 @@ def s4_daily_select(candidates: list[dict]) -> list[dict]:
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
       - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が
         2（軸2車の両方が◎◯△のいずれかと一致）は除外（2026-07-27導入。
-        S4+S9合算honest検証でROI434.4%→182.9%まで低下すると判明。欠損時は
-        フェイルセーフとして2扱い＝除外。詳細はS4_MARK3_OVERLAP_MAX定義部参照）
+        S7+S9合算honest検証でROI434.4%→182.9%まで低下すると判明。欠損時は
+        フェイルセーフとして2扱い＝除外。詳細はS7_MARK3_OVERLAP_MAX定義部参照）
 
-    日次件数の上限（S4_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
+    日次件数の上限（S7_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
     バッチだけでは日次合計が分からないため）。日次合計への適用は
-    s4_evening_reselect() を参照。
+    s7_evening_reselect() を参照。
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
     pool = [
         c for c in candidates
-        if c["axis_sum"] <= S4_AXIS_SUM_MAX
-        and c.get("entropy", float("inf")) <= S4_ENTROPY_MAX
+        if c["axis_sum"] <= S7_AXIS_SUM_MAX
+        and c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
-        and c.get("wt_mark3_overlap_n", 2) <= S4_MARK3_OVERLAP_MAX
+        and c.get("wt_mark3_overlap_n", 2) <= S7_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
 
-def s4_evening_reselect(
+def s7_evening_reselect(
     day_raw: list[dict], night_raw: list[dict], locked_keys: set[str] = frozenset(),
 ) -> list[dict]:
-    """S4の朝夜統合選出（2026-07-26改定: entropyゲート通過後、日次合計を
-    S4_DAILY_CAP件まで entropy昇順（＝最も自信がある順）でトリムする）。
+    """S7の朝夜統合選出（2026-07-26改定: entropyゲート通過後、日次合計を
+    S7_DAILY_CAP件まで entropy昇順（＝最も自信がある順）でトリムする）。
 
-    day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s4_select_axis+
-      s4_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
+    day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s7_select_axis+
+      s7_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
     locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
       race_key の集合。ゲート・トリムいずれでも除外しない（実購入は取り消せない
-      ため）。ロック済み候補は s4_daily_select() のゲート判定より前に分離する
+      ため）。ロック済み候補は s7_daily_select() のゲート判定より前に分離する
       （2026-07-26修正: ロック済みでもゲート内で先に弾かれれば結果的に未保護に
       なる抜け穴があったため、ゲート適用前に確定で救済する設計に変更）。
 
-    S4_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
+    S7_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
     ことから、通常運用ではほぼ発火しない安全網として設計されている
     （exp_s4_daily_cap_by_entropy.py参照）。
 
@@ -558,24 +558,24 @@ def s4_evening_reselect(
     """
     all_raw = day_raw + night_raw
     locked = [c for c in all_raw if c.get("race_key") in locked_keys]
-    gated = s4_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
+    gated = s7_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
     unlocked = sorted(gated, key=lambda c: c["entropy"])
-    remaining_budget = max(0, S4_DAILY_CAP - len(locked))
+    remaining_budget = max(0, S7_DAILY_CAP - len(locked))
     return locked + unlocked[:remaining_budget]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# S9（S4の9車立て版・独立ランク）— 2026-07-26 導入
+# S9（S7の9車立て版・独立ランク）— 2026-07-26 導入
 #
 # 背景: 2026-08開催予定「ドリームレース」（S級・毎年8月・過去3回2023-2025年
-# 全て9車立て）をターゲットに含めるため、7車専用だったS4のロジックを9車立てへ
+# 全て9車立て）をターゲットに含めるため、7車専用だったS7のロジックを9車立てへ
 # 拡張した。9車立ては全レースの8.0%（約6.5件/日・7車の85.5%に次ぐ規模）。
-# ユーザー判断（Option B）により、7車のS4とは独立した別ランクとして実装
+# ユーザー判断（Option B）により、7車のS7とは独立した別ランクとして実装
 # （表示・集計を分離。ボリューム・買い目コスト(7点流し=700円 vs 5点=500円)が
 # 異なるため）。
 #
-# 軸選定(s4_select_axis)・フィールドentropy計算(s4_field_entropy)・
-# WT◎◯重なり判定(s4_wt_overlap_n)・表示ランク(s4_gate_label)はいずれも
+# 軸選定(s7_select_axis)・フィールドentropy計算(s7_field_entropy)・
+# WT◎◯重なり判定(s7_wt_overlap_n)・表示ランク(s7_gate_label)はいずれも
 # 車数非依存の汎用実装のためそのまま再利用する。
 #
 # 買い目 = 三連複 軸2車 + 残り7車のいずれか1車（7点・オッズ下限なし）
@@ -591,7 +591,7 @@ def s4_evening_reselect(
 # WT公式◎◯と全く重ならない）は小n(3-53/四半期)だが多くの四半期でROI200〜4683%と
 # 極めて高い（7車のSS+/SS帯と同型のパターン）。
 #
-# axis_sum閾値（S4_AXIS_SUM_MAX相当）は9車では未較正のため導入していない
+# axis_sum閾値（S7_AXIS_SUM_MAX相当）は9車では未較正のため導入していない
 # （entropy単体で真のwalk-forward検証済み・複数の未較正閾値を積み増すことに
 # よる過学習リスクを避けた。将来的な追加検証の余地あり）。
 S9_NE = 9                   # 対象車数（9車ちょうど）
@@ -600,7 +600,7 @@ S9_ENTROPY_MAX = 1.9938
 
 
 def s9_daily_select(candidates: list[dict]) -> list[dict]:
-    """S9の選出。S4と同じ閾値ゲート方式（axis_sum閾値は9車では未導入）。
+    """S9の選出。S7と同じ閾値ゲート方式（axis_sum閾値は9車では未導入）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"wt_overlap_n": int | None, "entropy": float} を持つ dict。
@@ -608,13 +608,13 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
     選出ロジック:
       - entropy > S9_ENTROPY_MAX は除外（詳細は上部コメント参照）。
         entropyキー欠損時は float("inf")扱い＝必ず除外（フェイルセーフ。
-        S4での同種事故を踏まえた設計）
+        S7での同種事故を踏まえた設計）
       - wt_overlap_n == 0（◎◯と全く重ならない）・1（片方だけ重なる）:
         上記ゲート通過分を全件採用（件数capなし。S9は元々低ボリュームのため
-        S4のようなS9_DAILY_CAP安全網は現時点で不要と判断）
+        S7のようなS9_DAILY_CAP安全網は現時点で不要と判断）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
       - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が2は
-        除外（2026-07-27導入・S4と共通のゲート。詳細はS4_MARK3_OVERLAP_MAX参照）
+        除外（2026-07-27導入・S7と共通のゲート。詳細はS7_MARK3_OVERLAP_MAX参照）
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
@@ -622,7 +622,7 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
         c for c in candidates
         if c.get("entropy", float("inf")) <= S9_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
-        and c.get("wt_mark3_overlap_n", 2) <= S4_MARK3_OVERLAP_MAX
+        and c.get("wt_mark3_overlap_n", 2) <= S7_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
