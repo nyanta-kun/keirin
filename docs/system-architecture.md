@@ -1,16 +1,19 @@
 # システムアーキテクチャ
 
-> 最終更新: 2026-06-13
+> 最終更新: 2026-07-28
 
 ---
 
 ## 概要
 
-競輪AI予想システム「穴車AI」。6車立て以下レースを3段階ランク（SS/S/A）で予想し、
-Discord 通知と X(Twitter) 配信を自動化する CLI ベースのシステム。
+競輪AI予想システム「穴車AI」。7車立て・9車立てレースをS1/S7/S9/7A/9A（計7表示ランク）で
+予想し、Discord 通知と netkeirin 自動入稿を行う CLI ベースのシステム。現行ランク体系の
+詳細（ゲート条件・honest実績・沿革）は `../CLAUDE.md`「現行ランク体系」節、特徴量・モデルの
+詳細は `prediction-factors.md` を参照（本ファイルは更新頻度が低いため、両ファイルと矛盾する
+場合はそちらを正とする）。
 
 **2ルート構成（2026-06-08 winticketへ完全移行）:**
-- **winticket ルート（★本番稼働中）** — winticket.jp 経由。ライン情報・全組合せ事前オッズを取得。lgbm_wt（39特徴）。
+- **winticket ルート（★本番稼働中）** — winticket.jp 経由。ライン情報・全組合せ事前オッズを取得。lgbm_wt（48特徴）。
 - **keirin-station ルート（収集停止・ロールバック保持）** — keirin-station.com 経由。lgbm_v6（24特徴）。2026-06-08で収集凍結。
 
 ---
@@ -28,7 +31,7 @@ keirin/
 │   │   └── pipeline_wt.py             # wt収集パイプライン（並列2会場・オッズ同時取得）
 │   ├── preprocessing/
 │   │   ├── feature_engineer.py        # FEATURE_COLS（24特徴量・ks/ロールバック）・build_features()
-│   │   ├── feature_wt.py              # FEATURE_COLS_WT（39特徴量・rolling込/DNS処理済）・build_features_wt()
+│   │   ├── feature_wt.py              # FEATURE_COLS_WT（48特徴量・rolling込/DNS処理済）・build_features_wt()
 │   │   └── rolling_stats.py           # compute-stats（6ヶ月勝率・場別勝率・前走日数）
 │   ├── strategy_wt.py                  # 波乱/非本命ゲート（top3_sum・upset_tier・passes_upset_gate）
 │   ├── models/
@@ -80,9 +83,9 @@ keirin/
 | `status-wt` | 収集状況確認 |
 | `collect-wt [--date]` | 1日分収集（レース+オッズ同時） |
 | `collect-wt-range --from [--to]` | 年月範囲を逆順収集 |
-| `train-wt [--from] [--test-from] [--save-as]` | winticket 用LightGBM学習（39特徴） |
+| `train-wt [--from] [--test-from] [--save-as]` | winticket 用LightGBM学習（48特徴） |
 | `backtest-wt [--from] [--to] [--model] [--max-riders] [--min-gap12] [--tiered] [--value]` | 買い目バックテスト（wt_odds 実オッズ使用） |
-| `wave-picks-wt [--date] [--min-trio-odds] [--gami-skip-odds] [--b-rank-odds] [--upset-gate]` | SS/S/A 予想生成＋ガミ3段階／波乱ゲート |
+| `wave-picks-wt [--date] [--min-trio-odds] [--gami-skip-odds] [--b-rank-odds] [--upset-gate]` | S1/S7/S9/7A/9A 候補生成＋ガミ3段階／波乱ゲート（詳細は`../CLAUDE.md`「現行ランク体系」節） |
 
 **wave-picks-wt の主要フラグ（2026-06-08 追加）:**
 - `--gami-skip-odds 3.0`：3点中1点でも朝オッズ<3倍ならレース見送り
@@ -129,7 +132,7 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
   └── scraper/winticket.py  (requests / tanStackQuery解析)
         └── scraper/pipeline_wt.py  (2会場並列 / レース+オッズ同時取得)
               └── database.py    (wt_races / wt_entries / wt_odds)
-                    └── preprocessing/feature_wt.py  (FEATURE_COLS_WT 39特徴量・rolling込/DNS処理済)
+                    └── preprocessing/feature_wt.py  (FEATURE_COLS_WT 48特徴量・rolling込/DNS処理済)
                           └── models/trainer.py  (同一trainer / feature_cols引数)
                                 └── data/models/lgbm_wt.pkl
                                       └── cli wave-picks-wt (オッズフィルター付き)
@@ -194,20 +197,25 @@ AM 8:00 （daily_picks_wt.sh）
   ⑥ snapshot_morning_odds_wt.py $(today)         # 朝オッズを wt_odds_snapshot に退避（ドリフト計測用）
   ⑦ wave-picks-wt --date $(today) \
        --min-gap12 0.07 --include-7plus --start-to-hour 19
-                                                  # 予想生成（lgbm_wt 48特徴・S1/S4候補・7+車専用）
+                                                  # 予想生成（lgbm_wt 48特徴・S1/S7/S9/7A/9A候補・7車+9車専用）
   ⑧ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord
-  ⑨ write_candidates_wt.py $(today)              # 候補レースをpicks_historyへ即時書き込み（推奨ページ表示用）
+  ⑨ write_candidates_wt.py $(today)              # 候補レース(S1/S7/S9/7A/9A)をpicks_historyへ即時書き込み
+                                                  # （推奨ページ表示用。2026-07-28にS9/7A/9Aも対応）
   ⑩ migrate_sqlite_to_pg.py                      # VPS PostgreSQL同期（KEIRIN_DB_URL設定時）
-夕方（16:00, evening_picks_wt.sh）: 夜レース分の候補生成 → s4_evening_reselect.py が朝夕のS4生候補を
-  統合し日次上限S4_DAILY_TOP_N(10)件へトリム（既に買い判定済みの分は維持）。
+夕方（16:00, evening_picks_wt.sh）: 夜レース分の候補生成 → s7_evening_reselect.py が朝夕のS7生候補を
+  統合（2026-07-26にentropyゲート方式へ変更・件数capは日次12件の安全網としてのみentropy昇順トリム）。
 日中毎分（8-23時, notify_prerace_wt.py）: 発走15分前の最終オッズで候補を買い/見送り判定・Discord通知・picks_history記録。
 日中毎時（10-翌0時, intraday_results_wt.sh）: 当日結果を逐次収集（未終了のみ・通知なし）。
 毎日00:40（backfill_missing_prerace_wt.py）: 前日分のpicks_history欠損を自動検知・補完。
+毎日00:50（reconcile_walkforward_tail.sh）: S1/S7/S9のwalk-forward再構築を--tail-onlyで
+  逐次実行し直近日を常にhonestな状態に保つ（2026-07-27導入）。
 週次（日 23:30, weekly_retrain_wt.sh・Mac実行）: ①holdout評価→AUCゲート→②全データ再学習→
   ③波乱ゲートcut再計測→④世代退避→rsyncでVPSへモデル配布。
 ```
-現行ランクはS1(SEVEN_S1・三連単2点流し)・S4(SEVEN_S4・三連複2軸総流し・gate_labelでSS+/SS/Sに分割表示)の
-2内部rank・4表示ランク（旧S2/S3・6車三連単S1・A等は全廃、詳細は`prediction-factors.md`/CLAUDE.md）。
+現行ランクはS1(SEVEN_S1・三連単2点流し・7車)・S7(SEVEN_S7・三連複2軸総流し・7車・
+gate_labelでSS/Sに分割表示)・S9(NINE_S9・S7の9車版・独立ランク)・7A/9A(S7/S9の境界ランク・
+gate_labelなし)の5内部rank・7表示ランク（旧S2/S3・6車三連単S1・A・SS+等は全廃、
+詳細は`prediction-factors.md`/`../CLAUDE.md`「現行ランク体系」節）。
 
 ---
 
