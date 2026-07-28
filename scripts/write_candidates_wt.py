@@ -255,8 +255,20 @@ def _fetch_initial_gami(candidates: list[dict]) -> None:
         time.sleep(0.5)
 
 
+def _third_list(axis1: int, axis2: int, n_cars: int) -> str:
+    """軸2車(axis1/axis2)を除く残り車番号を昇順で返す（"3,4,5,6,7"形式）。
+
+    S7/S9/7A/9A は「軸2車固定・残り全車への三連複流し」で、対象車数(7 or 9)は
+    候補生成時点で確定済み（n_entries フィルタ済みの候補JSONのみを扱うため）。
+    どの車がオッズ条件で最終的に買い目から漏れるかは発走直前まで未確定だが、
+    候補となる残り車の顔ぶれ自体はオッズなしで一意に決まるため、候補時点から
+    最終形と同じ表記（axis1=axis2-3,4,5,...）で表示できる。
+    """
+    return ",".join(str(x) for x in range(1, n_cars + 1) if x not in (axis1, axis2))
+
+
 def _write_paper_candidates(target_date: str) -> None:
-    """S1/S7（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
+    """S1/S7/S9/7A/9A（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
 
     2026-07-16〜: 候補時点で {rk}#7S1 行（bet_amount=0・miwokuri=False・
     pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
@@ -265,9 +277,20 @@ def _write_paper_candidates(target_date: str) -> None:
     区別がつかず、また15分前判定がオッズ条件で見送りになった場合は行自体が
     存在せず _mark_paper_miwokuri() のUPDATEが対象0件で空振りしていた
     （候補だったのに「推奨外」と見分けがつかない・ユーザー指摘で発覚）。
+    2026-07-28〜: S9（{rk}#9S9）・7A（{rk}#7A）・9A（{rk}#9A）も同様に候補時点で
+    書き込む。従来はS1/S7のみ候補時点表示で、S9/7A/9Aは発走15分前判定
+    （notify_prerace_wt）が成立するまでページに現れなかった（ユーザー指摘で発覚。
+    軸2車・波乱度・ゲート判定はいずれもオッズ非依存でモデル計算のみから確定するため
+    候補時点表示に技術的制約はない）。
+    あわせてS7/S9の候補時点pred_comboを「axis1=axis2-候補」という汎用プレース
+    ホルダーから「axis1=axis2-3,4,5,...」という実際の残り車番号リストに変更した
+    （_third_list()）。軸2車を除く残り車の顔ぶれは対象車数(7/9)が候補生成時点で
+    確定しているためオッズなしで一意に決まり、発走15分前判定後の最終表記と
+    同じ形式で表示できる（7A/9Aはgate_labelなしのため元々この形式）。
     発走15分前判定（notify_prerace_wt）が buy なら本行を上書き、skip なら
     miwokuri=True（オッズ見送り・グレーアウト表示）に更新する。既存行（判定済み）は上書きしない。
-    A（#7A）・旧S1（#6S1）は 2026-07-17 全廃により書き込み対象外。
+    旧S1(7PLUS_R・6車三連複)・旧A(#6A)は 2026-07-17 全廃により書き込み対象外
+    （現行の7A/9Aは2026-07-27導入の別ランクで無関係）。
     U（#7U）・M（#7M）は 2026-07-21 全廃。main.py は候補JSON自体を生成しなくなったが、
     全廃日当日は既存の古い候補JSON（コード修正前に生成済み）がまだ残っていたため
     intraday_results_wt.sh 等からの再実行のたびに廃止済みランクの行が復活する事故が
@@ -309,7 +332,36 @@ def _write_paper_candidates(target_date: str) -> None:
         gate_label = s7_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
             continue  # 重なり2・不明は候補として表示しない（s7_daily_select と同じ除外対象）
-        rows.append((f"{rk}#7S7", "SEVEN_S7", f"{axis1}={axis2}-候補", gate_label))
+        rows.append((f"{rk}#7S7", "SEVEN_S7", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", gate_label))
+
+    for c in _load((f"wave_picks_wt_{target_date}_s9_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s9_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        if not rk or axis1 is None or axis2 is None:
+            continue
+        gate_label = s7_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
+        if gate_label is None:
+            continue  # S7と同じ基準（重なり2・不明は候補として表示しない）
+        rows.append((f"{rk}#9S9", "NINE_S9", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", gate_label))
+
+    for c in _load((f"wave_picks_wt_{target_date}_s7a_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7a_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        if not rk or axis1 is None or axis2 is None:
+            continue
+        # 7A候補JSON自体が既にs7a_daily_select()で境界ケースのみに絞り込み済み
+        # （s7_gate_label が None を返すケース）のため、ここでは再フィルタしない。
+        rows.append((f"{rk}#7A", "SEVEN_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
+
+    for c in _load((f"wave_picks_wt_{target_date}_s9a_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s9a_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        if not rk or axis1 is None or axis2 is None:
+            continue
+        rows.append((f"{rk}#9A", "NINE_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None))
 
     if not rows:
         return
@@ -328,7 +380,7 @@ def _write_paper_candidates(target_date: str) -> None:
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S1/S7) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(S1/S7/S9/7A/9A) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")
