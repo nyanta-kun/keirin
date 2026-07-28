@@ -4,6 +4,7 @@ winticket 特徴量エンジニアリング
 wt_entries + wt_races + venue_info から学習用データセットを構築する。
 """
 import os
+from collections import defaultdict
 import pandas as pd
 import numpy as np
 from ..database import get_connection
@@ -220,6 +221,12 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
 
     # レース単位S/B・上がり由来のローリング特徴（point-in-time・2026-07-18追加）
     df = add_sb_dyn_features_wt(df)
+
+    # 頭対頭対戦成績(H2H)は2026-07-28に実装しFEATURE_COLS_WTへ追加したが、S1/S9の
+    # honest全期間walk-forwardでROIが悪化(S1 443.0%→363.5%・S9 412.8%→286.8%)した
+    # ため本番投入を撤回した（S7のみ改善401.1%→424.8%。詳細
+    # [[keirin_netkeirin_h2h_feature_2026_07_28]]）。add_h2h_features_wt()自体は
+    # 将来の再検証用に残すが、ここでは呼び出さない（FEATURE_COLS_WTにも含めない）。
 
     # M-1: 学習(train_lgbm dropna)・推論(prepare_X fillna)・バックテストで
     # 同一の特徴表現になるよう、ソースで FEATURE_COLS_WT の NaN を 0 に統一保証する
@@ -517,6 +524,119 @@ def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None
     return out
 
 
+H2H_COLS_WT = ["h2h_win_rate", "h2h_n_total", "h2h_net_norm"]
+
+
+def add_h2h_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None) -> pd.DataFrame:
+    """選手ペア間の頭対頭対戦成績(H2H)を point-in-time で付与する（netkeirin「対戦表」相当）。
+
+    netkeirin未活用データ調査（[[keirin_netkeirin_h2h_feature_2026_07_28]]）の本命成果。
+    5フォールドwalk-forwardでS4戦略ROIが91.0%(n=120)→130.3%(n=134)に改善（5期中4期で改善・
+    1期は誤差内横ばい・悪化なし）。history 省略時は wt_entries 全履歴（未確定の当日行を含む）
+    をDBから読み、race_date→start_at 順に1パス走査して各レース「前」時点の対戦成績を算出する。
+    当日・未確定レースの行も history 自身に含まれるため（他の add_*_features_wt と異なり）
+    別途のas-ofフォールバック処理は不要。
+
+    - h2h_win_rate : 当該レース出走者のうち対戦履歴がある相手への勝率
+                     （先着数/対戦数、対戦履歴が無ければ0.5補完）
+    - h2h_n_total  : 対戦履歴がある相手との対戦回数の合計（カバレッジ）
+    - h2h_net_norm : (先着数-後着数)の合計 / レース出走頭数（対戦履歴が無ければ0）
+
+    Args:
+        df: 特徴量付与対象（race_key / player_id / race_date 列を持つ前提）。
+        history: テスト用に注入する履歴（race_key/player_id/finish_order/race_date/
+            start_at 列）。None の場合は DB から読む。
+    """
+    df = df.copy()
+    if "player_id" not in df.columns or "race_date" not in df.columns:
+        for c in H2H_COLS_WT:
+            df[c] = 0.5 if c == "h2h_win_rate" else 0.0
+        return df
+
+    if history is None:
+        h2h_sql = (
+            "SELECT e.race_key, e.player_id, e.finish_order, r.race_date, r.start_at "
+            "FROM wt_entries e JOIN wt_races r ON e.race_key=r.race_key"
+        )
+        db_url = os.environ.get("KEIRIN_DB_URL")
+        if db_url:
+            from sqlalchemy import create_engine, text as sa_text
+            engine = create_engine(db_url)
+            pg_sql = h2h_sql.replace("wt_entries", "keirin.wt_entries") \
+                             .replace("wt_races", "keirin.wt_races")
+            with engine.connect() as sa_conn:
+                H = pd.read_sql_query(sa_text(pg_sql), sa_conn)
+            engine.dispose()
+        else:
+            with get_connection() as conn:
+                H = pd.read_sql_query(h2h_sql, conn)
+    else:
+        H = history.copy()
+
+    H["fin"] = pd.to_numeric(H["finish_order"], errors="coerce")
+    race_order = (H.groupby("race_key")
+                  .agg(race_date=("race_date", "first"), start_at=("start_at", "first"))
+                  .sort_values(["race_date", "start_at"])
+                  .index.tolist())
+
+    h2h_win: dict = defaultdict(int)   # (pid_a, pid_b) a<b → a が先着した回数
+    h2h_n: dict = defaultdict(int)     # (pid_a, pid_b) a<b → 対戦回数（両者完走）
+    groups = {rk: g for rk, g in H.groupby("race_key", sort=False)}
+    out: dict = {}
+
+    for rk in race_order:
+        g = groups[rk]
+        pids = g["player_id"].tolist()
+        fins = g["fin"].tolist()
+
+        # --- 特徴（レース前の対戦履歴で） ---
+        for p in pids:
+            wins, matches, net = 0, 0, 0
+            for q in pids:
+                if q == p:
+                    continue
+                key = (p, q) if p < q else (q, p)
+                n = h2h_n[key]
+                if n == 0:
+                    continue
+                w_ab = h2h_win[key]  # min(p,q) が先着した回数
+                w_p = w_ab if p < q else (n - w_ab)
+                matches += n
+                wins += w_p
+                net += w_p - (n - w_p)
+            out[(rk, p)] = (
+                (wins / matches) if matches > 0 else np.nan,
+                float(matches),
+                float(net),
+            )
+
+        # --- 更新（レース後・完走者ペアのみ） ---
+        finished = [(p, f) for p, f in zip(pids, fins) if f is not None and 1 <= f <= 99]
+        for i in range(len(finished)):
+            for j in range(i + 1, len(finished)):
+                pa, fa = finished[i]
+                pb, fb = finished[j]
+                if fa == fb:
+                    continue
+                key = (pa, pb) if pa < pb else (pb, pa)
+                h2h_n[key] += 1
+                a_first = fa < fb
+                a_is_min = pa < pb
+                if a_first == a_is_min:
+                    h2h_win[key] += 1
+
+    key_series = list(zip(df["race_key"], df["player_id"]))
+    vals = [out.get(k, (np.nan, 0.0, 0.0)) for k in key_series]
+    df["h2h_win_rate"] = [v[0] for v in vals]
+    df["h2h_n_total"] = [v[1] for v in vals]
+    df["h2h_net_norm"] = [v[2] for v in vals]
+    ne = df.groupby("race_key")["player_id"].transform("count").replace(0, np.nan)
+    df["h2h_net_norm"] = (df["h2h_net_norm"] / ne).fillna(0.0)
+    df["h2h_win_rate"] = df["h2h_win_rate"].fillna(0.5)
+    df["h2h_n_total"] = df["h2h_n_total"].fillna(0.0)
+    return df
+
+
 FEATURE_COLS_WT = [
     # コア得点
     "race_point",
@@ -566,6 +686,7 @@ FEATURE_COLS_WT = [
     *RP_TREND_COLS_WT,
     # レース単位S/B・上がりローリング（2026-07-18追加・展開/脚力の直接測定）
     *SB_DYN_COLS_WT,
+    # 頭対頭対戦成績(H2H)は2026-07-28に検証→S1/S9悪化のため撤回・非採用（add_h2h_features_wt参照）
 ]
 
 TARGET_COL_WT = "top3_flag"
