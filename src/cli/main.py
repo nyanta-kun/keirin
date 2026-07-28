@@ -43,6 +43,54 @@ def _venue_name(venue_map: dict, venue_id) -> str:
     return venue_map.get(vid) or _VENUE_NAMES.get(vid, vid)
 
 
+# ── 一時デバッグ計装（2026-07-29〜、原因調査用・調査完了後に削除すること） ──
+# 2026-07-27以降、S7/7A（S9/9A含む）の候補選出率が過去のhonest walk-forward
+# 実績を大幅に上回る異常が発生（07-26以前は0〜2件/日 → 07-27以降17件/日超）。
+# バックテストと朝の実際の候補生成が一致しないと過去の検証結果が無意味になる
+# ため、朝バッチ（daily_picks_wt.sh 8:00）の生予測値（win_probs/top3_probs・
+# axis選定結果・WT印との重なり・sb_dyn特徴の欠損状況）をそのまま
+# data/logs/s7_gen_debug_{date}.jsonl に記録し、後日honest backtestの計算過程
+# （rebuild_s7_walkforward_pg.py等）と突き合わせて原因を特定する。
+# 記録失敗は本番の候補生成を止めないよう握りつぶす（ベストエフォート）。
+def _log_gen_debug(
+    target_date: str, race_type: str, race_key: str, venue_id,
+    win_probs: dict, top3_probs: dict,
+    axis1: int, axis2: int, axis_sum: float, entropy: float,
+    wt_honmei, wt_taikou, wt_ana, wt_overlap_n, wt_mark3_overlap_n,
+    grp_sorted,
+) -> None:
+    try:
+        import json as _json_dbg
+
+        sb_cols = ["b_rate_90", "s_rate_90", "fh_rel_90", "fh_best_rate_90"]
+        sb_allzero = (
+            int((grp_sorted[sb_cols] == 0).all(axis=1).sum())
+            if all(c in grp_sorted.columns for c in sb_cols) else None
+        )
+        rec = {
+            "ts": __import__("datetime").datetime.now().isoformat(),
+            "type": race_type,
+            "race_key": race_key,
+            "venue_id": venue_id,
+            "win_probs": win_probs,
+            "top3_probs": top3_probs,
+            "sum_win": round(sum(win_probs.values()), 4),
+            "sum_top3": round(sum(top3_probs.values()), 4),
+            "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum,
+            "entropy": entropy,
+            "wt_honmei": wt_honmei, "wt_taikou": wt_taikou, "wt_ana": wt_ana,
+            "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
+            "sb_dyn_allzero_riders": sb_allzero,
+        }
+        log_path = (Path(__file__).resolve().parent.parent.parent
+                    / "data" / "logs" / f"s7_gen_debug_{target_date}.jsonl")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(_json_dbg.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        click.echo(f"[debug-log] 記録失敗（無視して続行）: {e}", err=True)
+
+
 @click.group()
 @click.option("--debug", is_flag=True, help="デバッグログを表示")
 def cli(debug: bool):
@@ -1794,6 +1842,11 @@ def wave_picks_wt(target_date, output_path, model_name,
                 wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
                 wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
+                _log_gen_debug(target_date, "s7", race_key, grp_sorted["venue_id"].iloc[0],
+                               win_probs, top3_probs, axis1, axis2, axis_sum, entropy,
+                               wt_honmei, wt_taikou, wt_ana, wt_overlap_n, wt_mark3_overlap_n,
+                               grp_sorted)
+
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
@@ -1894,6 +1947,11 @@ def wave_picks_wt(target_date, output_path, model_name,
                 wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
                 wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
                 wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+
+                _log_gen_debug(target_date, "s9", race_key, grp_sorted["venue_id"].iloc[0],
+                               win_probs, top3_probs, axis1, axis2, axis_sum, entropy,
+                               wt_honmei, wt_taikou, wt_ana, wt_overlap_n, wt_mark3_overlap_n,
+                               grp_sorted)
 
                 _class_map_s9 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}

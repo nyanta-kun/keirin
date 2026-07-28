@@ -452,6 +452,25 @@ def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None
       付く（train/serve skew なし・rp_trend と同じ設計）。
     - 2024-01 以前はラベルが存在せず窓が空 → 0.0 補完（学習/予測で同一の既定値）。
 
+    **【2026-07-18導入〜2026-07-28発見・修正の重大バグ】** 上記の設計方針にも
+    関わらず、実装は `H[H["finish_order"] >= 1]` で未確定行（finish_order が
+    NaN の当日・未来レース）を丸ごと drop していた（DNS/DNF除外フィックス時に
+    誤って未確定行まで一緒に落としてしまっていた）。この結果、対象レース自身が
+    merge キーとして存在しなくなり、**発走前ライブ予測（このメソッドが最も
+    必要とされる対象）では全選手のsb_dyn 4特徴が常に0.0補完**になっていた。
+    学習データは常に確定済みレースのみを使うため「全選手sb_dyn=0」という
+    入力パターンをモデルは学習時に一度も見ておらず、この分布外入力に対して
+    predict_proba() が全選手ほぼ0%という壊滅的に縮退した出力を返す事故が
+    発生していた（"軸2車が実際には全く自信のない状態" になるため、
+    S7/S9/7A/9Aのaxis_sum（軸2車のpred_prob合計）が異常に低くなり、
+    `S7_AXIS_SUM_MAX<=1.3`等のゲートをほぼ無条件で通過してしまい、
+    2026-07-27〜の候補選出数が過去のhonest walk-forward実績（rebuild系
+    スクリプトは常に確定済みレースのみを対象とするため本バグの影響を受けず、
+    正常なsb_dyn値で計算されていた）を大幅に上回る形で顕在化した）。
+    修正: DNS/DNF・未確定いずれも「行は残し、集計対象の値だけNaN化」という
+    rp_trend と同じ方式に統一し、対象レース自身がmerge キーから消えないように
+    した。詳細はkeirin CLAUDE.md/docs/prediction-factors.md更新履歴参照。
+
     Args:
         df: 特徴量付与対象（race_key / player_id / race_date 列を持つ前提）。
         history: テスト用に注入する履歴（race_key/player_id/res_standing/
@@ -484,25 +503,35 @@ def add_sb_dyn_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None
     else:
         H = history.copy()
 
-    # DNS/DNF（finish_order<1・欠車や途中棄権）は res_back/standing/final_half が
-    # 完走者と同じ意味を持たない（完走できず途中終了しただけの record）ため、
-    # 履歴からもレース内中央値/最速判定からも除外する（元検証 exp_sb_dyn_ab.py の
-    # SQL WHERE finish_order>=1 と同等。この除外漏れが2026-07-18に本番投入直後の
-    # A/B効果ΔAUC+0.013をΔAUC+0.0006へ縮小させていたことが判明・修正）。
-    if "finish_order" in H.columns:
-        H = H[H["finish_order"] >= 1].copy()
-
     H["_dt"] = pd.to_datetime(H["race_date"])
+
+    # DNS/DNF（finish_order<1・欠車や途中棄権）・未確定（finish_order NaN・
+    # 当日/未来の未終了レース）は res_back/standing/final_half の値が完走者と
+    # 同じ意味を持たない、または存在しないため、集計値（_b/_s/_fh系）だけを
+    # NaN化してローリング計算・レース内中央値/最速判定から除外する。
+    # ただし行自体は (race_key, player_id) merge キーとして残す（rp_trend と
+    # 同じ設計）。ここで行ごと drop すると、発走前ライブ予測（このメソッドが
+    # 最も必要とされる対象）では対象レース自身が merge キーに存在せず必ず
+    # 0.0補完になり、モデルが学習時に一度も見ない「全選手sb_dyn=0」という
+    # 分布外入力を受け取って予測が崩壊する事故になる（2026-07-18〜07-28に
+    # 実際に発生・詳細は本関数docstring参照）。
+    if "finish_order" in H.columns:
+        _confirmed = pd.to_numeric(H["finish_order"], errors="coerce") >= 1
+    else:
+        _confirmed = pd.Series(True, index=H.index)
+
     # レース内相対化: fh_rel = 自上がり − レース中央値（負=速い）・fh_best = レース内最速。
-    # final_half<=0 や欠損は NaN（rolling から除外）。
+    # final_half<=0 や欠損、DNS/DNF/未確定は NaN（rolling・中央値/最速判定から除外）。
     fh = pd.to_numeric(H["final_half"], errors="coerce")
     H["_fh"] = fh.where(fh > 0)
+    H.loc[~_confirmed, "_fh"] = np.nan
     med = H.groupby("race_key")["_fh"].transform("median")
     mn = H.groupby("race_key")["_fh"].transform("min")
     H["_fh_rel"] = H["_fh"] - med
     H["_fh_best"] = (H["_fh"] == mn).astype(float).where(H["_fh"].notna())
     H["_b"] = pd.to_numeric(H["res_back"], errors="coerce")
     H["_s"] = pd.to_numeric(H["res_standing"], errors="coerce")
+    H.loc[~_confirmed, ["_b", "_s"]] = np.nan
 
     H = H.sort_values(["player_id", "_dt"]).reset_index(drop=True)
 
