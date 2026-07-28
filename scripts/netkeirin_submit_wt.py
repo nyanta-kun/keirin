@@ -21,6 +21,11 @@
     python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning
     python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD evening
     python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning --dry-run
+
+--race-key を指定すると、そのレースのみをピンポイントで対象にする（kiseki Web
+（/keirin）のレース行アイコンからの手動入稿用。ON/OFF・テンプレート・ゲート・
+重複送信防止(already_submitted)は通常実行と完全に同一のルールを適用する）:
+    python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning --race-key 20260728_04_07
 """
 from __future__ import annotations
 
@@ -267,13 +272,15 @@ def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], di
 
 def _process_rank(
     rank_key: str, target_date: str, session: str, race_date, settings: dict[str, dict],
-    already: set[tuple[str, str]], dry_run: bool,
+    already: set[tuple[str, str]], dry_run: bool, race_key_filter: str | None = None,
 ) -> tuple[int, list[str]]:
     cfg = RANK_CONFIGS[rank_key]
     if not _is_enabled(settings, rank_key):
         return 0, []
 
     raw = _load_candidates(target_date, session, cfg["file_key"])
+    if race_key_filter:
+        raw = [c for c in raw if c.get("race_key") == race_key_filter]
     if not raw:
         return 0, []
 
@@ -360,6 +367,10 @@ def main() -> None:
     parser.add_argument("target_date")
     parser.add_argument("session", choices=("morning", "evening"))
     parser.add_argument("--dry-run", action="store_true", help="送信せず生成内容を標準出力に出す")
+    parser.add_argument(
+        "--race-key", default=None,
+        help="指定時はこのレース(race_key)のみをピンポイントで対象にする（それ以外は通常と同一ルール）",
+    )
     args = parser.parse_args()
 
     target_date, session = args.target_date, args.session
@@ -377,6 +388,8 @@ def main() -> None:
             continue
         cfg = RANK_CONFIGS[rank_key]
         raw = _load_candidates(target_date, session, cfg["file_key"])
+        if args.race_key:
+            raw = [c for c in raw if c.get("race_key") == args.race_key]
         per_rank_raw[rank_key] = raw
         all_race_keys.update(c["race_key"] for c in raw)
 
@@ -387,7 +400,10 @@ def main() -> None:
     for rank_key in RANK_ORDER:
         if rank_key not in per_rank_raw:
             continue
-        n, failures = _process_rank(rank_key, target_date, session, race_date, settings, already, args.dry_run)
+        n, failures = _process_rank(
+            rank_key, target_date, session, race_date, settings, already, args.dry_run,
+            race_key_filter=args.race_key,
+        )
         submitted_counts[rank_key] = n
         all_failures.extend(failures)
 

@@ -7,9 +7,11 @@ keirin ホスト側スクリプトをバックグラウンド起動する。
 エンドポイント:
   POST /fetch-results : 当日結果の即時取得+採点 → scripts/intraday_results_wt.sh
   POST /fetch-odds    : 発走前ガミ判定の即時実行 → scripts/notify_prerace_wt.py
+  POST /submit-race   : 指定レース1件のみをピンポイントでnetkeirinへ入稿
+                        → scripts/netkeirin_submit_wt.py --race-key（通常入稿と同一ルール）
 
 kiseki 側の呼び出し元:
-  backend/src/api/keirin_router.py の /api/keirin/fetch-results, /fetch-odds
+  backend/src/api/keirin_router.py の /api/keirin/fetch-results, /fetch-odds, /submit-race
   （_WEBHOOK_BASE = http://172.18.0.1:8010 → Docker bridge 経由でホストに到達）
 
 レスポンスは {"ok": bool, "message": str} 固定（frontend api.ts が参照）。
@@ -24,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +41,9 @@ LOG_DIR = KEIRIN_HOME / "data" / "logs"
 
 # エンドポイントごとに直近の子プロセスを保持し、多重起動を防ぐ
 _running: dict[str, subprocess.Popen] = {}
+
+_RACE_KEY_RE = re.compile(r"^\d{8}_\d{2}_\d{2}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _spawn(name: str, cmd: list[str], log_file: Path, extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
@@ -79,16 +85,50 @@ class Handler(BaseHTTPRequestHandler):
                 LOG_DIR / "prerace.log",
                 extra_env={"PYTHONPATH": "."},
             )
+        elif self.path == "/submit-race":
+            ok, message, status = self._handle_submit_race()
+            self._respond(status, {"ok": ok, "message": message})
+            return
         else:
             self._respond(404, {"ok": False, "message": f"unknown path: {self.path}"})
             return
         self._respond(200, {"ok": ok, "message": message})
 
+    def _handle_submit_race(self) -> tuple[bool, str, int]:
+        """race_key/date/sessionを検証し、単一レースのみを対象にnetkeirin_submit_wt.pyを起動する。"""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            return False, "invalid JSON body", 400
+
+        race_key = str(body.get("race_key", ""))
+        date = str(body.get("date", ""))
+        session = str(body.get("session", ""))
+        if not _RACE_KEY_RE.match(race_key):
+            return False, f"invalid race_key: {race_key}", 400
+        if not _DATE_RE.match(date):
+            return False, f"invalid date: {date}", 400
+        if session not in ("morning", "evening"):
+            return False, f"invalid session: {session}", 400
+
+        log.info("triggered /submit-race race_key=%s date=%s session=%s", race_key, date, session)
+        ok, message = _spawn(
+            f"submit-race-{race_key}",
+            [
+                str(KEIRIN_HOME / ".venv" / "bin" / "python3"), "scripts/netkeirin_submit_wt.py",
+                date, session, "--race-key", race_key,
+            ],
+            LOG_DIR / "netkeirin_submit.log",
+            extra_env={"PYTHONPATH": "."},
+        )
+        return ok, message, 200
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
             self._respond(200, {"ok": True, "message": "alive"})
         else:
-            self._respond(404, {"ok": False, "message": "POST /fetch-results | /fetch-odds"})
+            self._respond(404, {"ok": False, "message": "POST /fetch-results | /fetch-odds | /submit-race"})
 
     def _respond(self, status: int, body: dict) -> None:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
