@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import sys
@@ -103,8 +104,10 @@ def _solve_logit_shift(probs: list[float], target: float) -> float:
 
 
 def _build_entry_table(race_key: str, marks: dict[int, str]) -> str | None:
-    """出走選手ごとの1着率・3着内率（正規化値）をプレーンテキスト表として返す。
+    """出走選手ごとの印・1着率・3着内率（正規化値）をHTMLテーブルとして返す。
     指数未算出（pred_win_pct が全件NULL）のレースは None を返し呼び出し側で省略する。
+    netkeirinのコメント欄はscript/style/iframe以外のHTMLタグを許容するため、
+    tableタグで見やすく整形する（車番昇順）。
     """
     with get_connection() as conn:
         rows = conn.execute(
@@ -123,11 +126,11 @@ def _build_entry_table(race_key: str, marks: dict[int, str]) -> str | None:
         _solve_logit_shift(top3_probs, min(len(entries), 3)) if any(p > 0 for p in top3_probs) else None
     )
 
-    lines = ["【出走選手 1着率・3着内率】"]
+    rows_html = []
     for e, wp, tp in zip(entries, win_probs, top3_probs):
         frame_no = int(e["frame_no"])
-        mark = marks.get(frame_no, "　")
-        name = e["name"] or "―"
+        mark = html.escape(marks.get(frame_no, ""))
+        name = html.escape(e["name"] or "―")
         win_pct = (
             100 * _sigmoid(_logit(wp) + win_shift)
             if win_shift is not None and e["pred_win_pct"] is not None else None
@@ -138,8 +141,18 @@ def _build_entry_table(race_key: str, marks: dict[int, str]) -> str | None:
         )
         win_str = f"{win_pct:.1f}%" if win_pct is not None else "―"
         top3_str = f"{top3_pct:.1f}%" if top3_pct is not None else "―"
-        lines.append(f"{frame_no}番{mark} {name}　1着率{win_str}　3着内率{top3_str}")
-    return "\n".join(lines)
+        rows_html.append(
+            f"<tr><td align=\"center\">{frame_no}</td><td align=\"center\">{mark}</td>"
+            f"<td align=\"center\">{name}</td><td align=\"center\">{win_str}</td>"
+            f"<td align=\"center\">{top3_str}</td></tr>"
+        )
+
+    table = (
+        "<table><thead><tr><th>車番</th><th>印</th><th>選手名</th><th>1着率</th>"
+        "<th>3着内率</th></tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody></table>"
+    )
+    return f"【出走選手 1着率・3着内率】\n{table}"
 
 
 # ---------------------------------------------------------------------------
