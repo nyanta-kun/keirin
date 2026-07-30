@@ -119,10 +119,38 @@ def train_lgbm(
     return final_model
 
 
-def save_model(model, name: str):
+import re
+import stat
+
+# 凍結vintageモデルの命名規則（四半期q2401等・旧非標準w2/w3・新月次m2401=YYMM等）。
+# 2026-07-28にH2H特徴実験で四半期vintageモデル18本が無断上書きされ、honest ROI
+# 検証の再現性が失われた事故（[[keirin_s7_foundational_rethink_2026_07_29]]参照）
+# の再発防止。このパターンに一致する名前は、一度保存されたら再度 save_model() で
+# 上書きしようとするとエラーになる（force=True明示時のみ許可）。
+# 注意: 初回実装時にm\d{6}（6桁=YYYYMM想定）としていたが、実際の命名(m2401=
+# YYMM=4桁)と食い違い、書き込み保護が発動しないバグがあった（2026-07-29実データで
+# 再実行検証中に発覚・修正）。q/m は4桁、旧wのみ桁数不定のため\d+のまま。
+_VINTAGE_NAME_RE = re.compile(r"_(q\d{4}|w\d+|m\d{4})$")
+
+
+def save_model(model, name: str, force: bool = False):
     path = MODEL_DIR / f"{name}.pkl"
+    if _VINTAGE_NAME_RE.search(name) and path.exists():
+        if not force:
+            raise FileExistsError(
+                f"'{name}' は凍結vintageモデル命名規則に一致し、既にファイルが存在します"
+                f"（{path}）。honest walk-forward検証の再現性を守るため、"
+                f"save_model(..., force=True) を明示しない限り上書きを拒否します。"
+                f"意図的な再作成の場合のみ force=True を指定してください。"
+            )
+        # force=True: 読み取り専用化されている場合があるため書き込み可能に戻してから上書き
+        path.chmod(stat.S_IWUSR | stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
     with open(path, "wb") as f:
         pickle.dump(model, f)
+    if _VINTAGE_NAME_RE.search(name):
+        # 保存後に読み取り専用化（ファイルシステムレベルの第二の防御線。
+        # save_model()を経由しない直接書き込みからも保護する）。
+        path.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
     print(f"Saved: {path}")
     return path
 

@@ -1051,8 +1051,12 @@ def status_wt():
 @click.option("--target", "target_kind", default="top3", type=click.Choice(["top3", "win"]),
               help="学習ターゲット。top3=3着内（既定・配信モデル）、"
                    "win=1着のみ（Phase B・軸信頼度/相手選定シグナル用）")
+@click.option("--force-overwrite-vintage", "force_overwrite_vintage", is_flag=True, default=False,
+              help="凍結vintage命名規則（_q9999/_w9/_m999999形式）に一致する --save-as を"
+                   "意図的に上書きする場合のみ指定する。通常は不要（既定は上書き拒否）。")
 def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to: str | None,
-             save_as: str | None, full_refit: bool, promote: bool, target_kind: str):
+             save_as: str | None, full_refit: bool, promote: bool, target_kind: str,
+             force_overwrite_vintage: bool):
     """winticket データでモデルを学習して data/models/ に保存
 
     例: python -m src.cli.main train-wt --from 2025-01-01
@@ -1173,7 +1177,11 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
         model = train_lgbm(df_train, feature_cols=FEATURE_COLS_WT, target_col=target_col)
 
     model_name = save_as or "lgbm_wt"
-    save_model(model, model_name)
+    try:
+        save_model(model, model_name, force=force_overwrite_vintage)
+    except FileExistsError as e:
+        click.echo(f"[guard] {e}", err=True)
+        raise SystemExit(1)
     # 昇格（lgbm_wt への反映）。--no-promote で抑止（評価専用runが本番を汚さない）
     if promote and model_name != "lgbm_wt":
         save_model(model, "lgbm_wt")

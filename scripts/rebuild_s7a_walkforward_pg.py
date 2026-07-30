@@ -4,6 +4,10 @@
 rebuild_s7_walkforward_pg.py の7A版。VPS PG一本化（2026-07-22〜）に伴い、
 環境変数をpopしないPG直読みの単発スクリプトとして実行する。
 
+【2026-07-29改定】期間定義を`src.wt_vintage_config.monthly_windows()`（月次凍結
+vintageモデル・唯一の正本）に統一。詳細は`rebuild_s7_walkforward_pg.py`の
+モジュールdocstring参照（同一設計）。
+
 使い方:
     PYTHONPATH=. .venv/bin/python scripts/rebuild_s7a_walkforward_pg.py [--dry-run]
 """
@@ -11,13 +15,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.backfill_s7a_rank_wt import build_rows
 from src.database import get_connection
+from src.wt_vintage_config import monthly_windows
 
 
 def wipe_rows_pg(date_from: str, date_to: str, dry_run: bool) -> None:
@@ -47,45 +52,23 @@ def insert_rows_pg(rows: list[dict], dry_run: bool) -> None:
         conn.commit()
     print(f"[rebuild-s7a-pg] {len(rows)}件 書き込み完了（VPS PG）")
 
-QUARTERS = [
-    ("2024-01-01", "2024-03-31", "lgbm_wt_eval_q2401", "lgbm_wt_win_q2401"),
-    ("2024-04-01", "2024-06-30", "lgbm_wt_eval_q2404", "lgbm_wt_win_q2404"),
-    ("2024-07-01", "2024-09-30", "lgbm_wt_eval_q2407", "lgbm_wt_win_q2407"),
-    ("2024-10-01", "2024-12-31", "lgbm_wt_eval_q2410", "lgbm_wt_win_q2410"),
-    ("2025-01-01", "2025-03-31", "lgbm_wt_eval_q2501", "lgbm_wt_win_q2501"),
-    ("2025-04-01", "2025-06-30", "lgbm_wt_eval_q2504", "lgbm_wt_win_q2504"),
-    ("2025-07-01", "2025-09-30", "lgbm_wt_eval_q2507", "lgbm_wt_win_q2507"),
-    ("2025-10-01", "2025-12-31", "lgbm_wt_eval_w3", "lgbm_wt_win_w3"),
-    ("2026-01-01", "2026-04-12", "lgbm_wt_eval_w2", "lgbm_wt_win_w2"),
-]
-
-
-TAIL_FROM = "2026-04-13"
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--end", default=None, help="末尾窓の終了日（省略時は昨日）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--tail-only", action="store_true",
-                     help="末尾窓（現行eval modelのholdout範囲）のみ再構築する日次軽量運用向け"
-                          "オプション。四半期vintageモデル分は既に確定済みで結果が変わらない"
-                          "ため毎日再計算する必要がなく、これのみ再実行すれば直近日を"
-                          "honestな状態に保てる。")
+                     help="直近月（今月）の窓のみ再構築する日次軽量運用向けオプション。"
+                          "確定済み過去月は結果が変わらないため毎日再計算する必要がなく、"
+                          "これのみ再実行すれば直近日をhonestな状態に保てる。")
     args = ap.parse_args()
-    if not args.end:
-        args.end = (date.today() - timedelta(days=1)).isoformat()
 
+    windows = monthly_windows()
     if args.tail_only:
-        quarters = [(TAIL_FROM, args.end, "lgbm_wt_eval", "lgbm_wt_win_eval")]
-        wipe_from = TAIL_FROM
-    else:
-        quarters = list(QUARTERS)
-        quarters.append((TAIL_FROM, args.end, "lgbm_wt_eval", "lgbm_wt_win_eval"))
-        wipe_from = "2024-01-01"
+        windows = windows[-1:]
+    wipe_from = windows[0][0]
+    wipe_to = windows[-1][1]
 
     all_rows: list[dict] = []
-    for date_from, date_to, eval_model, win_model in quarters:
+    for date_from, date_to, eval_model, win_model in windows:
         print(f"\n[rebuild-s7a-pg] {date_from}〜{date_to}  eval={eval_model} win={win_model}", flush=True)
         rows = build_rows(eval_model, date_from, date_to, win_model_name=win_model)
         n_hit = sum(r["hit"] for r in rows)
@@ -106,7 +89,7 @@ def main() -> None:
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")
 
-    wipe_rows_pg(wipe_from, args.end, args.dry_run)
+    wipe_rows_pg(wipe_from, wipe_to, args.dry_run)
     insert_rows_pg(all_rows, args.dry_run)
     if args.dry_run:
         print("[rebuild-s7a-pg] DRY RUN（書き込みなし）")
