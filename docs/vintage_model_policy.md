@@ -97,6 +97,40 @@ PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py --tail-only
 S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-only`のみ）
 に統一されている。
 
+## 運用状況（2026-07-30時点）
+
+### 構築・デプロイ完了
+- 月次vintageモデル **62本**（2024-01〜2026-07の31ヶ月 × eval/win）構築完了
+- 全モデルが `chmod 444` で読み取り専用化済み（書き込み保護が機能していることを実データで確認済み）
+- commit `875568b` を push・VPS `git pull` 完了
+- **月次モデル62本（104MB）をVPSへ rsync 配布済み**
+  （VPSには従来 vintage モデルが1本も存在しなかったため、`--tail-only` が月次モデルを
+  要求する新設計では配布が必須になった）
+- `wt_entries.pred_win_pct`/`pred_top3_pct` を全期間 502,522件クリーン再計算済み
+  （`backfill_index_pct_wt.py`）→ DB格納値も月次モデル由来になり信頼できる状態
+
+### picks_history の再構築状況
+| rank | 件数 | 状態 |
+|---|---|---|
+| SEVEN_S1 | 1,497 | ✅クリーン月次モデルで再構築済み（ROI 80.0%） |
+| SEVEN_S7 | 575 | ✅クリーン月次モデルで再構築済み（ROI 78.6%） |
+| SEVEN_7A / NINE_S9 / NINE_9A | 0 | ⚠️破棄済み（誤解防止・再構築は保留） |
+
+破棄分（8,272件）は `data/backup/picks_history_discarded_20260730_134153.csv` に
+バックアップ済み（.gitignore対象外のため未コミット）。
+
+### ⚠️ 日次cronの状態（重要）
+`scripts/reconcile_walkforward_tail.sh` の日次cron（VPS 00:50）は
+**2026-07-27にユーザー判断で停止中**（crontabに `# [PAUSED 2026-07-27 by user request]`）。
+再開する場合、新設計では月次モデルが必要になるが**既に配布済みなので動作するはず**。
+ただし再開前に `--tail-only` の動作確認を推奨。
+
+### 未整備（今後のタスク）
+- **新しい月が始まったときの月次モデル自動作成cronが未整備**。
+  `train_monthly_vintage_models.py --only-missing` を月初（例: 毎月1日 09:00）に
+  実行するcronを追加することを推奨。これがないと翌月のレースをスコアするモデルが
+  存在せず rebuild/backfill が失敗する。
+
 ## 既知の制約
 
 - `wt_odds`は2022-12-01〜2023-12-31分が長期間欠落していたが、
