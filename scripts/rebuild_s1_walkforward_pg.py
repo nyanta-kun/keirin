@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """S1(SEVEN_S1) の全期間honest再構築（quarterly walk-forwardモデル使用・VPS PG専用）。
 
+【2026-07-31】S1は全廃済み（commit df31431・ユーザー判断）。picks_historyの
+SEVEN_S1行1,504件もVPS PGから削除済み（バックアップ:
+data/backup/picks_history_s1_discarded_20260731.csv）。本スクリプトは手動実行
+専用であり、reconcile_walkforward_tail.sh からの呼び出しは除去済み（同スクリプト
+の00:50毎日cronから自動実行されない）。実行すると本スクリプトのwipe_rows_pg()が
+削除済みのSEVEN_S1行をpicks_historyへ再生成してしまうため、意図しない限り実行
+しないこと。
+
 rebuild_s1_walkforward.py はローカルSQLite前提（KEIRIN_DB_URLをpopして
 ローカル読み取り）だが、2026-07-22にローカルSQLiteは廃止されVPS PGへ
 一本化済み（wt_odds含め2024-01-01〜のtrifectaオッズを確認済み）。
