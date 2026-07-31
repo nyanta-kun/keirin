@@ -23,6 +23,7 @@ from ..preprocessing.feature_engineer import (
     load_raw_data,
     FEATURE_COLS,
 )
+from .model_io import atomic_pickle_dump
 
 MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -308,9 +309,15 @@ def train_pair_model(
 
 
 def save_pair_model(model: lgb.LGBMClassifier, name: str = "lgbm_pair") -> Path:
+    """ペアモデルをpickleでアトミック保存する（`data/models/{name}.pkl`）。
+
+    `open(path, "wb")` による直接書き込みはオープン時点で既存ファイルを
+    0バイトへ切り詰めるため、`pickle.dump()` 完了前の異常終了でファイルが
+    破損状態のまま残る問題があった。`model_io.atomic_pickle_dump()` で
+    一時ファイル経由のアトミックrenameへ変更した（D-3）。
+    """
     path = MODEL_DIR / f"{name}.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(model, f)
+    atomic_pickle_dump(model, path)
     print(f"Saved: {path}")
     return path
 

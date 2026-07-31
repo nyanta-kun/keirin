@@ -20,6 +20,7 @@ import lightgbm as lgb
 from sklearn.metrics import roc_auc_score
 
 from ..database import get_connection
+from ..models.model_io import atomic_pickle_dump
 
 MODEL_DIR = Path(__file__).parent.parent.parent / "data" / "models"
 UPSET_THRESHOLD_DEFAULT = 2000  # 3連複払戻がこの値以上 → 波乱
@@ -239,9 +240,15 @@ def predict_upset_prob(upset_model: lgb.LGBMClassifier,
 
 
 def save_upset_model(model, name: str = "lgbm_upset") -> Path:
+    """波乱予測モデルをpickleでアトミック保存する（`data/models/{name}.pkl`）。
+
+    `open(path, "wb")` による直接書き込みはオープン時点で既存ファイルを
+    0バイトへ切り詰めるため、`pickle.dump()` 完了前の異常終了でファイルが
+    破損状態のまま残る問題があった。`model_io.atomic_pickle_dump()` で
+    一時ファイル経由のアトミックrenameへ変更した（D-3）。
+    """
     path = MODEL_DIR / f"{name}.pkl"
-    with open(path, "wb") as f:
-        pickle.dump(model, f)
+    atomic_pickle_dump(model, path)
     print(f"Saved: {path}")
     return path
 
