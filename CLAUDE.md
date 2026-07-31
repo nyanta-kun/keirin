@@ -264,3 +264,161 @@ Mac対話シェルも `~/.zshrc` に `KEIRIN_DB_URL=postgresql://...@sekito-stab
 - **gap カラムのスケール**: gap12 / gap34 = 0-1 スケール、**gap23 のみ pt（%ポイント・×100済み）**。歴史的経緯によるもので変更不可。読み書き時に注意
 - 閾値定数（GAMI_THRESHOLD=7.0 等）は `src/cli/main.py` / `scripts/notify_prerace_wt.py` / `scripts/write_candidates_wt.py` に多重定義。**変更時は3ファイル + kiseki フロント（page.tsx）を必ず grep して揃える**
 - **新しいテーブルを追加したら `src/database.py::_pg_translate()` の keirin スキーマ自動付与regex（2箇所: INSERT系/通常SQL系）にもテーブル名を必ず追加する**。INSERT OR REPLACE/IGNORE文はテーブル名を直接展開するため regex 漏れでも動くが、素のSELECT/UPDATE/DELETEはこのregexだけが唯一のスキーマ付与経路なので、漏れると `relation "xxx" does not exist` で本番クラッシュする（2026-07-24発覚: `netkeirin_submissions`追加時にregexへの追加を忘れ、`_already_submitted()`のSELECTが機能追加以来一度もschema解決できず、netkeirin入稿が導入(2026-07-23)以来一度も成功していなかった。INSERT経路は正しく動いていたため気づかれなかった）
+
+## 変更時チェックリスト（2026-07-31・データ整合性レビューで新設）
+
+2026-07-31 に7領域のデータ整合性レビューを実施した結果、検出された重大事項は
+ほぼ全て単一の根本原因に還元されることが判明した:
+
+> **同じ知識（ランク集合・void 判定・モデル期間定義・列リスト）が複数ファイルに
+> 独立してコピーされ、更新が同期していない。**
+
+サマリーのランク漏れは3回（過去2回に加え今回`SEVEN_SS`欠落を検出）、ランク全廃時の
+経路漏れは2回（S3全廃時に事故が起きかけ、今回S1全廃で4経路目まで漏れていた）
+反復しており、同型の事故を繰り返さないため以下をチェックリスト化する。
+
+### ランク新設・全廃時に確認する7経路
+
+本ファイル内の「S1 全廃」の記述（上記「現行ランク体系」節）は当初「候補生成・
+ライブ判定・欠損自動補完の3箇所」を止めれば十分という前提で書かれていたが、
+2026-07-31 のレビューで**実際には最低7経路を止める必要がある**と判明した
+（**3箇所という記述はその時点の理解であり、以下の通り7箇所へ拡張する**）。
+ランクを新設・全廃する際は必ず以下7つ全てを確認すること:
+
+1. **候補生成** — `src/cli/main.py` のランク別候補生成ブロック。加えて
+   `scripts/reconcile_walkforward_tail.sh`（→`rebuild_s1_walkforward_pg.py --tail-only`
+   等）のような**定期rebuild/reconcileスクリプトも「候補生成」の一種**として
+   対象に含めること（picks_historyを対象ランクでDELETE→INSERTし直す設計のため、
+   これを止め忘れると廃止済みランクの直近月分だけ自動的に復活する。S1全廃の
+   「4経路目」としてここで発覚。cronはPAUSED中で即時事故はなかった。commit `33ba316`）
+2. **ライブ判定（発走15分前判定）** — `scripts/notify_prerace_wt.py` の
+   ランク別ハンドラ呼び出し（`_process_s1_candidates`等）
+3. **欠損自動補完** — `scripts/backfill_missing_prerace_wt.py`。対象ランク
+   リストに廃止済みランクを残したままにすると、翌日以降「毎日欠損している」
+   と誤検知して最終オッズで自動的にpicks_history行を再生成し続け、全廃の
+   指示そのものが上書きされる事故になる（S3全廃時に判明した教訓をS1全廃でも
+   適用済み）
+4. **候補書き込み（当日中の候補表示）** — `scripts/write_candidates_wt.py::_write_paper_candidates()`
+   （S1のブロックがここに残存しpicks_historyへINSERTし続けていたことが
+   2026-07-31に発覚。commit `3775101`）
+5. **Discord通知** — `scripts/notify_prerace_wt.py` のメッセージ生成・
+   pick挿入関数（`_insert_s4_pick` / `_build_s4_message` 等ランク別関数）
+6. **サマリー集計** — `scripts/notify_results_wt.py::_query_stats`（IN句・313行）
+   および同ファイルの `_PAPER_SUFFIXES` 定数（1172/1198行）
+7. **netkeirin入稿** — `scripts/netkeirin_submit_wt.py` の `RANK_CONFIGS` /
+   `RANK_ORDER`（80/88行）。**`_is_enabled()`（230行）はfail-open**（設定行が
+   存在しない・削除されている場合、無効ではなく常時ONとして扱われる）ため、
+   `RANK_CONFIGS`/`RANK_ORDER`から確実に除去しないと自動入稿が止まらない
+   （S1がここに残存し常時ON扱いだったことが2026-07-31に発覚。commit `3775101`）
+
+### ランク集合の定義箇所一覧（単一正本化されるまでは全箇所同時更新）
+
+ランクの集合（有効ランクリスト）は現時点で最低4箇所に独立してハードコード
+されており、2026-07-31時点で内容が全て食い違っていた:
+
+- `scripts/notify_results_wt.py:313` `_query_stats` のIN句（`SEVEN_SS`が欠落
+  していた）
+- `scripts/notify_results_wt.py:1172,1198` `_PAPER_SUFFIXES`（全廃済みの
+  `#6S1` が残置されていた）
+- `scripts/save_model_eval.py:52-56` `PAPER_RANKS`（S9・7A・9A・7SSが欠落
+  していた）
+- `scripts/live_report_wt.py:35` `RANKS`（2026-07-16全廃済みの`7PLUS_R`
+  のみで3週間以上n=0の空振りになっていた。2026-07-31 commit `3775101`で
+  現行ランクへ修正）
+
+単一正本化（設定ファイル化等）が実施されるまでは、**ランクを追加・削除する
+際は上記4箇所を必ず同時に更新すること**。加えて `netkeirin_submit_wt.py` の
+`_is_enabled()` のような **fail-open な有効/無効判定は「消し忘れると危険」
+ではなく「消さない限り有効のまま」という逆方向の罠**になる点に特に注意する
+こと（新設定を追加し忘れても気づきにくいが、廃止時に除去し忘れると即座に
+常時ON扱いになる非対称なリスク）。
+
+### void（欠車返還）判定を変更する際に同時に見るべき3実装
+
+「欠車で返還・失格で没収」の境界判定は3箇所に独立実装されており、
+2026-07-31時点で判定基準が食い違っていた:
+
+- 本番 `scripts/notify_results_wt.py::_void_by_dns`（95行）— 正。**オッズ
+  盤面掲載車**（board）基準。DNF（発走後の落車・失格・棄権。`finish_order=0`
+  として記録される）は盤面に残ったまま＝外れ計上（没収）
+- `src/evaluation/void_rules.py`（→`backtest_wt.py`が参照）— 旧docstringは
+  「完走者（`finish_order>=1`）基準」と記載しており本番と不一致だった
+  （2026-07-31是正済み。DNFを誤って欠車＝返還扱いしていたため、バックテスト
+  ROIが本番の実損益より構造的に高く出ていた）
+- `scripts/backfill_*_rank_wt.py` 系 — 「盤面サイズ完全一致以外は候補
+  プールから全体除外」という3つ目の基準
+
+void判定ロジックを変更する際は、この3実装を必ず同時に確認し、
+「完走者基準」と「盤面掲載車基準」を混同しないこと。
+
+### `finish_order = 0` の意味（重要・void判定・特徴量設計の前提）
+
+（本ファイル上記「winticket ルート」節の「`finish_order=0`は欠車/失格=着外」
+という記述は着順判定としては誤りではないが、「欠車」という語のニュアンスが
+不正確なため以下で補足する。）
+
+2026-07-31の実データ検証で、**事前確定の欠車（取消・除外）は`wt_entries`に
+行自体が作られず物理削除される**（`src/scraper/pipeline_wt.py:236-249`・
+`src/scraper/winticket.py:274`）ため、DB上に残る`finish_order=0`行は事前
+欠車ではなく、**発走後の落車・失格・棄権（DNF）**であることが判明した。
+実測: `finish_order=0`の行は9,528件・5,474レースあり、うち99.6%に
+`res_standing`/`res_back`の実測値（＝発走が確定していた証拠）が入っており、
+該当レースの98.5%は行数が`wt_races.n_entries`と一致する（＝出走予定馬は
+全員行として存在し、その一部がDNFになっただけで、事前欠車によって行数が
+減っているわけではない）。top3判定を`between(1,3)`とする既存実装はこのまま
+引き続き正しい（DNFは着外扱いで問題ない）が、「finish_order=0=（事前）欠車」
+という理解のままvoid判定・特徴量設計を行うと、上記のvoid_rules.py旧版と
+同型の取り違えが起きるため、**「finish_order=0はDNF（発走後の非完走）」
+「事前欠車は行自体が存在しない」**という区別を前提とすること。
+
+### モデル期間定義（QUARTERS等）は `src/wt_vintage_config.py` を単一正本とする
+
+四半期・月次のモデル学習期間定義（QUARTERS等）は`src/wt_vintage_config.py`
+に単一正本化済み（旧6ファイル重複を統合）。**新しいスクリプト（`exp_*.py`
+含む）でモデル期間を扱う場合は、独自にQUARTERS等を定義せず必ず
+`wt_vintage_config`をimportすること**。2026-07-31時点で独自QUARTERS定義を
+持つexpスクリプトが21本残存し、`docs/vintage_model_policy.md`の削除宣言に
+反して汚染済み四半期vintageモデル28ファイルが未削除のまま残っていた
+（commit `1a9bdac`で削除・独自QUARTERS系expスクリプトに警告コメントを付与）。
+うち2本（`exp_s7_gate_staged_audit.py`/`exp_s7_reduced_box_wt_marks.py`）は
+`S7_AXIS_SUM_MAX=1.3`をハードコードしており、現行値`1.5`
+（`src/strategy_wt.py:328`）と食い違っていた。
+
+### pure関数の仕様変更時は同一コミットでテストを更新する
+
+`s7_gate_label()`のようなpure関数の仕様を変更する際、同一コミットで対応
+テストを更新しないと、CIが赤いままmasterへ積み上がる。CIのdeployジョブは
+`needs: test`でtestジョブに従属するため、**テストが赤い間はpushしても
+本番へ自動デプロイされない**（気づかれにくい形でリリースが止まる）。
+2026-07-31、commit `e994758`で`s7_gate_label()`を「重なり0も"S"を返す」
+仕様へ変更した際にテストを更新し忘れ、masterのCIが赤いまま放置されていた
+のをcommit `f8811b8`で修復した。
+
+### Discord通知 `send(content, channel)` の `channel` は必須引数
+
+`src/notify/discord.py::send(content, channel)`（39行）は`channel`が必須
+引数（省略不可）。2026-07-24のDiscord 5チャンネル分割（commit `8a3abe4c`）
+で`channel`が追加されて以降、shellスクリプト内で`python -c "..."`の
+ワンライナーとして`send('...')`を1引数だけで呼んでいる箇所は静的解析にも
+テストにも引っかからずTypeErrorでサイレント失敗する。
+`scripts/daily_picks_wt.sh`（当時92行目）の呼び出しがこのパターンで約1週間
+失敗し続け、「race_point異常で本日の推奨をスキップした」という最重要
+アラートが届いていなかった（2026-07-31、commit `66386b6`で`channel='system'`
+を追加し修復）。**shell内から`python -c`でPython関数を呼ぶ箇所は特に注意し、
+`channel`引数の指定漏れがないか個別に確認すること**。
+
+### 本日実施した是正（2026-07-31）
+
+上記データ整合性レビューを受けて以下を同日中に修正済み:
+
+- commit `f8811b8` — `s7_gate_label()`のテスト未更新によるCI赤字を修復
+- commit `3775101` — S1全廃の残存2経路（候補書き込み・netkeirin入稿）を停止、
+  `live_report_wt.py`のランク集合を現行へ更新
+- commit `33ba316` — S1自動再生成の第4経路（`reconcile_walkforward_tail.sh`）
+  を停止
+- commit `1a9bdac` — 汚染済み四半期vintageモデル28ファイルを削除、独自
+  QUARTERS系expスクリプトに警告を付与
+- commit `66386b6` — 運用shellにDB URLガード・多重起動防止(flock)を追加、
+  Discordアラートの引数漏れ（`channel`必須化未対応）を修復
+- commit `bd127b1` — モデル保存のアトミック化（`src/models/model_io.py`新設）、
+  vintage凍結保護のrm耐性強化
