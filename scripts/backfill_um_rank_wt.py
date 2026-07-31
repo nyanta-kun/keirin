@@ -24,32 +24,46 @@ S2/S3 の検証期間実績を picks_history（SQLite + VPS PG）に構築する
 --wipe-m を付けると、書き込み前に対象期間の既存 #7M 行を削除する
 （S3 新定義への置き換え時、旧定義でしか成立しない行を残さないため）。
 
-## 【既知の乖離・未修正】void_by_dns（src/evaluation/void_rules.py）との差分
-（2026-07-31 是正調査・PMタスク B-4。判断: 統一を見送り、本コメントで明記するに留める。
-backfill_s7_rank_wt.py と同型の構造なので詳細説明は同ファイルも参照）
+## 欠車判定を void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）
 
-上記docstringは「買い目確定後の落車・失格は外れ計上」と本番同等を謳っているが、
-これは「買い目確定後」のケース（judge_u/judge_m が相方・第三者を確定した後で
-発走前に落車が判明した場合）を指しており、本スクリプトの候補選定段階に存在する
-`if len(board) != 7 or not trio: continue`（盤面がちょうど7車でなければレース
-ごと除外）は別の問題である: 相手(third)候補の1台だけが盤面から欠けている場合、
-void_by_dns なら「その目のみ除外して残りで購入継続」となるはずだが、本スクリプト
-は_mk_combos()に到達する前にレース全体を候補プールから除外している。
-（なお `_mk_combos()` 自体は `sorted(board - {a, b})` を回して
-`ov >= leg_min` を満たす目だけ採用する設計のため、他5スクリプトと異なり
-「相手が可変点数になる」こと自体はすでに前提になっている。その意味では
-このガードを外すこと自体の構造的リスクは他スクリプトより低いと考えられる）。
+【旧実装の問題】候補選定段階の `if len(board) != 7 or not trio: continue`
+（盤面がちょうど7車でなければレースごと除外）が、本番 notify_results_wt.
+_void_by_dns / src/evaluation/void_rules.py の基準（軸欠車=レース無効・
+相手欠車=その目のみ除外して購入継続）と一致していなかった（backfill_s7_rank_wt.py
+と同型の構造・詳細説明は同ファイルも参照）。なお `_mk_combos()` 自体は元々
+`sorted(board - {a, b})` を回して `ov >= leg_min` を満たす目だけ採用する
+設計のため、他4スクリプトと異なり「相手が可変点数になる」こと自体はすでに
+前提になっていた。
 
-影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象。
-backfill_s7_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
-82,939件(97.0%)・盤面6車(1台欠け)=881件(1.03%)・盤面5車(2台欠け)=14件
-(0.02%)・盤面データなし=1,683件(1.97%)。
+【本タスクでの修正】
+  - board（欠車判定用の盤面掲載車集合）は `_load_board_frames_wt()` で構築
+    （notify_results_wt._board_frames と同一・odds_value フィルタなし）。
+    従来の `_load_trio_boards()`（odds_value フィルタ済み・かつ 0<odds<9000
+    の妥当性チェック付き）は「具体的コンボの購入可否＋オッズ下限判定」専用
+    として存続させ、欠車判定には使わないよう分離した。
+  - `if len(board) != 7: continue`（盤面完全一致ガード）を撤廃し、
+    `if not board: continue`（盤面データが1件も無い場合のみ除外）へ縮小。
+  - U(穴)/M(◎不一致)いずれも軸2車（dark/mate・m1/mate_m）を確定した直後に
+    `void_by_dns(axis1, axis2, thirds_full, board)` を明示的に呼び出す
+    （thirds_full = 出走7車からその2車を除いた残り5車の全候補）。軸のどちらか
+    が盤面に無ければレース無効（購入なし）、相手候補の一部が盤面に無ければ
+    その候補のみ除外して残りを `_mk_combos()` へ渡す。`_mk_combos()` は
+    board から直接候補を導出する内部ロジックを廃し、呼び出し側が渡した候補
+    リストのみを走査するよう変更した（軸欠車のケースは元々 `_mk_combos` 内の
+    trio 参照が全て空振りして自然に購入なしとなっていたため実質的な数値差
+    は生じないが、判定基準を明示的に void_by_dns に揃えることで他4スクリプト
+    との一貫性・監査可能性を確保した）。
+  - `n_combos`/`bet_amount` は元々 `len(combos)` から算出しており、
+    `pred_combo` も `_mk_combos()` が返す `thirds`（=実際に採用された相手の
+    み）を列挙する設計のため、いずれも計算式の変更は不要。
 
-unify を見送った理由: S2/S3は日次capを持たない独立per-race判定のため
-連鎖リスクは低いと考えられるが、backfill_*_rank_wt.py の実行（picks_history
-再構築）が本タスクでは禁止されており、コード変更後の動作を実データで検証
-する手段がない。実装の正しさより「何が変わるか正確に説明できること」を
-優先し、動作は変更せず本コメントで乖離を明記するに留めた。
+  影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象。
+  backfill_s7_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
+  82,939件(97.0%)・盤面6車(1台欠け)=881件(1.03%)・盤面5車(2台欠け)=14件
+  (0.02%)・盤面データなし=1,683件(1.97%)。「盤面データなし」レースは従来通り
+  対象外のまま（`if not board: continue`）。
+
+  S2/S3は日次capを持たない独立per-race判定のため連鎖リスクは低い。
 
 使い方:
     PYTHONPATH=. .venv/bin/python scripts/backfill_um_rank_wt.py \
@@ -70,6 +84,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
+from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
@@ -79,6 +94,11 @@ from src.strategy_wt import (
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
+    """具体的コンボの購入可否＋オッズ下限判定用（odds_value 有効値のみ）。
+
+    欠車判定（void_by_dns）には使わない。欠車判定用の盤面掲載車集合は
+    `_load_board_frames_wt()`（odds_value フィルタなし）を使うこと。
+    """
     trio = defaultdict(dict)
     with get_connection() as c:
         for i in range(0, len(race_keys), 900):
@@ -100,6 +120,32 @@ def _load_trio_boards(race_keys: list[str]) -> dict:
                 if len(parts) == 3:
                     trio[rk][parts] = fv
     return trio
+
+
+def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
+    """欠車判定用の盤面掲載車集合を返す（notify_results_wt._board_frames /
+    src.evaluation.backtest_wt._load_board_frames_wt と同一の構築方法）。
+
+    bet_type='trio' の combination に現れる車番の和集合。odds_value による
+    フィルタは行わない（未確定・異常値でも盤面に車番として存在していれば
+    「実際に購入できた車」とみなす本番の判定基準に合わせるため）。
+    """
+    board_map: dict[str, set[int]] = defaultdict(set)
+    if not race_keys:
+        return board_map
+    with get_connection() as c:
+        for i in range(0, len(race_keys), 900):
+            chunk = race_keys[i:i + 900]
+            q = ("SELECT race_key, combination FROM wt_odds "
+                 "WHERE bet_type = 'trio' AND race_key IN (%s)"
+                 % ",".join("?" * len(chunk)))
+            for rk, comb in c.execute(q, chunk):
+                for part in re.split(r"[-=]", str(comb)):
+                    try:
+                        board_map[rk].add(int(part))
+                    except ValueError:
+                        pass
+    return board_map
 
 
 def _entropy(probs: list[float]) -> float:
@@ -154,6 +200,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
     if win_model is not None:
         df["pred_win"] = win_model.predict_proba(prepare_X(df))[:, 1]
     trio_bd = _load_trio_boards(df["race_key"].unique().tolist())
+    board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
     pm = _load_payouts_wt(df["race_key"].unique().tolist())
 
     def _int(v):
@@ -164,10 +211,10 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if len(g) != 7:
             continue
         trio = trio_bd.get(rk, {})
-        board: set[int] = set()
-        for k in trio:
-            board |= set(k)
-        if len(board) != 7 or not trio:
+        if not trio:
+            continue
+        board = board_map.get(rk)
+        if not board:
             continue
         # 波乱ゲート（S2のみ・2026-07-17〜 S3には適用しない）
         ent = _entropy([float(x) for x in g["pred_prob"].tolist()])
@@ -194,10 +241,20 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         mkt_rank = {f: i + 1 for i, f in enumerate(ranked)}
 
         rows_g = list(g.itertuples(index=False))
+        full_field = sorted(int(r.frame_no) for r in rows_g)
 
-        def _mk_combos(a: int, b: int, leg_min: float) -> tuple[list[frozenset], list[int]]:
+        def _mk_combos(a: int, b: int, candidates: list[int],
+                        leg_min: float) -> tuple[list[frozenset], list[int]]:
+            """candidates（欠車判定済みの相手候補）のうちオッズ有効かつ
+            leg_min 以上のものだけを実際の買い目として採用する。
+
+            候補集合の導出（欠車除外）は呼び出し側が void_by_dns で行う
+            （2026-07-31 是正・PMタスク C-2b。以前は board から直接
+            `sorted(board - {a, b})` を導出していたが、欠車判定の基準を
+            他4スクリプトと揃えるため呼び出し側の責務へ分離した）。
+            """
             combos, thirds = [], []
-            for t in sorted(board - {a, b}):
+            for t in candidates:
                 key = frozenset({a, b, t})
                 ov = trio.get(key)
                 if ov is not None and ov >= leg_min:
@@ -227,19 +284,24 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         if eligible:
             eligible.sort()
             _, dark, mate = eligible[0]
-            combos, thirds = _mk_combos(dark, mate, U_LEG_MIN_ODDS)
-            if combos:
-                u_pair = (dark, mate)
-                hit = top3 in combos
-                pay = trio_pay * U_STAKE // 100 if hit else 0
-                rows.append({
-                    "race_date": date_map.get(rk, ""),
-                    "race_key": f"{rk}#7U", "rank": "7PLUS_U",
-                    "pred_combo": f"{dark}-{mate}-" + ",".join(map(str, thirds)),
-                    "n_combos": len(combos), "hit": int(hit), "payout": pay,
-                    "trio_payout": trio_pay, "trifecta_payout": trifecta_pay,
-                    "bet_amount": len(combos) * U_STAKE,
-                })
+            # 欠車判定を本番と同一の void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）。
+            # 軸(dark/mate)欠車=レース無効／相手欠車=その目のみ除外して購入継続。
+            thirds_full_u = sorted(set(full_field) - {dark, mate})
+            skip_race_u, valid_thirds_u = void_by_dns(dark, mate, thirds_full_u, board)
+            if not skip_race_u:
+                combos, thirds = _mk_combos(dark, mate, valid_thirds_u, U_LEG_MIN_ODDS)
+                if combos:
+                    u_pair = (dark, mate)
+                    hit = top3 in combos
+                    pay = trio_pay * U_STAKE // 100 if hit else 0
+                    rows.append({
+                        "race_date": date_map.get(rk, ""),
+                        "race_key": f"{rk}#7U", "rank": "7PLUS_U",
+                        "pred_combo": f"{dark}-{mate}-" + ",".join(map(str, thirds)),
+                        "n_combos": len(combos), "hit": int(hit), "payout": pay,
+                        "trio_payout": trio_pay, "trifecta_payout": trifecta_pay,
+                        "bet_amount": len(combos) * U_STAKE,
+                    })
 
         # ── S3(M): ◎不一致 × win_rank≥M_WIN_RANK_MIN（2026-07-21: win_rank単独へ厳選）──
         # 2026-07-19: win_rank（システム◎の1着モデル内順位）ゲートをgap12とOR統合
@@ -289,7 +351,13 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         # S2優先の重複排除（同一ペア集合）
         if u_pair is not None and {m1, mate_m} == set(u_pair):
             continue
-        combos, thirds = _mk_combos(m1, mate_m, M_LEG_MIN_ODDS)
+        # 欠車判定を本番と同一の void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）。
+        # 軸(m1/mate_m)欠車=レース無効／相手欠車=その目のみ除外して購入継続。
+        thirds_full_m = sorted(set(full_field) - {m1, mate_m})
+        skip_race_m, valid_thirds_m = void_by_dns(m1, mate_m, thirds_full_m, board)
+        if skip_race_m:
+            continue
+        combos, thirds = _mk_combos(m1, mate_m, valid_thirds_m, M_LEG_MIN_ODDS)
         if not combos:
             continue
         hit = top3 in combos

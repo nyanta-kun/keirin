@@ -24,41 +24,49 @@ S7 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。
 払戻 = 的中時 trio 最終オッズ×100。
 
-## 【既知の乖離・未修正】void_by_dns（src/evaluation/void_rules.py）との差分
-（2026-07-31 是正調査・PMタスク B-4。判断: 統一を見送り、本コメントで明記するに留める）
+## 欠車判定を void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）
 
-本番 notify_results_wt._void_by_dns / src/evaluation/void_rules.py の基準は
-「軸(p1/p2)欠車=レース無効・相手(third)欠車=その目のみ除外」だが、本スクリプトの
-`if len(board) != 7: continue`（＝盤面がちょうど7車でなければ候補プールから
-レースごと除外）はこれと一致しない。具体的に:
-  - 欠けた1台が軸(axis1/axis2)側 → 直後の
-    `if axis1 not in board or axis2 not in board: continue` で結果的に除外
-    されるため、void_by_dns の「軸欠車=レース無効」と数値的に同一（乖離なし）。
-  - 欠けた1台が相手(others)側のみ → void_by_dns なら「その1台だけ除外して
-    残り4台で購入継続（4点）」となるはずだが、本スクリプトは
-    `others = sorted(board - {axis1, axis2}); if len(others) != 5: continue`
-    でレース全体を候補プールから除外している（5点固定の買い目設計に
-    合わせた簡略化）。
+【旧実装の問題】従来は `if len(board) != 7: continue`（＝盤面がちょうど7車で
+なければ候補プールからレースごと除外）としており、本番 notify_results_wt.
+_void_by_dns / src/evaluation/void_rules.py の基準（軸欠車=レース無効・
+相手欠車=その目のみ除外して購入継続）と一致していなかった。相手(others)側の
+1台だけが盤面から欠けたケースで、本来は「その1台を除いた残り4台で購入継続」
+となるべきところ、レース全体を候補プールから除外していた（PMタスク B-4 の
+読み取り専用調査で発見・当時は unify を見送り本コメントで明記するに留めていた）。
 
-影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象）:
+【本タスクでの修正】
+  - board（欠車判定用の盤面掲載車集合）は `_load_board_frames_wt()` で構築。
+    notify_results_wt._board_frames と同一の構築方法（bet_type='trio' の
+    combination に現れる車番の和集合。odds_value によるフィルタなし）。
+    従来の `_load_trio_boards()`（odds_value フィルタ済み）は「具体的コンボの
+    購入可否判定」専用として存続させ、欠車判定には使わないよう分離した。
+  - 軸1/軸2 が board に無い場合・相手候補（フィールド全体から軸2車を除いた
+    N-2車）のうち board に無い車がある場合は `void_by_dns()`（本番と同一関数、
+    src/evaluation/void_rules.py からそのまま import）へ委譲して判定する。
+  - 相手が1台だけ欠けた場合、`others`（買い目候補の相手車リスト）が可変長
+    （4点）になる。`n_combos`/`bet_amount` は元々 `len(combos)` から算出して
+    いたため計算式自体の変更は不要（`combos` の生成元 `others` が可変長になる
+    だけで正しく機能する）。`pred_combo` は `others` ではなく実際に trio に
+    存在した（購入された）目のみ（`bought_thirds`）を列挙するよう修正した
+    （旧実装は `others` を直接列挙しており、`others` の要素が trio に存在せず
+    実購入されない場合に `pred_combo` の表示と `n_combos`/`combos` が食い違う
+    余地があったため）。
+
+  影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象）:
   全85,517レース中、盤面7車ちょうど=82,939件(97.0%)・盤面6車(1台欠け)=881件
   (1.03%)・盤面5車(2台欠け)=14件(0.02%)・盤面データなし=1,683件(1.97%)。
-  「相手1台だけ欠け」に該当し得るのは上記881+14件のうちの一部（欠けた車が
-  軸2車のいずれかであるケースは前述の通りすでに本番と同値）。
+  「盤面データなし」（trio 行が1件も無い）レースは従来通り対象外のまま
+  （`if not board: continue` で除外・void_by_dns 適用前の前提条件）。
 
-unify（void_rules.void_by_dns呼び出しへの統一）を見送った理由:
-  ① s7_evening_reselect() は日次候補プール全体を entropy 昇順で
-     S7_DAILY_CAP(=12)件までトリムする設計であり、候補プールの構成が1件でも
-     変わると同日の**他の**候補の採否まで連鎖しうる（過去に S7_DAILY_CAP が
-     実際に効いたのは honest 全期間で最大9件/日のため頻度は低いと推測される
-     ものの、honest 全期間の再計算なしに影響量を正確に説明できない）。
-  ② 本タスクでは backfill_*_rank_wt.py の実行（picks_history の再構築）を
-     禁止されているため、コード変更後の動作を実データで検証する手段がない。
-  上記2点から、実装の正しさより「何が変わるか正確に説明できること」を優先し、
-  動作は変更せず本コメントで乖離を明記するに留めた。将来解消する場合は
-  可変点数（残り相手が5点未満に減る場合を許容）へ設計変更した上で、
-  quarterly walk-forward モデルによる honest 全期間の再バックテストと
-  現行値との比較検証が必要。
+  【S7 固有の連鎖に関する注意】s7_evening_reselect() は日次候補プール全体を
+  entropy 昇順で S7_DAILY_CAP(=12)件までトリムする設計のため、本修正で
+  「相手1台欠け」レースが新たに候補プールに加わることで、同日の**他の**
+  候補の採否（トリムの足切りライン）まで連鎖しうる。s7_evening_reselect()
+  自体は axis_sum/entropy/wt_overlap_n のみを見て判定するため、可変点数の
+  候補が混じっても関数自体は無改修で正しく動作する。日次合計が
+  S7_DAILY_CAP を超えるのは honest 全期間で稀（最大9件/日）なため通常は
+  連鎖しないと推測されるが、正確な影響量は honest 全期間の実再構築でのみ
+  確認できる（本タスクでは実行しない）。
 
 使い方:
     PYTHONPATH=. .venv/bin/python scripts/backfill_s7_rank_wt.py \
@@ -78,6 +86,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
+from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
@@ -87,6 +96,11 @@ from src.strategy_wt import (
 
 
 def _load_trio_boards(race_keys: list[str]) -> dict:
+    """具体的コンボの購入可否判定用（odds_value 有効値のみ）。
+
+    欠車判定（void_by_dns）には使わない。欠車判定用の盤面掲載車集合は
+    `_load_board_frames_wt()`（odds_value フィルタなし）を使うこと。
+    """
     trio = defaultdict(dict)
     with get_connection() as c:
         for i in range(0, len(race_keys), 900):
@@ -108,6 +122,32 @@ def _load_trio_boards(race_keys: list[str]) -> dict:
                 if len(parts) == 3:
                     trio[rk][parts] = fv
     return trio
+
+
+def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
+    """欠車判定用の盤面掲載車集合を返す（notify_results_wt._board_frames /
+    src.evaluation.backtest_wt._load_board_frames_wt と同一の構築方法）。
+
+    bet_type='trio' の combination に現れる車番の和集合。odds_value による
+    フィルタは行わない（未確定・異常値でも盤面に車番として存在していれば
+    「実際に購入できた車」とみなす本番の判定基準に合わせるため）。
+    """
+    board_map: dict[str, set[int]] = defaultdict(set)
+    if not race_keys:
+        return board_map
+    with get_connection() as c:
+        for i in range(0, len(race_keys), 900):
+            chunk = race_keys[i:i + 900]
+            q = ("SELECT race_key, combination FROM wt_odds "
+                 "WHERE bet_type = 'trio' AND race_key IN (%s)"
+                 % ",".join("?" * len(chunk)))
+            for rk, comb in c.execute(q, chunk):
+                for part in re.split(r"[-=]", str(comb)):
+                    try:
+                        board_map[rk].add(int(part))
+                    except ValueError:
+                        pass
+    return board_map
 
 
 def build_rows(model_name: str, date_from: str, date_to: str,
@@ -144,6 +184,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
     df["pred_prob"] = model.predict_proba(X)[:, 1]
     df["pred_win"] = win_model.predict_proba(X)[:, 1]
     trio_bd = _load_trio_boards(df["race_key"].unique().tolist())
+    board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
     pm = _load_payouts_wt(df["race_key"].unique().tolist())
 
     # ── 全該当レースの axis1/axis2/axis_sum を先に計算 ──
@@ -154,10 +195,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         trio = trio_bd.get(rk)
         if not trio:
             continue
-        board: set[int] = set()
-        for k in trio:
-            board |= set(k)
-        if len(board) != 7:
+        board = board_map.get(rk)
+        if not board:
             continue
         fin = sorted(fins.get(rk, []))
         if len(fin) < 3:
@@ -171,11 +210,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             continue
         axis1, axis2, axis_sum = sel
         entropy = s7_field_entropy(top3_probs)
-        if axis1 not in board or axis2 not in board:
-            continue
 
-        others = sorted(board - {axis1, axis2})
-        if len(others) != 5:
+        # 欠車判定を本番と同一の void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）。
+        # 軸欠車=レース無効／相手欠車=その目のみ除外して購入継続（可変点数）。
+        thirds_full = sorted(set(top3_probs.keys()) - {axis1, axis2})
+        skip_race, others = void_by_dns(axis1, axis2, thirds_full, board)
+        if skip_race:
             continue
 
         order3 = tuple(fno for _, fno in fin[:3])
@@ -209,11 +249,16 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         for c_ in s7_evening_reselect(day_cands, [], set()):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
-            combos = []
+            # combos/bought_thirds を同期して構築する（2026-07-31 是正・PMタスク C-2b）。
+            # pred_combo は実際に買った目(bought_thirds)のみを列挙する（c_["others"]は
+            # void_by_dns 後の候補であり、個別コンボのオッズ有効性チェック前のため、
+            # 一部が trio に存在せず実購入されないケースがありうる）。
+            combos, bought_thirds = [], []
             for x in c_["others"]:
                 key = frozenset({axis1, axis2, x})
                 if key in trio:
                     combos.append(key)
+                    bought_thirds.append(x)
             if not combos:
                 continue
             rk = c_["race_key"]
@@ -225,7 +270,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             rows.append({
                 "race_date": d,
                 "race_key": f"{rk}#7S7", "rank": "SEVEN_S7",
-                "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in c_["others"])
+                "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in bought_thirds)
                               + f" (axis_sum={c_['axis_sum']:.1f})",
                 "n_combos": len(combos), "hit": int(hit), "payout": pay,
                 "trio_payout": trio_pay, "bet_amount": bet, "gate_label": gate_label,
