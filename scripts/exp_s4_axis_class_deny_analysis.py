@@ -1,4 +1,10 @@
-"""S4(SS/S): 軸2車の級班（player_class）denyフィルターが日次選出（axis_sumランキング）
+"""⚠️ 【2026-07-31・警告】本スクリプトは src/wt_vintage_config.py へ統合される前の
+独自 QUARTERS 定義を持ち、参照する四半期 vintage モデル（lgbm_wt_eval_q*）は
+2026-07-28 の事故で汚染され 2026-07-31 に削除済みのため、現状では実行できない
+（load_model が失敗する）。再利用する場合は wt_vintage_config.monthly_windows()
+による月次凍結モデル体系へ移植すること。過去の出力数値は信用しないこと。
+
+S4(SS/S): 軸2車の級班（player_class）denyフィルターが日次選出（axis_sumランキング）
 に与える影響を検証する。
 
 S1で発見した「軸がS1級/A1級(各グレード最上位)だと配当が下がりやすい」現象が

@@ -1,4 +1,10 @@
-"""S4: 2軸(axis1,axis2)がWINTICKET◎◯(prediction_mark 1,2)と完全一致する場合の
+"""⚠️ 【2026-07-31・警告】本スクリプトは src/wt_vintage_config.py へ統合される前の
+独自 QUARTERS 定義を持ち、参照する四半期 vintage モデル（lgbm_wt_eval_q*）は
+2026-07-28 の事故で汚染され 2026-07-31 に削除済みのため、現状では実行できない
+（load_model が失敗する）。再利用する場合は wt_vintage_config.monthly_windows()
+による月次凍結モデル体系へ移植すること。過去の出力数値は信用しないこと。
+
+S4: 2軸(axis1,axis2)がWINTICKET◎◯(prediction_mark 1,2)と完全一致する場合の
 期待値検証（ユーザー仮説: 一致レースは市場に織り込まれ済みで高配当が出にくいのでは）。
 
 やること:

@@ -1,4 +1,10 @@
-"""overlap=2（軸2車がWINTICKET公式◎◯と完全一致）帯に、entropyフィルタを
+"""⚠️ 【2026-07-31・警告】本スクリプトは src/wt_vintage_config.py へ統合される前の
+独自 QUARTERS 定義を持ち、参照する四半期 vintage モデル（lgbm_wt_eval_q*）は
+2026-07-28 の事故で汚染され 2026-07-31 に削除済みのため、現状では実行できない
+（load_model が失敗する）。再利用する場合は wt_vintage_config.monthly_windows()
+による月次凍結モデル体系へ移植すること。過去の出力数値は信用しないこと。
+
+overlap=2（軸2車がWINTICKET公式◎◯と完全一致）帯に、entropyフィルタを
 適用すると三連複2軸流しが黒字化するか検証する（2026-07-26「別条件検討」）。
 
 背景: overlap=2は2026-07-21の旧検証（axis_sumベース選出のみ・entropy未使用）で

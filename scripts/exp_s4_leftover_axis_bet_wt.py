@@ -1,4 +1,10 @@
-"""S4のentropyゲートで除外される「堅いレース」(entropy>S4_ENTROPY_MAX)を
+"""⚠️ 【2026-07-31・警告】本スクリプトは src/wt_vintage_config.py へ統合される前の
+独自 QUARTERS 定義を持ち、参照する四半期 vintage モデル（lgbm_wt_eval_q*）は
+2026-07-28 の事故で汚染され 2026-07-31 に削除済みのため、現状では実行できない
+（load_model が失敗する）。再利用する場合は wt_vintage_config.monthly_windows()
+による月次凍結モデル体系へ移植すること。過去の出力数値は信用しないこと。
+
+S4のentropyゲートで除外される「堅いレース」(entropy>S4_ENTROPY_MAX)を
 別の買い目（二車複axis1-axis2 / ワイドaxis1-axis2）で拾えないか検証する
 （2026-07-26・「重ならない新セグメント」調査）。
 

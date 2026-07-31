@@ -131,6 +131,31 @@ S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-o
   実行するcronを追加することを推奨。これがないと翌月のレースをスコアするモデルが
   存在せず rebuild/backfill が失敗する。
 
+### 汚染済み四半期モデルの削除（2026-07-31実施）
+
+本ポリシーには「既存の旧ファイルは新体系構築後に削除する」と明記していたが、
+2026-07-30の点検（B-7レビュー）で**実際には未削除のまま`data/models/`に残存**
+していることが判明した。削除前に以下を確認した上で、ユーザー承認を得て削除を実施した。
+
+- 削除前安全確認: `scripts/daily_picks_wt.sh` / `evening_picks_wt.sh` /
+  `intraday_results_wt.sh` / `weekly_retrain_wt.sh` / `notify_prerace_wt.py` /
+  `backfill_missing_prerace_wt.py` / `reconcile_walkforward_tail.sh` /
+  `src/prediction/predictor.py` / `src/cli/main.py`、および VPS crontab
+  （読み取りのみ）を grep し、`_q24`/`_q25` 系モデル名への参照が **0件**
+  であることを確認。`rebuild_s1/s7/s7a/s9/s9a_walkforward_pg.py` と
+  `backfill_index_pct_wt.py` は全て `wt_vintage_config.monthly_windows()`
+  経由で月次モデルのみを参照していることも確認済み。
+- 全ファイルが`.gitignore`対象（`data/models/*.pkl` / `*.meta.json`）で
+  Git追跡外であることを`git check-ignore -v`で確認し、`rm`で削除
+  （`git rm`は不使用）。
+- **削除ファイル: 28件**
+  （`lgbm_wt_eval_q{2401,2404,2407,2410,2501,2504,2507}.{pkl,meta.json}` 7組14件 +
+  `lgbm_wt_win_q{2401,2404,2407,2410,2501,2504,2507}.{pkl,meta.json}` 7組14件）。
+- 月次モデル124ファイル（62本×pkl/meta.json）・本番モデル
+  （`lgbm_wt.pkl`/`lgbm_wt_win.pkl`/`lgbm_wt_eval.pkl`/`lgbm_wt_win_eval.pkl`/
+  `lgbm_wt_train_only.pkl`/`lgbm_wt_val25.pkl`）・`upset_cuts_wt.json`は
+  削除対象外として保持を確認済み。
+
 ## 既知の制約
 
 - `wt_odds`は2022-12-01〜2023-12-31分が長期間欠落していたが、
