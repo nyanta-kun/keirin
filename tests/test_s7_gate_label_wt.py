@@ -1,23 +1,35 @@
 """strategy_wt.s7_gate_label（S7表示ランク分岐）の純関数テスト。
 
-2026-07-23に導入した観察用サブランク"SS+"（軸2車の級班に各グレード最上位を
-含まないSS内訳）は、サンプル数不足のため2026-07-27にユーザー判断で廃止し
-SSへ統合した。axis1_class/axis2_classは廃止後もコール側互換のため引数として
-残しているが、結果には影響しない。
+サブランクは2段階で廃止された:
+- 2026-07-23導入の"SS+"（軸2車の級班に各グレード最上位を含まないSS内訳）は
+  サンプル数不足のため2026-07-27にユーザー判断で廃止しSSへ統合。
+- SS自体（7SS/9SS・重なり0）も2024-09以降の発生頻度が月0〜4件まで激減した
+  ため2026-07-31に廃止しSへ統合（commit e994758）。
+
+結果として現在は重なり0/1がともに"S"を返す。axis1_class/axis2_classは
+廃止後もコール側互換のため引数として残しているが、結果には影響しない。
 """
 from src.strategy_wt import s7_gate_label
 
 
-def test_overlap_zero_is_ss_regardless_of_class():
-    assert s7_gate_label(0, "A2", "A3") == "SS"
-    assert s7_gate_label(0, "S1", "A3") == "SS"
-    assert s7_gate_label(0, "A3", "A1") == "SS"
-    assert s7_gate_label(0, "S1", "A1") == "SS"
+def test_overlap_zero_is_s_regardless_of_class():
+    """重なり0は2026-07-31にSSからSへ統合された（級班によらず一律）。"""
+    assert s7_gate_label(0, "A2", "A3") == "S"
+    assert s7_gate_label(0, "S1", "A3") == "S"
+    assert s7_gate_label(0, "A3", "A1") == "S"
+    assert s7_gate_label(0, "S1", "A1") == "S"
 
 
-def test_overlap_zero_without_class_info_is_ss():
-    assert s7_gate_label(0, None, None) == "SS"
-    assert s7_gate_label(0) == "SS"
+def test_overlap_zero_without_class_info_is_s():
+    assert s7_gate_label(0, None, None) == "S"
+    assert s7_gate_label(0) == "S"
+
+
+def test_ss_and_ss_plus_are_never_returned():
+    """廃止済みサブランクが復活していないことを保証する回帰テスト。"""
+    for overlap in (0, 1, 2, None):
+        for classes in ((None, None), ("S1", "A1"), ("A2", "A3")):
+            assert s7_gate_label(overlap, *classes) not in ("SS", "SS+")
 
 
 def test_overlap_one_is_s_regardless_of_class():
