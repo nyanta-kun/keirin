@@ -45,8 +45,10 @@ TAIL_FROMと実際の`lgbm_wt_eval`のtest_from（週次で「実行日-90日」
 期間定義は`src/wt_vintage_config.py::monthly_windows()`のみを正本とする。
 以前は`rebuild_s1/s7/s9/s7a/s9a_walkforward_pg.py`・`backfill_index_pct_wt.py`
 の6ファイルに同一内容のQUARTERS定数がコピーされており、将来どれか1つだけ
-更新されて食い違うリスクを常に抱えていた。現在はこの6ファイル全てが
-`monthly_windows()`をimportして使う設計に統一済み。
+更新されて食い違うリスクを常に抱えていた。現在はこの6ファイル
+（2026-07-31のランク全面改名でファイル名は`rebuild_s1_walkforward_pg.py`・
+`rebuild_7s/9s/7a/9a_walkforward_pg.py`・`backfill_index_pct_wt.py`へ変更済み）
+全てが`monthly_windows()`をimportして使う設計に統一済み。
 
 新しい月を追加する・境界を変更する場合は、このファイル1箇所を直せば
 全ての本番スクリプトに反映される。
@@ -88,11 +90,16 @@ vintageモデルを作成する必要がある。現時点ではこれを自動�
 
 ```bash
 # 全期間の再構築
-PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py
+PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py
 
 # 直近月（今月）のみの日次軽量再構築
-PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py --tail-only
+PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py --tail-only
 ```
+
+（2026-07-31のランク全面改名（commit `f31f84b`）で`rebuild_s7_walkforward_pg.py`
+は`rebuild_7s_walkforward_pg.py`へ改名。同様に`rebuild_s7a/s9/s9a_walkforward_pg.py`
+も`rebuild_7a/9s/9a_walkforward_pg.py`へ改名済み。`rebuild_s1_walkforward_pg.py`
+はS1が改名対象外のため変更なし。）
 
 S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-only`のみ）
 に統一されている。
@@ -118,6 +125,11 @@ S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-o
 
 破棄分（8,272件）は `data/backup/picks_history_discarded_20260730_134153.csv` に
 バックアップ済み（.gitignore対象外のため未コミット）。
+
+（注: 上記表のrank名は2026-07-31時点＝ランク全面改名（commit `f31f84b`）前の
+表記のまま残している。改名後の対応は `SEVEN_S7`→`RANK_7S`・`SEVEN_7A`→
+`RANK_7A`・`NINE_S9`→`RANK_9S`・`NINE_9A`→`RANK_9A`。`SEVEN_S1`は改名対象外の
+ため変更なし。詳細はCLAUDE.md「現行ランク体系」節の「ランク名体系化」サブ節参照。）
 
 ### ⚠️ 日次cronの状態（重要）
 `scripts/reconcile_walkforward_tail.sh` の日次cron（VPS 00:50）は

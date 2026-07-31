@@ -66,6 +66,51 @@ docs/bet-structure-guide.md            # 買い目戦略（旧体系の歴史的
 
 ## 現行ランク体系（2026-07-31〜・実精算方式・**7SS/7S/7A/9SS/9S/9A の6ペーパーランク**・S1は全廃）
 
+### ランク名体系化（2026-07-31・commit `f31f84b`）— 内部rank名・suffixの正本
+
+**表示ラベル（Web/Discord/netkeirinの見え方）は一切変更していない。** 内部rank名と
+suffixだけを表示ラベル基準に体系化した。以降のコード・ドキュメントで参照すべき
+正本は以下の対応表（**本節より下の履歴記述は意図的に改名前の表記のまま残して
+いる**ため、混同しないよう本節を先に参照すること）:
+
+| 内部rank（新） | suffix（新） | 表示ラベル | 内部rank（旧） | suffix（旧） |
+|---|---|---|---|---|
+| `RANK_7S`  | `#7S`  | 7S  | `SEVEN_S7` | `#7S7` |
+| `RANK_7A`  | `#7A`  | 7A  | `SEVEN_7A` | `#7A`（変更なし） |
+| `RANK_7SS` | `#7SS` | 7SS | `SEVEN_SS` | `#7SS`（変更なし） |
+| `RANK_9S`  | `#9S`  | 9S  | `NINE_S9`  | `#9S9` |
+| `RANK_9A`  | `#9A`  | 9A  | `NINE_9A`  | `#9A`（変更なし） |
+
+**命名規則**: 内部rank = `RANK_` + 表示ラベル、suffix = `#` + 表示ラベル
+（3表現が完全に1対1で覚えるべき対応がゼロになる）。suffixの実質変更は
+`#7S7`→`#7S`・`#9S9`→`#9S`の2件のみ（元々`SEVEN_S7`/`NINE_S9`だけ表示ラベル
+と非対称だった不揃いの是正そのもの）。
+
+定数・関数・ファイル名も同基準へ統一済み:
+- 定数: `S7_*`→`RANK_7S_*` / `S9_*`→`RANK_9S_*` / `S7A_STAKE`→`RANK_7A_STAKE` /
+  `S9A_STAKE`→`RANK_9A_STAKE` / `SEVENSS_*`→`RANK_7SS_*`
+- 関数: `s7_daily_select`→`rank_7s_daily_select`・`s7_gate_label`→
+  `rank_7s_gate_label`・`s7_evening_reselect`→`rank_7s_evening_reselect`・
+  `sevenss_score`/`field_features`/`select_axis`→`rank_7ss_*` 等。
+  `notify_prerace_wt.py`は`judge_s7`→`judge_rank_7s`・`_process_s7_candidates`→
+  `_process_rank_7s_candidates`等`_load_`/`_insert_`/`_build_`系17関数を含む
+- ファイル名: `backfill_s7/s7a/s9/s9a_rank_wt.py`→`backfill_7s/7a/9s/9a_rank_wt.py`、
+  `rebuild_s7/s7a/s9/s9a_walkforward_pg.py`→`rebuild_7s/7a/9s/9a_walkforward_pg.py`、
+  `s7_evening_reselect.py`→`reselect_7s_evening.py`（`backfill_7ss_rank_wt.py`は
+  改名前から既に規則に合致していたため変更なし）
+
+**なぜ改名したか**: S4→S7改名（2026-07-27）・S1〜S3全廃・「7SS」の意味が2度
+変わる（軸格上非該当サブランク→2026-07-27にSS統合で廃止→2026-07-31に波乱軸
+選出の別戦略として再利用）という経緯が積み重なり、`SEVEN_S7`→suffix`#7S7`な
+のに`SEVEN_7A`→suffix`#7A`、`NINE_S9`→suffix`#9S9`なのに`NINE_9A`→suffix`#9A`
+という不揃いが生じていた。将来`9SS`等を追加する拡張性も同時に確保している。
+
+廃止済みランク（`SEVEN_S1`/`7PLUS_*`/`SIX_S1`/`M_*`/`U_*`）は改名対象外で
+現状の名前のまま残置（過去日再採点・分析スクリプト互換のため）。旧名→新名の
+機械的な変換が必要な場合（過去CSV/Discordログ/netkeirin_submissions等、DB
+移行対象外の履歴データの読み解き）は`src/strategy_wt.py`の
+`LEGACY_RANK_NAME_MAP`/`LEGACY_SUFFIX_MAP`を参照すること。
+
 > ## 🔴🔴 【2026-07-30・最重要】本節以下のROI数値はすべて無効です
 >
 > **本節および以下の各ランク説明に記載されているROI数値（S1 123.0%/143.3%/182.5%/443.9%、
@@ -302,19 +347,32 @@ Mac対話シェルも `~/.zshrc` に `KEIRIN_DB_URL=postgresql://...@sekito-stab
    （S1のブロックがここに残存しpicks_historyへINSERTし続けていたことが
    2026-07-31に発覚。commit `3775101`）
 5. **Discord通知** — `scripts/notify_prerace_wt.py` のメッセージ生成・
-   pick挿入関数（`_insert_s4_pick` / `_build_s4_message` 等ランク別関数）
-6. **サマリー集計** — `scripts/notify_results_wt.py::_query_stats`（IN句・313行）
-   および同ファイルの `_PAPER_SUFFIXES` 定数（1172/1198行）
+   pick挿入関数（`_insert_rank_7s_pick` / `_build_rank_7s_message` 等ランク別関数。
+   2026-07-31のランク全面改名で`_insert_s7_pick`/`_build_s7_message`から
+   さらに改称済み。旧名 `_insert_s4_pick`/`_build_s4_message` は2026-07-27の
+   S4→S7改名時点で既に置き換わっていた）
+6. **サマリー集計** — `scripts/notify_results_wt.py::_query_stats` のIN句
+   および同ファイルの `_PAPER_SUFFIXES` 定数。**いずれも commit `5fb70c1` で
+   単一正本 `CURRENT_PAPER_RANKS`（`src/strategy_wt.py`）からの導出に変わった**
+   ので、通常はこの2箇所を直接編集する必要はない（正本を直せば波及する）:
+   `_PAPER_SUFFIXES`（51行）/ `_QUERY_STATS_RANKS_SQL`（316行）
 7. **netkeirin入稿** — `scripts/netkeirin_submit_wt.py` の `RANK_CONFIGS` /
    `RANK_ORDER`（80/88行）。**`_is_enabled()`（230行）はfail-open**（設定行が
    存在しない・削除されている場合、無効ではなく常時ONとして扱われる）ため、
    `RANK_CONFIGS`/`RANK_ORDER`から確実に除去しないと自動入稿が止まらない
    （S1がここに残存し常時ON扱いだったことが2026-07-31に発覚。commit `3775101`）
 
-### ランク集合の定義箇所一覧（単一正本化されるまでは全箇所同時更新）
+### ランク集合の定義箇所一覧（2026-07-31 commit `5fb70c1` で単一正本化 済）
 
-ランクの集合（有効ランクリスト）は現時点で最低4箇所に独立してハードコード
-されており、2026-07-31時点で内容が全て食い違っていた:
+**現在は `src/strategy_wt.py` の `CURRENT_PAPER_RANKS`（`PaperRankSpec` のタプル）が
+唯一の正本**で、下記4箇所は全てそこから導出される。ランクを追加・削除する際は
+**正本1箇所だけを直せばよい**。`ABOLISHED_PAPER_RANKS` が廃止済みランクの
+ブラックリストを持ち、`tests/test_paper_rank_single_source.py` の
+`test_all_four_locations_agree_on_current_rank_universe` が4箇所の矛盾を
+機械的に検出する（再発防止の本体）。
+
+以下は単一正本化に至った経緯の記録。ランクの集合は4箇所に独立して
+ハードコードされており、2026-07-31時点で内容が全て食い違っていた:
 
 - `scripts/notify_results_wt.py:313` `_query_stats` のIN句（`SEVEN_SS`が欠落
   していた）
@@ -326,8 +384,10 @@ Mac対話シェルも `~/.zshrc` に `KEIRIN_DB_URL=postgresql://...@sekito-stab
   のみで3週間以上n=0の空振りになっていた。2026-07-31 commit `3775101`で
   現行ランクへ修正）
 
-単一正本化（設定ファイル化等）が実施されるまでは、**ランクを追加・削除する
-際は上記4箇所を必ず同時に更新すること**。加えて `netkeirin_submit_wt.py` の
+**上記4箇所は commit `5fb70c1` で正本からの導出に置き換わったため、個別更新は
+不要になった。** ただし正本を経由しない新しいランク参照を書けば同じ問題が
+再発するので、ランク集合を扱うコードは必ず `CURRENT_PAPER_RANKS` を
+import すること。加えて `netkeirin_submit_wt.py` の
 `_is_enabled()` のような **fail-open な有効/無効判定は「消し忘れると危険」
 ではなく「消さない限り有効のまま」という逆方向の罠**になる点に特に注意する
 こと（新設定を追加し忘れても気づきにくいが、廃止時に除去し忘れると即座に
@@ -381,18 +441,22 @@ void判定ロジックを変更する際は、この3実装を必ず同時に確
 反して汚染済み四半期vintageモデル28ファイルが未削除のまま残っていた
 （commit `1a9bdac`で削除・独自QUARTERS系expスクリプトに警告コメントを付与）。
 うち2本（`exp_s7_gate_staged_audit.py`/`exp_s7_reduced_box_wt_marks.py`）は
-`S7_AXIS_SUM_MAX=1.3`をハードコードしており、現行値`1.5`
-（`src/strategy_wt.py:328`）と食い違っていた。
+独自変数`S7_AXIS_SUM_MAX=1.3`をハードコードしており、現行の本番定数
+`RANK_7S_AXIS_SUM_MAX`（`src/strategy_wt.py:329`、値は`1.5`）と食い違って
+いた（2026-07-31のランク全面改名で本番定数名は`S7_AXIS_SUM_MAX`→
+`RANK_7S_AXIS_SUM_MAX`へ変更済み。expスクリプト側のハードコード変数名は
+改名対象外のため`S7_AXIS_SUM_MAX`のまま残る）。
 
 ### pure関数の仕様変更時は同一コミットでテストを更新する
 
-`s7_gate_label()`のようなpure関数の仕様を変更する際、同一コミットで対応
-テストを更新しないと、CIが赤いままmasterへ積み上がる。CIのdeployジョブは
-`needs: test`でtestジョブに従属するため、**テストが赤い間はpushしても
-本番へ自動デプロイされない**（気づかれにくい形でリリースが止まる）。
-2026-07-31、commit `e994758`で`s7_gate_label()`を「重なり0も"S"を返す」
-仕様へ変更した際にテストを更新し忘れ、masterのCIが赤いまま放置されていた
-のをcommit `f8811b8`で修復した。
+`rank_7s_gate_label()`（当時の名前は`s7_gate_label()`。2026-07-31のランク
+全面改名commit `f31f84b`で改称済み）のようなpure関数の仕様を変更する際、
+同一コミットで対応テストを更新しないと、CIが赤いままmasterへ積み上がる。
+CIのdeployジョブは`needs: test`でtestジョブに従属するため、**テストが
+赤い間はpushしても本番へ自動デプロイされない**（気づかれにくい形で
+リリースが止まる）。2026-07-31、commit `e994758`で`s7_gate_label()`
+（当時の名前）を「重なり0も"S"を返す」仕様へ変更した際にテストを更新し
+忘れ、masterのCIが赤いまま放置されていたのをcommit `f8811b8`で修復した。
 
 ### Discord通知 `send(content, channel)` の `channel` は必須引数
 
@@ -411,7 +475,8 @@ void判定ロジックを変更する際は、この3実装を必ず同時に確
 
 上記データ整合性レビューを受けて以下を同日中に修正済み:
 
-- commit `f8811b8` — `s7_gate_label()`のテスト未更新によるCI赤字を修復
+- commit `f8811b8` — `s7_gate_label()`（2026-07-31改名後は`rank_7s_gate_label()`）
+  のテスト未更新によるCI赤字を修復
 - commit `3775101` — S1全廃の残存2経路（候補書き込み・netkeirin入稿）を停止、
   `live_report_wt.py`のランク集合を現行へ更新
 - commit `33ba316` — S1自動再生成の第4経路（`reconcile_walkforward_tail.sh`）
