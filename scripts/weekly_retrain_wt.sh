@@ -12,6 +12,53 @@ LOG_DIR="data/logs"
 mkdir -p "$LOG_DIR" data/models/archive
 LOG="$LOG_DIR/train_wt_${DATE}.log"
 
+# --- 多重起動防止（2026-07-31 D-2判断: 追加する）---
+# 週1回のcronのみなら重複可能性は低いが、学習は数時間かかるため、手動での
+# 再実行等が前回インスタンスと重なると lgbm_wt.pkl 等モデルファイルへの同時
+# 書き込みや④世代退避(archive)コピーが競合し、壊れたモデルが配信される恐れが
+# ある（2026-07-08 prerace_decisions/notified 同時消失事故と同型のリスク）。
+# 本スクリプトはMac cronで実行されるが、macOSには flock(1) コマンドが存在しない
+# ことを確認済み（2026-07-31, ローカルで `which flock` → not found。VPSの4スクリプト
+# は util-linux の flock が使えるためそちらを使用）。そのため mkdir の原子性を
+# 利用したPIDロックで代替する。
+LOCK_DIR="$LOG_DIR/weekly_retrain_wt.lockdir"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+  if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "[$(date '+%H:%M:%S')] [weekly_retrain_wt] 前回実行(PID $OLD_PID)が継続中のためスキップします（$LOCK_DIR）。" \
+      | tee -a "$LOG_DIR/lock_skips.log" >&2
+    exit 0
+  fi
+  echo "[$(date '+%H:%M:%S')] [weekly_retrain_wt] 古いロック（PID ${OLD_PID:-不明} は不在）を検出。奪って続行します（$LOCK_DIR）。" \
+    | tee -a "$LOG_DIR/lock_skips.log" >&2
+  rm -rf "$LOCK_DIR"
+  mkdir "$LOCK_DIR"
+fi
+echo $$ > "$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
+# --- KEIRIN_DB_URL 必須チェック（2026-07-31 D-1）---
+# database.py の get_connection() は KEIRIN_DB_URL 未設定時に RuntimeError を送出する
+# 設計だが、train-wt 自体も get_connection() 経由でデータを取得するため、変数が
+# 消えると学習が空振りしつつ気付きにくい形で失敗しうる。ここで早期に検知して中断する。
+if [[ -z "${KEIRIN_DB_URL:-}" ]]; then
+  echo "[$(date '+%H:%M:%S')] [FATAL] KEIRIN_DB_URL が未設定です。weekly_retrain_wt.sh を中断します。" \
+    | tee -a "$LOG" >&2
+  # Discord Webhook URL は .env から直接読む実装（src/notify/discord.py::_load_webhook_url）
+  # のため、DB接続が無くても通知は送信できる（通知経路はKEIRIN_DB_URLに依存しない）。
+  if .venv/bin/python3 -c "
+from src.notify.discord import send
+ok = send('🚨 **[weekly_retrain_wt.sh] KEIRIN_DB_URL が未設定のため処理を中断しました。**\ncrontabの環境変数設定を確認してください。', channel='system')
+raise SystemExit(0 if ok else 1)
+" 2>&1 | tee -a "$LOG"; then
+    echo "[$(date '+%H:%M:%S')] Discordへ中断を通知しました。" | tee -a "$LOG" >&2
+  else
+    echo "[$(date '+%H:%M:%S')] [FATAL] Discord通知にも失敗しました（.envのDISCORD_WEBHOOK_URL_SYSTEM未設定などが原因の可能性）。cronログ（標準エラー）で検知してください。" \
+      | tee -a "$LOG" >&2
+  fi
+  exit 1
+fi
+
 # テスト分割は直近約90日前（ホールドアウト評価用）
 if [[ "$(uname)" == "Darwin" ]]; then
   TEST_FROM=$(date -v-90d +%Y-%m-%d)

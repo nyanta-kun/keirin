@@ -12,6 +12,46 @@ TODAY=$(date +%Y-%m-%d)
 LOG_DIR="data/logs"
 mkdir -p "$LOG_DIR" "data/picks"
 
+# --- 多重起動防止（2026-07-31 D-2）---
+# 前段処理の遅延等で cron の次回発火と重複実行されると wt_races/wt_entries/
+# picks_history への同時書き込み・削除が競合する（2026-07-08 prerace_decisions/
+# notified 同時消失事故と同型のリスク）。flock は VPS(util-linux)で利用可能と
+# 確認済み(2026-07-31, `ssh sekito "which flock && flock --version"`)。
+# ロック取得失敗時は「前回が継続中」とみなしスキップする（スキップの発生は
+# lock_skips.log に蓄積するので、頻発していれば前回がハングしていないか確認すること）。
+LOCK_FILE="$LOG_DIR/daily_picks_wt.lock"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  echo "[$(date '+%H:%M:%S')] [daily_picks_wt] 前回実行がロック中のためスキップします（$LOCK_FILE）。" \
+    | tee -a "$LOG_DIR/lock_skips.log" >&2
+  exit 0
+fi
+
+# --- KEIRIN_DB_URL 必須チェック（2026-07-31 D-1）---
+# database.py の get_connection() は KEIRIN_DB_URL 未設定時に RuntimeError を送出する
+# 設計だが、本スクリプトの各処理は `|| echo "...失敗（継続）"` で握り潰しているため、
+# crontab 編集ミス等でこの変数が消えると当日分の収集・予想生成・通知・netkeirin入稿が
+# 全て空振りしつつ script 全体は exit 0 で完走してしまう（Discordに何も来ないことでしか
+# 気付けない）。ここで早期に検知して中断する。
+if [[ -z "${KEIRIN_DB_URL:-}" ]]; then
+  echo "[$(date '+%H:%M:%S')] [FATAL] KEIRIN_DB_URL が未設定です。daily_picks_wt.sh を中断します。" \
+    | tee -a "$LOG_DIR/db_url_missing_${TODAY}.log" >&2
+  # Discord Webhook URL は .env から直接読む実装（src/notify/discord.py::_load_webhook_url）
+  # のため、DB接続が無くても通知は送信できる（通知経路はKEIRIN_DB_URLに依存しない）。
+  if .venv/bin/python3 -c "
+from src.notify.discord import send
+ok = send('🚨 **[daily_picks_wt.sh] KEIRIN_DB_URL が未設定のため処理を中断しました。**\ncrontabの環境変数設定を確認してください。', channel='system')
+raise SystemExit(0 if ok else 1)
+" 2>&1 | tee -a "$LOG_DIR/db_url_missing_${TODAY}.log"; then
+    echo "[$(date '+%H:%M:%S')] Discordへ中断を通知しました。" \
+      | tee -a "$LOG_DIR/db_url_missing_${TODAY}.log" >&2
+  else
+    echo "[$(date '+%H:%M:%S')] [FATAL] Discord通知にも失敗しました（.envのDISCORD_WEBHOOK_URL_SYSTEM未設定などが原因の可能性）。cronログ（標準エラー）で検知してください。" \
+      | tee -a "$LOG_DIR/db_url_missing_${TODAY}.log" >&2
+  fi
+  exit 1
+fi
+
 if [[ "$(uname)" == "Darwin" ]]; then
   YESTERDAY=$(date -v-1d +%Y-%m-%d)
 else
@@ -89,7 +129,7 @@ if [[ "$RP_SANE" != "1" ]]; then
   echo "[$(date '+%H:%M:%S')] race_point異常が解消せず。本日の指数算出・推奨提示をスキップします。"
   .venv/bin/python3 -c "
 from src.notify.discord import send
-send('⚠️ **[$TODAY] race_point(競走得点)異常のため本日の指数算出・推奨提示をスキップしました。**\n3回の再収集(5分間隔)後も解消せず。手動確認が必要です。')
+send('⚠️ **[$TODAY] race_point(競走得点)異常のため本日の指数算出・推奨提示をスキップしました。**\n3回の再収集(5分間隔)後も解消せず。手動確認が必要です。', channel='system')
 " 2>&1 | tee -a "$LOG_DIR/race_point_sanity_${TODAY}.log"
   exit 0
 fi
