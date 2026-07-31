@@ -29,3 +29,22 @@ def test_prepare_x_rowcount_preserved():
     df = pd.DataFrame({"race_point": [10.0, 20.0, 30.0]})
     X = prepare_X(df)
     assert len(X) == 3   # dropna しない＝行数保持（予測対象を落とさない）
+
+
+def test_leaky_ex_features_excluded_from_feature_cols_wt():
+    """train/serve skew（開催中に値が更新される）が実測された ex_spurt_pct /
+    ex_thrust_pct は 2026-07-31 に FEATURE_COLS_WT から除外された（48→46特徴）。
+
+    A/B測定（`scripts/exp_ab_leaky_ex_features.py`・12ヶ月・約194,000サンプル）で
+    AUC寄与が事実上ゼロ（eval 0.7732→0.7731 / win 0.8233→0.8233）と確認された上での
+    リスク回避判断であり、性能改善が目的ではない。H2H特徴（`add_h2h_features_wt`）が
+    一度 FEATURE_COLS_WT に採用→ROI悪化で撤回された前例があるため、将来のアドホック
+    実験・特徴追加作業でこの2特徴が誤って再混入しないことを保証する回帰テスト。
+
+    SELECT・0-1正規化自体（`load_raw_data_wt`/`build_features_wt`）は分析用途・将来の
+    point-in-time化のため引き続き残っており、このテストは FEATURE_COLS_WT への
+    不採用のみを検証する（カラム自体の削除ではない）。
+    """
+    assert "ex_spurt_pct" not in FEATURE_COLS_WT
+    assert "ex_thrust_pct" not in FEATURE_COLS_WT
+    assert len(FEATURE_COLS_WT) == 46

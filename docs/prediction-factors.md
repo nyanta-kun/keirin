@@ -1,14 +1,14 @@
 # 予想ファクター仕様書
 
 > **最終更新**: 2026-07-31  
-> **本番モデル（winticket）**: `lgbm_wt` / **48特徴量** / 全期間(2022-12-01〜) full-refit / 706,230エントリー・99,776R学習 / holdout AUC 0.7793（test-from=直近90日で評価後、全データ再学習）  
+> **本番モデル（winticket）**: `lgbm_wt` / **46特徴量**（2026-07-31にex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46・下記参照） / 全期間(2022-12-01〜) full-refit / 706,230エントリー・99,776R学習 / holdout AUC 0.7793（test-from=直近90日で評価後、全データ再学習）  
 > **評価専用モデル**: `lgbm_wt_eval` / TRAINのみ〜test-from(直近90日)前 / 658,339エントリー / holdout AUC 0.7765（honest backtest再構築用・HOLD汚染なし）  
 > **1着専用モデル**: `lgbm_wt_win` / holdout AUC 0.8258（`lgbm_wt_win_eval` holdout AUC 0.8214）。S1の軸選定に使用（2026-07-19導入）  
 > **モデル設計方針**: `weekly_retrain_wt.sh`（毎週日曜23:30）が①`--test-from`直近90日でholdout評価→AUCゲート（top3系≥0.75・win系≥0.78、前回比-0.02超悪化で昇格中止）→②全データfull-refitで配信モデル更新→③波乱ゲートcut再計測→④世代退避（`data/models/archive/`）の順で実行。  
 > **ロールバック保持（keirin-station）**: lgbm_v6 / 24特徴量 / CV AUC 0.7575（2026-06-08 収集停止）  
 > **現行戦略（2026-07-23時点・S1/SS+/SS/S の4ペーパーランク）**: S1=win軸1着固定×3着内モデル相手2車（7車・軸=1着専用モデル1位×top3_gap≥0.15×軸単勝勝率≤50%×軸級班≠S1/A1×三連単2点流し・目下限なし）。S2(旧U)・S3(旧M)は対象レース数・的中率・期待値の観点で継続困難と判断し2026-07-21に全廃（過去行は picks_history_u_archive / picks_history_m_archive へ退避）。S4(単勝×複勝指数トップ3重なり軸×波乱度選出の三連複2軸総流し・7車)は軸2車がWINTICKET公式◎◯と重なる数で**SS**（重なり0・全く重ならない）と**S**（重なり1・片方だけ重なる、日次axis_sum上位10件）に再編、SSのうち軸級班に各グレード最上位(S1/A1)を含まないレースを観察用サブランク**SS+**として表示分岐（2026-07-23導入・買い目はSSと同一）。**旧新S1（6車三連単）・A（一致波乱二連単）は検証ROI100%超なしのため 2026-07-17 全廃**（行は picks_history_r_archive / picks_history_a_archive へ退避）。旧S1（7車三連複・7PLUS_R・実賭け）は 2026-07-16 全廃済み。詳細は CLAUDE.md「現行ランク体系」。  
 > **【2026-07-23・重要】race_point特徴量の自己参照汚染を修正**: 2026-06-18〜07-23、`wt_entries.race_point`（`score_z`等の学習特徴量の入力）がAI予測確率で上書きされ続け週次再学習が自己汚染していたバグを発見・修正（詳細は本ファイル更新履歴・kiseki側メモリ`keirin_race_point_feature_leak_2026_07_23`）。汚染期間の生データ再取得・モデル全面再学習・S1/S4のtailウィンドウ(2026-04-13〜)再構築まで完了済み。
-> **【2026-07-31・train/serve skew検出・未対応】** `ex_spurt_pct`/`ex_thrust_pct`（2-2節「winticket 固有の新特徴量」参照）が開催中に値が更新される（同一開催Day1と最終日でそれぞれ5.36%/2.39%のペアで値が変化）ことを確認。`_get_collected_keys`が結果確定済みレースのみスキップする仕様と組み合わさると学習データにそのレース自身の結果を反映した値が混入しうる。対応はA/B測定で影響を測ってから判断する方針で現時点では未対応。詳細は該当箇所の注記・更新履歴参照。
+> **【2026-07-31・train/serve skew検出→FEATURE_COLS_WTから除外済み】** `ex_spurt_pct`/`ex_thrust_pct`（2-1節「winticket 固有の新特徴量」参照。旧記述は「2-2節」と誤記していたため本更新で訂正）が開催中に値が更新される（同一開催Day1と最終日でそれぞれ5.36%/2.39%のペアで値が変化）ことを確認。`_get_collected_keys`が結果確定済みレースのみスキップする仕様と組み合わさると学習データにそのレース自身の結果を反映した値が混入しうる。12ヶ月・約194,000サンプルのA/B測定（`scripts/exp_ab_leaky_ex_features.py`）でAUC寄与が事実上ゼロ（eval 0.7732→0.7731 / win 0.8233→0.8233・honest ROIも有意差なし）と確認された上で、「性能が上がるから」ではなく「予測に何も貢献していないのにリスクだけを抱えているため」`FEATURE_COLS_WT`から除外（48→46特徴・ユーザー承認済み）。除外後の全モデル再学習はPMが別途実施する。詳細は該当箇所の注記・更新履歴参照。
 > **【2026-07-31・ランク名体系化】** 内部rank名・suffixを表示ラベル基準へ全面改名（commit `f31f84b`。表示ラベルは変更なし）。`SEVEN_S7`→`RANK_7S`・`SEVEN_7A`→`RANK_7A`・`NINE_S9`→`RANK_9S`・`NINE_9A`→`RANK_9A`・`SEVEN_SS`→`RANK_7SS`。以降の本文・更新履歴に残る旧名表記はいずれも改名前の記述として読むこと。対応表・命名規則は CLAUDE.md「現行ランク体系」節の「ランク名体系化」サブ節を参照。
 
 ---
@@ -122,7 +122,11 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 
 ## 2. winticket ルート（★本番稼働中 / 2026-06-08〜）
 
-### 2-1. 特徴量一覧（FEATURE_COLS_WT / 44特徴量）
+### 2-1. 特徴量一覧（FEATURE_COLS_WT / 46特徴量）
+
+> 補足: 本節の表題の特徴量数は2026-07-19のS/B展開特徴追加（44→48）に追従できて
+> いなかった既存の記載漏れがあり、本更新（2026-07-31・48→46）と合わせて実値に
+> 訂正した。
 
 モデルファイル:
 - `data/models/lgbm_wt.pkl`（**本番・live予想用** / TRAIN+VAL 2022-12-01〜2026-02-28 / AUC 0.7717 / 88,769R / 2026-06-17学習）
@@ -149,7 +153,7 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 | `score_rank` / `score_z` / `wr_rank` / `top3r_rank` | 同 | レース内相対 |
 | `is_home` | `is_home` | 地元フラグ |
 
-#### winticket 固有の新特徴量（12項目）
+#### winticket 固有の新特徴量（10項目）
 
 | 変数名 | 説明 | DBカラム |
 |--------|------|----------|
@@ -162,25 +166,33 @@ LightGBM を使用した「3着以内（top3）確率」の二値分類モデル
 | `s_count` | 先行セクター回数 | `wt_entries.s_count` |
 | `h_count` | ホームセクター回数 | `wt_entries.h_count` |
 | `b_count` | バックセクター回数 | `wt_entries.b_count` |
-| `ex_spurt_pct` | 追い込み率（0-1に正規化） | `wt_entries.ex_spurt_pct` |
-| `ex_thrust_pct` | 捲り率（0-1に正規化） | `wt_entries.ex_thrust_pct` |
 | `prediction_mark` | winticket AI印（0=なし/1=本命/2=対抗/3=単穴/4=連下） | `wt_entries.prediction_mark` |
 
-> **【2026-07-31・train/serve skew（開催中更新）を確認】** 同一開催の
+> **【2026-07-31・除外済み】`ex_spurt_pct`（追い込み率相当）/ `ex_thrust_pct`
+> （捲り率相当）は FEATURE_COLS_WT から除外**（48→46特徴）。同一開催の
 > Day1時点の値と最終日時点の値をn=221,551ペアで比較した結果、
 > `ex_spurt_pct` は5.36%のペアで値が変化（変化時の平均+8.2pt）、
 > `ex_thrust_pct` は2.39%のペアで変化（変化時の平均+22.9pt）していた。
-> つまりこの2特徴量は**開催中に値が更新される**。一方 `race_point` /
-> `first_rate_norm` / `third_rate_norm`（相当する `first_rate`/`second_rate`/
-> `third_rate`）/ `s_count` / `b_count` は0.00〜0.14%とほぼ完全に開催単位で
-> 固定＝安全と確認済み。`_get_collected_keys`（`src/scraper/pipeline_wt.py:168-183`）
-> は「結果確定済み（`finish_order>=1`）」のレースのみをスキップ対象とし、
+> つまりこの2特徴量は**開催中に値が更新される**（train/serve skew）。一方
+> `race_point` / `first_rate_norm` / `third_rate_norm`（相当する
+> `first_rate`/`second_rate`/`third_rate`）/ `s_count` / `b_count` は
+> 0.00〜0.14%とほぼ完全に開催単位で固定＝安全と確認済み。
+> `_get_collected_keys`（`src/scraper/pipeline_wt.py:168-183`）は
+> 「結果確定済み（`finish_order>=1`）」のレースのみをスキップ対象とし、
 > 未確定レースは結果が付くまで再収集を続ける仕様のため、上記2特徴量は
 > 学習データに「そのレース自身の発走後の結果を反映した値」が混入しうる
 > （`sb_dyn` 系特徴で過去に確認された自己参照汚染と同型の構造）。
-> **対応方針はA/B測定で影響を測ってから判断することがユーザー承認済みで、
-> 本記述時点では未対応**（`FEATURE_COLS_WT`からの除外・point-in-time化等は
-> 実施していない）。詳細はkiseki側メモリ参照（本ファイル更新履歴にも記録）。
+> 12ヶ月・約194,000サンプルのA/B測定（`scripts/exp_ab_leaky_ex_features.py`）で
+> AUC寄与が事実上ゼロ（eval AUC 0.7732→0.7731 / win AUC 0.8233→0.8233・honest
+> ROIも有意差なし）と確認された上で、**「性能が上がるから」ではなく「予測に
+> 何も貢献していないのにリスクだけを抱えているため」除外**した（ユーザー承認済み）。
+> 除外後、`ex_spurt_pct`/`ex_thrust_pct`の SELECT・0-1正規化自体（`load_raw_data_wt`/
+> `build_features_wt`）は分析用途・将来のpoint-in-time化のためコードには残置。
+> `ex_left_behind_pct`（変化ペア21.4%）/ `ex_split_line_pct`（24.9%）/
+> `ex_snatch_pct`（1.5%）も同様に開催中更新される実測があるが、これらは元々
+> FEATURE_COLS_WTに含まれておらずSELECTのみのため対応不要（将来の誤採用防止のため記録）。
+> 除外後の全モデル再学習はPMが別途実施する。詳細はkiseki側メモリ参照
+> （本ファイル更新履歴にも記録）。
 
 #### ks流ローリング特徴（9項目・2026-06-08追加 / `add_rolling_features_wt`）
 
@@ -309,7 +321,8 @@ winticket 対応会場（43場）は `src/scraper/winticket.py` の `VENUE_SLUGS
 
 | 日付 | 内容 |
 |------|------|
-| 2026-07-31 | **`ex_spurt_pct`/`ex_thrust_pct`のtrain/serve skewを検出（対応は保留）**: 同一開催のDay1時点と最終日時点の値をn=221,551ペアで比較した結果、`ex_spurt_pct`は5.36%のペア（変化時平均+8.2pt）、`ex_thrust_pct`は2.39%のペア（変化時平均+22.9pt）で値が開催中に更新されていることを確認。一方`race_point`/`first_rate`/`second_rate`/`third_rate`/`s_count`/`b_count`は0.00〜0.14%とほぼ完全に開催単位で固定＝安全。`_get_collected_keys`（`src/scraper/pipeline_wt.py:168-183`）が結果確定済み（`finish_order>=1`）レースのみをスキップし未確定レースの再収集を続ける仕様と組み合わさると、学習データにそのレース自身の発走後の結果を反映した値が混入しうる（`sb_dyn`系特徴で過去に確認された自己参照汚染と同型の構造）。対応方針はA/B測定で影響を測ってから判断することがユーザー承認済みで、本更新時点ではFEATURE_COLS_WTからの除外・point-in-time化等は未実施。 |
+| 2026-07-31 | **Phase3-a: `ex_spurt_pct`/`ex_thrust_pct`をtrain/serve skewのためFEATURE_COLS_WTから除外（48→46特徴・下記エントリの続報）**: 直下のエントリで検出したtrain/serve skew（同一開催中に値が更新される・5.36%/2.39%のペアで変化）を受け、12ヶ月・約194,000サンプルでA/B測定（`scripts/exp_ab_leaky_ex_features.py`）を実施。arm A（48特徴・現行）vs arm B（46特徴・2特徴除外）でeval(3着内) AUC 0.7732→0.7731、win(1着) AUC 0.8233→0.8233と**AUCへの寄与は事実上ゼロ**（honest ROIも有意差なし: 7S 77.9%[68.8,88.1]→86.3%[76.3,96.8] / 7A 76.4%[69.2,84.0]→75.6%[68.9,82.9]・いずれも重複区間）。**除外の理由は「性能が上がるから」ではなく「予測に何も貢献していないのにリスクだけを抱えているから」**（ユーザー承認済み）。`src/preprocessing/feature_wt.py`の`FEATURE_COLS_WT`から2特徴を削除（SELECT・0-1正規化処理自体は分析用途・将来のpoint-in-time化のため残置）。`tests/test_sb_dyn_wt.py`/`tests/test_rp_trend_wt.py`の特徴量数アサーションを48→46に更新し、`tests/test_feature_prepare.py`に2特徴が`FEATURE_COLS_WT`へ再混入しないことを保証する回帰テストを新規追加（H2H特徴が一度採用→撤回された前例への対策）。既存の全モデル（`lgbm_wt`/月次凍結vintage等）は48特徴で学習済みのため本変更単体では特徴量数不一致になるが、モデル再学習はPMが別途実施する方針でありコード変更時点では意図的に未実施。 |
+| 2026-07-31 | **`ex_spurt_pct`/`ex_thrust_pct`のtrain/serve skewを検出（対応は保留）→ 同日中に上記エントリで除外を決定**: 同一開催のDay1時点と最終日時点の値をn=221,551ペアで比較した結果、`ex_spurt_pct`は5.36%のペア（変化時平均+8.2pt）、`ex_thrust_pct`は2.39%のペア（変化時平均+22.9pt）で値が開催中に更新されていることを確認。一方`race_point`/`first_rate`/`second_rate`/`third_rate`/`s_count`/`b_count`は0.00〜0.14%とほぼ完全に開催単位で固定＝安全。`_get_collected_keys`（`src/scraper/pipeline_wt.py:168-183`）が結果確定済み（`finish_order>=1`）レースのみをスキップし未確定レースの再収集を続ける仕様と組み合わさると、学習データにそのレース自身の発走後の結果を反映した値が混入しうる（`sb_dyn`系特徴で過去に確認された自己参照汚染と同型の構造）。対応方針はA/B測定で影響を測ってから判断することがユーザー承認済みで、本記録時点ではFEATURE_COLS_WTからの除外・point-in-time化等は未実施（同日中に上記エントリで除外が確定）。 |
 | 2026-07-31 | **`finish_order=0`の意味を精査（void判定3実装の食い違いを検出）**: 実データ検証で、事前確定の欠車（取消・除外）は`wt_entries`に行自体が作られず物理削除される（`src/scraper/pipeline_wt.py:236-249`・`src/scraper/winticket.py:274`）ため、DB上に残る`finish_order=0`行（9,528件・5,474レース）は事前欠車ではなく発走後の落車・失格・棄権（DNF）であることが判明（99.6%に`res_standing`/`res_back`の実測値あり・該当レースの98.5%は行数が`wt_races.n_entries`と一致）。本番`notify_results_wt.py::_void_by_dns`は「オッズ盤面掲載車」基準で正しく実装されていたが、`src/evaluation/void_rules.py`（→`backtest_wt.py`が参照）の旧docstringは「完走者（`finish_order>=1`）基準」と誤記しており、DNFを欠車＝返還扱いしていたためバックテストROIが本番の実損益より構造的に高く出ていた（kiseki側修正済み・詳細はCLAUDE.md「変更時チェックリスト」参照）。 |
 | 2026-07-28 | **S9/7A/9A候補時点表示を追加**: 従来S1/S7のみ朝の候補生成直後に`picks_history`へプレースホルダ行を書き込み推奨ページへ候補表示していたが、S9・7A・9Aは未実装で発走15分前判定（オッズ取得後）まで行自体が存在せずページに現れなかった（ユーザー指摘。軸2車選定・波乱度・ゲート判定はいずれもオッズ非依存でモデル計算のみから確定するため技術的制約はない）。`scripts/write_candidates_wt.py::_write_paper_candidates()`にS9(`#9S9`)・7A(`#7A`)・9A(`#9A`)の書き込みブロックを追加。あわせてS7/S9の候補時点pred_comboを汎用プレースホルダー`"axis1=axis2-候補"`から実際の残り車番号リスト`"axis1=axis2-3,4,5,..."`（`_third_list()`）に変更（対象車数7/9は候補生成時点で確定しているため軸2車を除く残りの顔ぶれはオッズなしで一意に決まり、発走15分前判定後の最終表記と同じ形式で表示できる）。kiseki側`frontend/src/app/keirin/page.tsx`の`isPaperRank`にも`NINE_S9`/`SEVEN_7A`/`NINE_9A`を追加（候補行はprerace_gami未設定のためガミ判定チップを非表示にする対象に含める）。詳細はkiseki側メモリ`keirin_s9_7a_9a_candidate_display_2026_07_28`。 |
 | 2026-07-28 | **H2H(頭対頭対戦成績)特徴を実装したが本番採用は撤回**: netkeirin「対戦表」に着想を得た特徴（`h2h_win_rate`/`h2h_n_total`/`h2h_net_norm`、`wt_entries.finish_order`の自前履歴からpoint-in-timeで再現・netkeirinスクレイピング不要）を`add_h2h_features_wt()`として実装し`FEATURE_COLS_WT`へ組み込み、全期間honest再学習・vintage 18モデル再学習込みでS1/S7/S9をhonest全期間walk-forward再検証したところ、S1(ROI 443.0%→363.5%・-79.5pt)・S9(412.8%→286.8%・-126.0pt)が悪化し、事前の単独検証で改善していたS7(401.1%→424.8%・+23.7pt)のみ改善という結果になった。的中率・AUCは3戦略とも一貫して改善していたが、エキゾチック券種特有の払戻の歪みでROIの符号が割れた。S1/S7/S9は共有モデル（`lgbm_wt`/`lgbm_wt_win`）を使うため部分採用はできず、ユーザー判断で全面撤回。本番モデル・vintage 18モデル・tail evalモデルは全て実装前の状態（48特徴）に再学習し直して復元済み。`add_h2h_features_wt()`自体はコードとして残すが`FEATURE_COLS_WT`には含めず未使用（picks_historyへの書き込みは一切発生していない・検証は全てdry-run）。詳細はkiseki側メモリ`keirin_netkeirin_h2h_feature_2026_07_28`。 |

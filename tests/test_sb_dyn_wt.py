@@ -111,7 +111,8 @@ def test_backward_compat_without_required_columns():
 
 
 def test_sb_dyn_cols_in_feature_cols():
-    """4特徴が FEATURE_COLS_WT（48特徴化）に含まれる。"""
+    """4特徴が FEATURE_COLS_WT（46特徴・2026-07-31にex_spurt_pct/ex_thrust_pctを
+    train/serve skewのため除外し48→46）に含まれる。"""
     for c in SB_DYN_COLS_WT:
         assert c in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 48
+    assert len(FEATURE_COLS_WT) == 46

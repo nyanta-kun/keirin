@@ -193,7 +193,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     df["h_count"] = df["h_count"].fillna(0)
     df["b_count"] = df["b_count"].fillna(0)
 
-    # 上がり戦術率（%→0-1）
+    # 上がり戦術率（%→0-1）。ex_spurt_pct/ex_thrust_pctは2026-07-31にFEATURE_COLS_WT
+    # から除外済み（train/serve skew実測・FEATURE_COLS_WT直前のコメント参照）だが、
+    # SELECT・正規化自体は分析用途・将来のpoint-in-time化のため残置する。
     df["ex_spurt_pct"]       = (df["ex_spurt_pct"].fillna(0.0)       / 100.0).clip(0, 1)
     df["ex_thrust_pct"]      = (df["ex_thrust_pct"].fillna(0.0)      / 100.0).clip(0, 1)
     df["ex_left_behind_pct"] = (df["ex_left_behind_pct"].fillna(0.0) / 100.0).clip(0, 1)
@@ -666,6 +668,31 @@ def add_h2h_features_wt(df: pd.DataFrame, history: pd.DataFrame | None = None) -
     return df
 
 
+# 【2026-07-31・ex_spurt_pct/ex_thrust_pct をFEATURE_COLS_WTから除外（48→46特徴）】
+# 同一開催・同一選手のDay1時点と最終日時点の値をn=221,551ペアで比較した結果、
+# `ex_spurt_pct`（捲り実行率）は5.36%のペアで値が変化（変化時平均+8.2pt）、
+# `ex_thrust_pct`（差し実行率）は2.39%のペアで変化（変化時平均+22.9pt）しており、
+# いずれも**開催期間中に値が更新される**ことが確定した。`_get_collected_keys`
+# （`src/scraper/pipeline_wt.py:168-183`）は`finish_order>=1`（結果確定済み）の
+# 行のみをスキップ対象とするため、未確定レースは結果が付くまで再収集され続け、
+# 学習データには「そのレース自身の発走後の結果を反映した値」が混入しうる
+# （sb_dyn バグ・commit c3dd62e と同型のtrain/serve skew）。
+#
+# `scripts/exp_ab_leaky_ex_features.py` で12ヶ月・約194,000サンプルのA/B測定を
+# 実施した結果、eval(3着内) AUC は 0.7732(48特徴) vs 0.7731(46特徴)、
+# win(1着) AUC は 0.8233 vs 0.8233 と**差は事実上ゼロ**（honest ROIも有意差なし）。
+# 除外の理由は「性能が上がるから」ではなく、**予測に何も貢献していないのに
+# train/serve skewというリスクだけを抱えているため**。
+#
+# 元のSELECT（load_raw_data_wt）・正規化処理（fillna(0.0)/100.0, build_features_wt
+# 197-199行付近）は残置。DBからの読み出し自体は分析用途・将来のpoint-in-time化
+# （朝スナップショット等）で使う可能性があるため保持するが、FEATURE_COLS_WTから
+# 外れているため学習・推論には一切使われない。
+#
+# 参考: `ex_left_behind_pct`（21.4%）/ `ex_split_line_pct`（24.9%）/
+# `ex_snatch_pct`（1.5%）も同様に開催中に更新される実測があるが、これらは
+# 元々FEATURE_COLS_WTに含まれていない（load_raw_data_wtでSELECTのみ）ため
+# 変更不要。ただし将来アドホック実験で誤って採用しないよう明記しておく。
 FEATURE_COLS_WT = [
     # コア得点
     "race_point",
@@ -703,9 +730,8 @@ FEATURE_COLS_WT = [
     "s_count",
     "h_count",
     "b_count",
-    # 上がり戦術率
-    "ex_spurt_pct",
-    "ex_thrust_pct",
+    # 上がり戦術率: ex_spurt_pct（捲り実行率）/ ex_thrust_pct（差し実行率）は
+    # 2026-07-31にFEATURE_COLS_WTから除外（train/serve skew実測・下記参照）。
     # winticket AI 印（市場人気の代理変数）
     "prediction_mark",
     # ks流ローリング特徴（point-in-time・add_rolling_features_wt で付与）

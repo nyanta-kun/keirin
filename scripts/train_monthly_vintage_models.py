@@ -12,13 +12,26 @@ honest ROI検証の再現性が失われる事故が発生した。ユーザー�
 命名規則: lgbm_wt_eval_mYYMM / lgbm_wt_win_mYYMM（例: lgbm_wt_eval_m2401）。
 `src/models/trainer.py::save_model()`の書き込み保護（_VINTAGE_NAME_RE）が
 `_m\\d{6}$`にマッチするため、一度作成されたこれらのモデルは再度このスクリプトを
-実行しても上書きされない（意図的な再構築時は個別に--force-overwrite-vintageで
-train-wtを呼ぶか、事前にpklを削除する）。
+実行しても上書きされない。2026-07-31にこの保護は「ファイル実体が無くても
+vintage_manifest.jsonに登録済みなら拒否」へ強化された（rm後の再作成という
+事故経路を塞ぐため・commit bd127b1）ので、pklを削除するだけでは再学習できない。
+
+【--force-retrain-all】特徴量セット（FEATURE_COLS_WT）を変更した場合、既存の
+vintageモデルは全て古い特徴量数で学習されており推論に使えなくなるため、
+**全62本を再生成する必要がある**。従来このスクリプトには
+--force-overwrite-vintage を渡す経路が無く、特徴量変更後にvintage体系を
+再構築できないという構造的な欠落があった（2026-07-31・Phase3で発覚）。
+--force-retrain-all を明示指定した場合のみ各train-wtに
+--force-overwrite-vintage を渡す。**旧重みは失われる**（ハッシュはgit管理下の
+vintage_manifest.jsonの履歴に残るため、どの重みが正しかったかの証跡は追える）。
+このフラグは事故（2026-07-28の無断上書き）と同じ操作なので、
+理由を必ずコミットメッセージ等に記録すること。
 
 対象月: 2024-01 〜 実行時点の当月（進行中の月も含む・現行のtail窓と同じ考え方）。
 学習データ開始日は固定で2022-12-01（全モデル共通のベース学習データ起点）。
 
-実行: .venv/bin/python scripts/train_monthly_vintage_models.py [--dry-run] [--only-missing]
+実行: .venv/bin/python scripts/train_monthly_vintage_models.py
+        [--dry-run] [--only-missing] [--force-retrain-all]
 """
 import argparse
 import subprocess
@@ -34,12 +47,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = REPO_ROOT / "data" / "models"
 
 
-def run_train(test_from: str, test_to: str, save_as: str, target: str, dry_run: bool) -> bool:
+def run_train(test_from: str, test_to: str, save_as: str, target: str, dry_run: bool,
+              force: bool = False) -> bool:
+    """1モデルを学習する。
+
+    force=True のとき --force-overwrite-vintage を渡し、凍結vintageの
+    書き込み保護（既存ファイル・マニフェスト登録の両方）を突破する。
+    特徴量セット変更に伴う全再生成でのみ使う。
+    """
     cmd = [
         str(REPO_ROOT / ".venv" / "bin" / "python"), "-m", "src.cli.main", "train-wt",
         "--from", BASE_FROM, "--test-from", test_from, "--test-to", test_to,
         "--save-as", save_as, "--no-promote", "--target", target,
     ]
+    if force:
+        cmd.append("--force-overwrite-vintage")
     print(f"[run] {' '.join(cmd)}", flush=True)
     if dry_run:
         return True
@@ -56,10 +78,21 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only-missing", action="store_true",
                      help="既にpklが存在する月はスキップ（中断後の再開用）")
+    ap.add_argument("--force-retrain-all", action="store_true",
+                     help="凍結vintageの書き込み保護を突破して全月を再学習する。"
+                          "特徴量セット変更時のみ使用。旧重みは失われる（ハッシュは"
+                          "vintage_manifest.jsonのgit履歴に残る）")
     args = ap.parse_args()
+
+    if args.force_retrain_all and args.only_missing:
+        ap.error("--force-retrain-all と --only-missing は同時指定できません"
+                 "（前者は既存を上書きし、後者は既存をスキップするため矛盾する）")
 
     windows = monthly_windows()
     print(f"対象月数: {len(windows)}（{windows[0][0]}〜{windows[-1][1]}）")
+    if args.force_retrain_all:
+        print("⚠️ --force-retrain-all: 凍結vintageの書き込み保護を突破して"
+              f"全{len(windows)}ヶ月×2モデルを再学習します（旧重みは失われます）")
 
     ok, skipped, failed = 0, 0, 0
     for test_from, test_to, eval_name, win_name in windows:
@@ -72,8 +105,10 @@ def main():
             continue
 
         print(f"\n=== {tag}: test_from={test_from} test_to={test_to} ===", flush=True)
-        ok1 = run_train(test_from, test_to, eval_name, "top3", args.dry_run)
-        ok2 = run_train(test_from, test_to, win_name, "win", args.dry_run)
+        ok1 = run_train(test_from, test_to, eval_name, "top3", args.dry_run,
+                        force=args.force_retrain_all)
+        ok2 = run_train(test_from, test_to, win_name, "win", args.dry_run,
+                        force=args.force_retrain_all)
         if ok1 and ok2:
             ok += 1
         else:

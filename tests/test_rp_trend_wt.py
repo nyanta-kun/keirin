@@ -145,7 +145,8 @@ def test_missing_columns_backward_compat():
 
 def test_feature_cols_contains_rp_trend():
     """FEATURE_COLS_WT に rp_trend 4特徴が含まれる（2026-07-18 の sb_dyn 4特徴追加で
-    末尾は sb_dyn になったため位置ではなく包含で検証・48特徴）。"""
+    末尾は sb_dyn になったため位置ではなく包含で検証。2026-07-31に
+    ex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46特徴）。"""
     for c in RP_TREND_COLS_WT:
         assert c in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 48
+    assert len(FEATURE_COLS_WT) == 46

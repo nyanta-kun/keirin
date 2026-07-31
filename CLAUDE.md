@@ -24,7 +24,7 @@
 ```
 src/scraper/winticket.py                # PRELOADED_STATE JSON スクレイパー
 src/scraper/pipeline_wt.py              # wt収集（レース+オッズ同時・結果ありのみスキップ）
-src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（48特徴・rolling統合。H2H対戦表特徴は実装のみでFEATURE_COLS_WT非採用・下記参照）・build_features_wt() / add_rolling_features_wt()
+src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（46特徴・rolling統合。2026-07-31にex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46。H2H対戦表特徴は実装のみでFEATURE_COLS_WT非採用・下記参照）・build_features_wt() / add_rolling_features_wt()
 src/evaluation/backtest_wt.py           # wt用バックテスト（通常/--tiered/--value）
 src/models/trainer.py                   # train_lgbm（feature_cols/weight_col引数で両ルート共用）
 src/cli/main.py                         # CLIコマンド（collect-wt/train-wt/backtest-wt/wave-picks-wt等）
