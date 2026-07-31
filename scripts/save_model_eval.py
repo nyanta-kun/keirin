@@ -41,7 +41,7 @@ from src.preprocessing.feature_wt import (
     load_raw_data_wt, build_features_wt, prepare_X,
 )
 from src.models.trainer import load_model
-from src.strategy_wt import line_score_features, ss_policy
+from src.strategy_wt import CURRENT_PAPER_RANKS, line_score_features, ss_policy
 
 # ── バックテスト対象期間 ──────────────────────────────────────────────
 # HOLD = 検証期間（kiseki Web「検証期間」サマリーの表示対象）。
@@ -56,15 +56,20 @@ HOLD = ("2026-03-01", "2026-06-30")
 # 2026-07-17: S1(SIX_S1)/A(7PLUS_A) 全廃・S3(7PLUS_M) は新定義（不一致×gap12≥0.10）。
 # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) を対象レース数・的中率・期待値の観点で全廃。
 # 2026-07-21: S7(SEVEN_S7)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
-# 再編。picks_history.gate_label列（SS/S）で絞り込む（4要素目・Noneならフィルタなし）。
+# 再編。picks_history.gate_label列（SS/S）で絞り込んでいた（当時の4要素目）。
 # 2026-07-23: SS のうち軸2車が各グレード最上位クラス(S1/A1)を含まないサブセットを
 # "SS+" として観察用に追加していたが、サンプル数不足のため2026-07-27に廃止・
 # SSへ統合した（既存picks_historyのgate_label='SS+'行も'SS'へ一括更新済み）。
+# 2026-07-31: 旧PAPER_RANKS（このファイル独自のハードコード）は、既に2026-07-31に
+# 全廃済みの SEVEN_S1 が残存する一方、SS/S分割はs7_gate_label()がSへ統合され
+# 事実上死んでいる（"SS"行は永久にn=0）という食い違った独自定義になっていた
+# （notify_results_wt.py::_query_stats・live_report_wt.py::RANKS とも内容が異なる
+# 事故の一種・是正タスクB-6/C-1）。単一正本 src/strategy_wt.CURRENT_PAPER_RANKS
+# から導出する形に変更し、gate_label分割は廃止（SS+S=SEVEN_S7全体を1行に統合。
+# 情報量の欠落はない＝旧SS行が常に0件だったため合算しても差分なし）。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
-PAPER_RANKS = [
-    ("S1", "SEVEN_S1", "#7S1", None),
-    ("SS", "SEVEN_S7", "#7S7", "SS"),
-    ("S", "SEVEN_S7", "#7S7", "S"),
+PAPER_RANKS: list[tuple[str, str, str]] = [
+    (spec.label, spec.rank, spec.suffix) for spec in CURRENT_PAPER_RANKS
 ]
 
 # ── 期間別評価モデル（汚染なし設計） ─────────────────────────────────
@@ -282,20 +287,16 @@ def run_7plus_backtest(
 
 
 def paper_rank_stats() -> dict:
-    """picks_history からペーパーランク（S1/SS/S）の検証期間集計を返す。
+    """picks_history から現行ペーパーランク（PAPER_RANKS＝単一正本由来）の
+    検証期間集計を返す。
 
     バックフィル済みの picks_history（実精算）を PAPER_HOLD 期間で集計する。
-    候補行（bet_amount=0）・見送り行は含めない。SS/S は同一rank(SEVEN_S7)を
-    gate_label列（"SS"/"S"）で絞り込んで区別する。
+    候補行（bet_amount=0）・見送り行は含めない。
     """
     out: dict[str, dict] = {}
     pfrom, pto = PAPER_HOLD
     with get_connection() as conn:
-        for rank_key, rank_val, suffix, gate_filter in PAPER_RANKS:
-            gate_cond = " AND gate_label = ?" if gate_filter is not None else ""
-            params = [rank_val, pfrom, pto, f"%{suffix}"]
-            if gate_filter is not None:
-                params.append(gate_filter)
+        for rank_key, rank_val, suffix in PAPER_RANKS:
             # 集約列は必ずエイリアスを付ける（PG RealDict は無名集約列名が重複し
             # row[i] 位置アクセスが崩れるため）
             row = conn.execute(
@@ -304,8 +305,8 @@ def paper_rank_stats() -> dict:
                 "COALESCE(SUM(CASE WHEN hit=1 THEN payout ELSE 0 END),0) AS p "
                 "FROM picks_history WHERE rank = ? AND route='wt' "
                 "AND race_date BETWEEN ? AND ? AND bet_amount > 0 AND NOT miwokuri "
-                f"AND race_key LIKE ?{gate_cond}",
-                params,
+                "AND race_key LIKE ?",
+                [rank_val, pfrom, pto, f"%{suffix}"],
             ).fetchone()
             n, h, b, p = (int(row["n"] or 0), int(row["h"] or 0),
                           int(row["b"] or 0), int(row["p"] or 0))
@@ -338,8 +339,11 @@ def save_to_db(
          result["total_payout"], result["roi"]),
     ]
     for rank_key, rd in result.get("by_rank", {}).items():
-        # suffix 規約: {model}#7{key}（例 lgbm_wt#7U / lgbm_wt#7M）
-        rank_model = f"{model_name}#7{rank_key}"
+        # suffix 規約: {model}#{label}（label は単一正本 CURRENT_PAPER_RANKS の表示
+        # ラベル。例 lgbm_wt#7S / lgbm_wt#7A / lgbm_wt#9S / lgbm_wt#9A / lgbm_wt#7SS。
+        # 2026-07-31以前は f"{model_name}#7{rank_key}" と "7" を固定で挟んでいたが、
+        # 9車ランク(9S/9A)が "#79S" のように誤命名される不具合があったため修正）
+        rank_model = f"{model_name}#{rank_key}"
         rows.append((
             rank_model, period_from, period_to, period_type,
             rd["n_picks"], rd["n_hits"], rd["total_bet"],
@@ -422,7 +426,12 @@ def main() -> None:
 
     if not args.dry_run:
         # 廃止ランク行の掃除（表示に古い体系が混ざらないように）:
-        # 旧S1(#7R)・旧VAL、2026-07-17 全廃の S1(#6S1)/A(#7A)
+        # 旧S1(#7R)・旧VAL、2026-07-17 全廃の S1(#6S1)
+        # ※ "#7A" は 2026-07-17 に全廃された旧A(7PLUS_A)由来の掃除対象だったが、
+        #   現在は境界ランクSEVEN_7Aが同じsuffix("#7A")を使う（単一正本
+        #   CURRENT_PAPER_RANKS 参照）。このDELETEはsave_to_db()の直前に走り
+        #   直後にSEVEN_7Aの最新行が再挿入されるため実害はない（削除→即再挿入で
+        #   実質no-op）が、意味が変わっている点に注意。
         with get_connection() as conn:
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7R'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#6S1'")
@@ -433,6 +442,9 @@ def main() -> None:
             # 2026-07-21: S7を軸2車とWT◎◯の重なりでSS/Sへ再編したため、
             # 旧統合S7行（"#7S7"で終わる。"#7SS"/"#7S"とは末尾一致で衝突しない）を削除
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S7'")
+            # 2026-07-31: S1(SEVEN_S1)全廃（是正タスクB-6/C-1でPAPER_RANKSから除外）。
+            # 旧"#7S1"行は再生成されなくなるため明示的に削除する。
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S1'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:

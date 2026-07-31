@@ -13,12 +13,21 @@ SEVEN_S7(表示7S)・SEVEN_7A(表示7A)・NINE_S9(表示9S)・NINE_9A(表示9A) 
 対象（見送り miwokuri=True・候補行は集計から除外・notify_results_wt.py の
 集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
 SEVEN_S1 は2026-07-31に全廃済み（picks_history からも削除済み）のため対象外。
-SEVEN_SS はユーザーの未本番投入の新戦略のため対象外。
+SEVEN_SS（波乱軸選出・穴レース検知）はモデル非依存の別戦略で、本ツールが対象とする
+「モデル系ペーパーランクのlive実測」とは性質が異なる（見せ場・穴レース検知が目的で
+ROI改善は非目標）ため、単一正本側の設計として意図的に対象外にしている
+（src/strategy_wt.PaperRankSpec.in_live_report=False。notify_results_wt.py::
+_query_stats・save_model_eval.py::PAPER_RANKS には含める）。
 
 [2026-07-31 修正] RANKS/RANK_LABELS が2026-07-16に全廃されたランク 7PLUS_R
 （表示SS）のまま放置されていたため、`_load_picks()` の `rank IN ('7PLUS_R')` が
 常に0件を返し ROI 計算不能になっていた（レビューで検出・3週間以上未修正のまま
 放置されていた）。現行4ランクへ更新。
+
+[2026-07-31 再修正・是正タスク B-6/C-1] RANKS/RANK_LABELS のハードコードが
+notify_results_wt.py::_query_stats・save_model_eval.py::PAPER_RANKS と食い違う
+事故が計3回発生したため、単一正本 src/strategy_wt.CURRENT_PAPER_RANKS から
+導出する構造に変更した（in_live_report=True の4ランクのみを抽出）。
 
 注: DB 書込みなし・Discord通知なし・標準入出力のみ。
 """
@@ -32,25 +41,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 from src.database import get_connection
+from src.strategy_wt import CURRENT_PAPER_RANKS
 
 # scripts/ にある roi_summary を再利用
 _SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS))
 from roi_robustness_wt import roi_summary  # noqa: E402
 
-# ── ランク体系（2026-07-31〜・notify_results_wt.py の _query_stats を正本とする） ──
-# 内部rank（DB格納値） → 表示ラベル。購入対象はこの4つのみ（見送り/候補は集計除外）。
-# 正本: notify_results_wt.py::_query_stats（:301-315付近）の IN 句
-#   ('SEVEN_S1', 'SEVEN_S7', 'NINE_S9', 'SEVEN_7A', 'NINE_9A') のうち、
-#   SEVEN_S1（2026-07-31全廃・picks_historyから削除済み）を除外した4ランク。
-#   SEVEN_SS はユーザーの未本番投入の新戦略のためここでは含めない
-#   （_query_stats 自身の既知の漏れであり、正本として引き継ぐべきバグではない）。
-RANKS = ["SEVEN_S7", "SEVEN_7A", "NINE_S9", "NINE_9A"]
+# ── ランク体系（2026-07-31〜・単一正本 src/strategy_wt.CURRENT_PAPER_RANKS を
+# 参照する。他ファイル独自のハードコードは廃止・再発防止のため） ──
+# 内部rank（DB格納値） → 表示ラベル。購入対象はin_live_report=Trueの4つのみ
+# （見送り/候補は集計除外・SEVEN_SS は上記docstring参照の理由で対象外）。
+RANKS = [spec.rank for spec in CURRENT_PAPER_RANKS if spec.in_live_report]
 RANK_LABELS = {
-    "SEVEN_S7": "7S",
-    "SEVEN_7A": "7A",
-    "NINE_S9": "9S",
-    "NINE_9A": "9A",
+    spec.rank: spec.label for spec in CURRENT_PAPER_RANKS if spec.in_live_report
 }
 
 # ── picks_history 集計 ─────────────────────────────────────────────

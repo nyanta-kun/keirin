@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 # TRAIN(2023-07-01〜2026-02-28) の top3_sum 四分位カット（既定値＝コミット済フォールバック）。
@@ -961,3 +962,91 @@ def sevenss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
         return None
     axis2 = max(mark_frames, key=lambda f: float(by_frame[f]["third_rate"]))
     return axis1, axis2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 集計対象ランクの単一正本（2026-07-31 新設・是正タスク B-6 + C-1）
+#
+# 背景: 「集計対象ランクのハードコードされたリスト」が
+#   - scripts/notify_results_wt.py::_query_stats のIN句（月次/年次サマリー）
+#   - scripts/notify_results_wt.py::_PAPER_SUFFIXES（picks_history上書き保護）
+#   - scripts/save_model_eval.py::PAPER_RANKS（model_evaluation保存）
+#   - scripts/live_report_wt.py::RANKS/RANK_LABELS（live実測レポート）
+# の計4箇所で独立に保守されており、内容が食い違う事故が3回発生した
+# （7PLUS_R全廃後3週間 _query_stats が0件のまま放置・一部ランクのみ合算・
+#  そして7SS新設(commit dc89f14)がpicks_historyに16,273行を投入したにも
+#  かかわらず _query_stats のIN句に追加されず月次/年次サマリーに一切反映
+#  されなかった事故＝本セクション導入の直接の契機）。
+#
+# 上記4箇所は全てここ（CURRENT_PAPER_RANKS / ABOLISHED_PAPER_RANKS）を参照し、
+# 独自にランク一覧をハードコードしないこと。新ランクの追加/廃止時は、この
+# セクションのみを更新すればよい（他4ファイルへの追随修正は不要）設計とする。
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class PaperRankSpec:
+    """1つの現行ペーパーランクの集計メタデータ（picks_history.rank に対応）。"""
+
+    rank: str              # picks_history.rank の内部値（例: "SEVEN_S7"）
+    suffix: str            # race_key の "#" サフィックス（例: "#7S7"）
+    label: str             # 表示ラベル（例: "7S"）
+    in_header_total: bool  # notify_results_wt.py の[7+車]ヘッダー合計(p7b/p7r/p7h・n7)に含めるか
+    in_live_report: bool   # live_report_wt.py の集計対象(RANKS)に含めるか
+
+
+# 現行5ランク（2026-07-31時点・picks_history実データで件数・期間・ROIを確認済み）。
+# 並び順は Discord 表示・各参照先ファイルでの反復順とも一致させる。
+#
+#   rank        suffix   label  件数     期間                    ROI
+#   SEVEN_S7    #7S7     7S     6,572   2024-01-01〜2026-07-31  79.1%
+#   SEVEN_7A    #7A      7A    11,419   2024-01-01〜2026-07-31  77.4%
+#   NINE_S9     #9S9     9S       109   2024-01-11〜2026-06-12  79.2%
+#   NINE_9A     #9A      9A       967   2024-01-05〜2026-07-23  71.9%
+#   SEVEN_SS    #7SS     7SS   16,273   2022-12-01〜2026-07-30  73.5%
+#
+# in_header_total: S7のみTrue（ヘッダー合計 p7b/p7r/p7h・n7 に算入する既存方針。
+#   kiseki Webサマリーのトップラインと揃える）。7A/9S/9A は境界ランク・独立ランクと
+#   して別集計する既存方針のためFalse。SS（波乱軸選出・穴レース検知）もモデル系の
+#   本体ランクとは性質が異なる独立戦略のため別集計＝False。
+# in_live_report: SS のみFalse。live_report_wt.py は「採否判断の唯一の裁定者」を
+#   自称するモデル系4ランク専用のツールで、SS はモデル非依存の別戦略（見せ場・
+#   穴レース検知が目的でROI改善は非目標）のため意図的に対象外とする
+#   （2026-07-31 SS導入時からの方針。_query_stats・model_evaluation には含める）。
+CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
+    PaperRankSpec("SEVEN_S7", "#7S7", "7S",  in_header_total=True,  in_live_report=True),
+    PaperRankSpec("SEVEN_7A", "#7A",  "7A",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("NINE_S9",  "#9S9", "9S",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("NINE_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("SEVEN_SS", "#7SS", "7SS", in_header_total=False, in_live_report=False),
+)
+
+
+@dataclass(frozen=True)
+class AbolishedRankSpec:
+    """全廃済みランク（picks_history には存在しない）。誤って復活させないための
+    ブラックリスト（CLAUDE.md が警告する「ランク全廃時は候補生成/ライブ判定/
+    欠損自動補完の3箇所すべてを止める必要がある」教訓と同型の再発防止）。
+    """
+
+    rank: str             # picks_history.rank の内部値（廃止後は0件のはず）
+    suffix: str | None    # "#"サフィックス方式のpicks_history上書き保護を使っていた場合のみ値あり
+    note: str             # 廃止理由・廃止日
+
+
+ABOLISHED_PAPER_RANKS: tuple[AbolishedRankSpec, ...] = (
+    AbolishedRankSpec("SEVEN_S1", "#7S1",
+                       "win軸1着固定×3着内モデル相手2車・三連単2点流し（2026-07-31全廃）"),
+    AbolishedRankSpec("SIX_S1", "#6S1",
+                       "6車三連単 m1→m2→{m3,m4}（2026-07-17全廃）"),
+    AbolishedRankSpec("7PLUS_R", None,
+                       "三連複レース単位min(全目)>=7全目購入・旧称SS（2026-07-16全廃）"),
+    AbolishedRankSpec("7PLUS_U", None, "波乱ライン連れ込み（2026-07-21全廃）"),
+    AbolishedRankSpec("7PLUS_M", None, "◎不一致×軸信頼（2026-07-21全廃）"),
+    AbolishedRankSpec("7PLUS_ST", None, "三連単1着固定F（2026-07-15全廃）"),
+    AbolishedRankSpec("7PLUS_STP", None, "三連単1着固定F+（2026-07-15全廃）"),
+)
+
+# 廃止済みランクの内部rank名の集合（frozenset）。CURRENT_PAPER_RANKSに含まれて
+# いないことをテストで機械的に検証する（ブラックリスト側）。
+ABOLISHED_PAPER_RANK_NAMES: frozenset[str] = frozenset(s.rank for s in ABOLISHED_PAPER_RANKS)

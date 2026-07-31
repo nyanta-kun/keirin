@@ -40,6 +40,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
+from src.strategy_wt import CURRENT_PAPER_RANKS, ABOLISHED_PAPER_RANKS
+
+# 集計対象ランクの単一正本は src/strategy_wt.py の CURRENT_PAPER_RANKS /
+# ABOLISHED_PAPER_RANKS を参照する（2026-07-31 再発防止・是正タスク B-6/C-1）。
+# 現行5ランクのサフィックス + "#"サフィックス方式を使っていた廃止済み2ランク
+# （SEVEN_S1/SIX_S1）のサフィックスを合わせたもの。DELETE対象から保護する目的の
+# ため、現行/廃止どちらのサフィックスも含める（廃止済みランクの残存行を誤って
+# 巻き込み削除しないための安全網）。
+_PAPER_SUFFIXES = tuple(spec.suffix for spec in CURRENT_PAPER_RANKS) + tuple(
+    spec.suffix for spec in ABOLISHED_PAPER_RANKS if spec.suffix
+)
 
 
 def _parse_picks_full(target_date: str) -> dict:
@@ -298,19 +309,35 @@ def _stats_line(label, s):
             f"{s['hits']/s['races']*100:.1f}%  投資{s['bets']:,}→回収{s['returns']:,}  ROI{roi:.1f}%")
 
 
+# 現行ランクのIN句（単一正本 src/strategy_wt.CURRENT_PAPER_RANKS から導出。
+# 2026-07-31・B-6/C-1）。リテラル値を直接SQL文字列へ埋め込む（rank名は自コード内の
+# 固定定数でユーザー入力を含まないため injection リスクなし。テストで
+# inspect.getsource() 等により実際に発行されるSQLへ5ランク全てが含まれることを検証する）。
+_QUERY_STATS_RANKS_SQL = ", ".join(f"'{spec.rank}'" for spec in CURRENT_PAPER_RANKS)
+
+
 def _query_stats(like):
     """月間/年間サマリー用の集計（メッセージ末尾の📅/🗓行）。
 
     2026-07-16に全廃されたrank='7PLUS_R'をハードコードしたまま放置されており、
     それ以降ずっと0件（"データなし"）を返し続けていたバグを2026-07-28に修正。
     ヘッダー（p7b/p7r/p7h・S1+S7のみ）とは異なり、こちらは現行の全ペーパーランク
-    （S1・S7・S9・7A・9A）を合算する（ユーザー要望・2026-07-28）。
+    （単一正本 CURRENT_PAPER_RANKS の5ランク: S7・7A・9S・9A・7SS）を合算する
+    （ユーザー要望・2026-07-28）。
+
+    【2026-07-31修正】IN句が独自ハードコードのままだったため、7SS新設(dc89f14)
+    でpicks_historyに16,273行（2022-12-01〜・ROI73.5%）が入ったにもかかわらず
+    このIN句に追加されず月次/年次サマリーに一切反映されない状態になっていた
+    （全廃済みのSEVEN_S1が残存する一方でSEVEN_SSが漏れる、という食い違いが
+    3回目の再発だったため、単一正本 CURRENT_PAPER_RANKS からIN句を動的生成する
+    構造に変更した。以後はこの関数を直さなくても strategy_wt.py 側の更新だけで
+    追随する）。
     """
     with get_connection() as conn:
         r = conn.execute(
             "SELECT COUNT(*) AS races, SUM(hit) AS hits, SUM(payout) AS returns_, SUM(bet_amount) AS bets "
             "FROM picks_history WHERE route='wt' "
-            "AND rank IN ('SEVEN_S1', 'SEVEN_S7', 'NINE_S9', 'SEVEN_7A', 'NINE_9A') "
+            f"AND rank IN ({_QUERY_STATS_RANKS_SQL}) "
             "AND NOT COALESCE(miwokuri, FALSE) AND race_date LIKE ?", (like,)).fetchone()
     return {"races": r["races"] or 0, "hits": r["hits"] or 0, "returns": r["returns_"] or 0, "bets": r["bets"] or 0}
 
@@ -1168,17 +1195,16 @@ def _main_inner(date):
             # 日中スコア済みエントリが消えてしまうため。
             # S1（#7S1）/ S7（#7S7）/ 旧A（#7A・現7A境界ランクと共用）/ 9A（#9A）のペーパー行は
             # 自キーのみ削除する。bk#% で消すと同一レースの他ランク記録（#CAND 見送り等）を
-            # 巻き込むため。
-            _PAPER_SUFFIXES = ("#7S1", "#7A", "#6S1", "#7S7", "#9S9", "#9A", "#7SS")
+            # 巻き込むため。_PAPER_SUFFIXES は単一正本（src/strategy_wt.py）から
+            # ファイル冒頭で導出済み（2026-07-31・B-6/C-1）。
             base_keys = {h[1].split("#")[0] for h in history
                          if not h[1].endswith(_PAPER_SUFFIXES)}
+            _not_like_paper_sql = " ".join(
+                f"AND race_key NOT LIKE '%{suffix}'" for suffix in _PAPER_SUFFIXES)
             for bk in base_keys:
                 conn.execute(
                     "DELETE FROM picks_history WHERE race_key LIKE ? AND route='wt' "
-                    "AND race_key NOT LIKE '%#7S1' AND race_key NOT LIKE '%#7A' "
-                    "AND race_key NOT LIKE '%#6S1' AND race_key NOT LIKE '%#7S7' "
-                    "AND race_key NOT LIKE '%#9S9' AND race_key NOT LIKE '%#9A' "
-                    "AND race_key NOT LIKE '%#7SS'",
+                    + _not_like_paper_sql,
                     (bk + "#%",),
                 )
             for h in history:
@@ -1193,9 +1219,9 @@ def _main_inner(date):
                 "VALUES (?,?,?,?,?,?,?,?,?,?,'wt',?,?,?,?,?,?)", history)
 
         # S1/S7/S9/7A/9A/7SS（ペーパー）は候補見送り集計に影響させない
-        # （#7S1/#7S7/#7A/#9S9/#9A/#7SS を購入扱いにしない）
+        # （_PAPER_SUFFIXES のサフィックスを購入扱いにしない）
         purchased_base_keys = {h[1].split("#")[0] for h in history
-                               if not h[1].endswith(("#7S1", "#7A", "#6S1", "#7S7", "#9S9", "#9A", "#7SS"))}
+                               if not h[1].endswith(_PAPER_SUFFIXES)}
         n_miwokuri = _write_miwokuri(target_date, purchased_base_keys, conn, pm)
         if n_miwokuri:
             print(f"[notify_results_wt] {target_date} 見送り {n_miwokuri} 件書き込み", flush=True)
@@ -1205,18 +1231,21 @@ def _main_inner(date):
         if n_backfill:
             print(f"[notify_results_wt] 見送り trio_payout バックフィル {n_backfill} 件", flush=True)
 
-        # ペーパー候補（S1/S7/S9）で15分前判定に到達しなかった行（bet_amount=0・
+        # ペーパー候補（S1/S7/S9/7A/9A/7SS）で15分前判定に到達しなかった行（bet_amount=0・
         # miwokuri=False のまま残存）を見送りに倒す（オッズ取得失敗・候補生成後の中止等）。
         # intraday_results_wt.sh が当日分を毎時実行するため、start_at 未到来（＝発走15分前の
         # 判定窓にまだ入っていない）の候補まで日付一致だけで誤って見送り化しないよう、
         # 発走時刻を過ぎたレースのみを対象にする（2026-07-18 発見・判定自体は notify_prerace_wt
         # が INSERT OR REPLACE で miwokuri=False ごと上書きするため実害はなかったが表示が誤っていた）。
+        # 【2026-07-31】OR条件は _PAPER_SUFFIXES（単一正本由来）から動的生成する。
+        # 旧来のハードコード版は "#7SS" が漏れており、7SS新設(dc89f14)後もこの
+        # 見送り確定処理の対象外になっていた（B-6と同根の潜在バグ・ここで解消）。
+        _paper_cand_like_sql = " OR ".join(
+            f"race_key LIKE '%{suffix}'" for suffix in _PAPER_SUFFIXES)
         _paper_cands = conn.execute(
             "SELECT race_key FROM picks_history "
             "WHERE race_date = ? AND route='wt' AND bet_amount = 0 AND NOT miwokuri "
-            "AND (race_key LIKE '%#7S1' "
-            "     OR race_key LIKE '%#7A' OR race_key LIKE '%#6S1' OR race_key LIKE '%#7S7' "
-            "     OR race_key LIKE '%#9S9' OR race_key LIKE '%#9A')",
+            f"AND ({_paper_cand_like_sql})",
             (target_date,)).fetchall()
         _now_unix_paper = int(time.time())
         _paper_to_skip: list[str] = []
