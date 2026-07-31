@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""picks_history の自動完全性保証（2026-07-20・2026-07-21 S7対応追加・S3全廃対応）。
+"""picks_history の自動完全性保証（2026-07-20・2026-07-21 S7対応追加・S3全廃対応・
+2026-07-31 S1全廃対応）。
 
 notify_prerace_wt.py のT-15分ライブ判定が何らかの理由（scraper障害・
 システム停止・rebuild_*_walkforward.py の事故等）で実行されず picks_history
 に記録が残らなかった日を検知し、最終オッズを使った build_rows() で
-S1(SEVEN_S1) / S7(SEVEN_S7) の該当日分を後追いで補完する。
+S7(SEVEN_S7) の該当日分を後追いで補完する。
 
 2026-07-21: S3(7PLUS_M)は対象レース数・的中率・期待値の観点で全廃したため
 このスクリプトの補完対象からも除外した（残していると本番候補生成が停止した
 S3を「欠損」と誤検知し、VPS本番PGへ日次で自動再挿入し続けてしまうため）。
+
+2026-07-31: S1(SEVEN_S1)も同じ理由で対象から除外した（ユーザー判断により
+「現在有効なデータとは言えない」として全廃・過去分picks_history削除
+（バックアップ: data/backup/picks_history_s1_discarded_20260731.csv）。
+候補生成停止後もこのスクリプトがS1を対象に含めたままだと、翌日以降
+毎日「S1が欠損している」と誤検知し、最終オッズでS1候補を再生成して
+VPS本番PGへ自動再挿入し続けてしまう＝全廃の指示が毎晩上書きされる
+事故になるため、S3と同様に完全に除外した）。
 
 ライブの実際の売買判定（judge_m/judge_u/judge_s1・T-15分オッズ基準）は
 一切変更しない。あくまで picks_history という記録の完全性を事後に保証する
@@ -37,8 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.backfill_s1w_rank_wt import build_rows as build_rows_s1
-from scripts.backfill_s7_rank_wt import build_rows as build_rows_s4
+from scripts.backfill_s7_rank_wt import build_rows as build_rows_s7
 from src.database import get_connection
 from src.notify.discord import send as discord_send
 
@@ -76,7 +84,7 @@ def _insert_additive(rows: list[dict]) -> int:
     with get_connection() as c:
         inserted = 0
         for r in rows:
-            is_s4 = r["rank"] == "SEVEN_S7"
+            is_s7 = r["rank"] == "SEVEN_S7"
             cur = c.execute(
                 "INSERT OR IGNORE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
@@ -93,7 +101,7 @@ def _insert_additive(rows: list[dict]) -> int:
                     "trifecta_payout": r.get("trifecta_payout", 0) or 0,
                     "bet_amount": r["bet_amount"], "miwokuri": False,
                     "gap12": r.get("gap12"), "gap23": r.get("gap23"), "gap34": r.get("gap34"),
-                    "gate_label": r.get("gate_label") if is_s4 else None,
+                    "gate_label": r.get("gate_label") if is_s7 else None,
                     "win_rank": None,
                     "ratio": None,
                 })
@@ -113,51 +121,34 @@ def main() -> None:
     date_from = (today - timedelta(days=args.days)).isoformat()
 
     race_counts = _race_counts(date_from, date_to)
-    s1_counts = _pick_counts("SEVEN_S1", date_from, date_to)
     s7_counts = _pick_counts("SEVEN_S7", date_from, date_to)
 
-    gap_dates_s1 = sorted(
-        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s1_counts.get(d, 0) == 0
-    )
-    gap_dates_s4 = sorted(
+    gap_dates_s7 = sorted(
         d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s7_counts.get(d, 0) == 0
     )
 
     print(f"[gap-heal] 確認期間: {date_from}〜{date_to}")
-    print(f"[gap-heal] S1 欠損日: {gap_dates_s1}")
-    print(f"[gap-heal] S7 欠損日: {gap_dates_s4}")
+    print(f"[gap-heal] S7 欠損日: {gap_dates_s7}")
 
-    if not gap_dates_s1 and not gap_dates_s4:
+    if not gap_dates_s7:
         print("[gap-heal] 欠損なし。終了。")
         return
 
-    total_new_s1 = 0
-    total_new_s4 = 0
+    total_new_s7 = 0
     healed_summary: list[str] = []
 
-    for d in gap_dates_s1:
-        rows = build_rows_s1(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
+    for d in gap_dates_s7:
+        rows = build_rows_s7(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
         n = 0 if args.dry_run else _insert_additive(rows)
         if args.dry_run:
             n = len(rows)
-        total_new_s1 += n
-        print(f"[gap-heal] S1 {d}: 候補{len(rows)}件 → 挿入{n}件"
-              f"{'（dry-run）' if args.dry_run else ''}")
-        if n:
-            healed_summary.append(f"S1 {d}: {n}件")
-
-    for d in gap_dates_s4:
-        rows = build_rows_s4(EVAL_MODEL, d, d, win_model_name=WIN_MODEL)
-        n = 0 if args.dry_run else _insert_additive(rows)
-        if args.dry_run:
-            n = len(rows)
-        total_new_s4 += n
+        total_new_s7 += n
         print(f"[gap-heal] S7 {d}: 候補{len(rows)}件 → 挿入{n}件"
               f"{'（dry-run）' if args.dry_run else ''}")
         if n:
             healed_summary.append(f"S7 {d}: {n}件")
 
-    print(f"\n[gap-heal] 合計: S1 +{total_new_s1}件 / S7 +{total_new_s4}件")
+    print(f"\n[gap-heal] 合計: S7 +{total_new_s7}件")
 
     if healed_summary and not args.dry_run:
         msg = (

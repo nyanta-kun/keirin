@@ -302,23 +302,30 @@ def s1w_gate(
 S7_NE = 7                  # 対象車数（7車ちょうど）
 S7_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 
-# 三連複が安くなりやすい（極端な人気決着になりやすい）レースの除外上限
-# （2026-07-24・ユーザー要望「三連複5倍未満は購入対象から除外したい」への対応）。
+# 三連複が安くなりやすい（極端な人気決着になりやすい）レースの除外上限。
+#
+# 【2026-07-31改定】方針転換: 「まずは十分な的中率の上での安定したROI確保」
+# （ユーザー方針）を目的に、月次凍結vintageモデルでのhonest全期間検証
+# （2024-01-01〜2026-07-31・31ヶ月・配分はuniform固定・
+#   scripts/exp_s7_cdf_regime_full_period.py）で再較正した。
+#   現行(axis_sum<=1.3・mark3<=1併用): 576R・0.61件/日・的中34.0%・ROI78.5%・
+#     月次ROI標準偏差43.7（月次0%回数1）
+#   新設定(axis_sum<=1.5・mark3ゲート撤廃＝下記s7_daily_select参照):
+#     6,546R・6.94件/日・**的中41.0%**・**ROI79.3%**・
+#     **月次ROI標準偏差17.3**（月次0%回数0）
+# 的中率・ROIとも改善しつつ月次変動を約1/2.5に抑え、日次件数を約11倍
+# （目標の5〜10件/日レンジ）に拡大できることを確認したため採用。
+# mark3ゲート単体撤廃（axis_sum据え置き）はROI74.9%に悪化するため不採用
+# （axis_sum<=1.5との組み合わせで初めて機能する）。
+#
+# 【旧経緯（2026-07-24導入時、汚染モデル時代の数値・参考情報として残置）】
 # 買い目は5点流し（1点100円=500円）のため、三連複配当が500円(5倍)を下回ると
-# 的中しても賭け金を割る。honest全期間検証（2024-01-01〜2026-07-23・935日・
-# quarterly walk-forwardモデルのpred_top3_pctのみ使用＝発走前確定情報のみ・
-# train=〜2026-04-30でしきい値検討→test=2026-05-01〜で確認）の結果:
-#   axis_sum とレース着地時の三連複配当<500円の相関 AUC 0.64(train)/0.67(test)。
-#   他の発走前特徴量（field合計/軸単勝率等）を組み合わせてもAUC改善なし
-#   （axis_sumと相関0.83で情報量が乏しい・公開情報の壁）。
-# axis_sum<=1.3 全期間シミュレーション: 全体 10.75件/日→7.83件/日(-27%)・
-#   的中36.3%→34.4%・ROI 131.3%→147.1%（SS+ 363→444%・SS 150→185%・S 121→132%）。
-# ユーザー判断で 1.3 を採用（1.2はROI182%まで伸びるが件数-59%と減りすぎ、
-# 1.4は件数維持だがROI改善が+5pt程度に留まる）。次点繰り上げなし（S7_HALF_CAP/
-# S7_DAILY_TOP_N の cap 内で足切りするだけ＝S1のS1/A1級班denyフィルタと同じ設計。
-# 重なり0(SS/SS+)はcap無しのため単純カット、重なり1(S)はaxis_sum昇順選出後の
-# 末尾が削れるだけで繰り上がり由来のROI悪化は発生しない）。
-S7_AXIS_SUM_MAX = 1.3
+# 的中しても賭け金を割る、という着眼から導入。axis_sumとレース着地時の
+# 三連複配当<500円の相関 AUC 0.64(train)/0.67(test)。当時の汚染モデルでの
+# シミュレーションでROI131.3%→147.1%として1.3を採用したが、
+# [[keirin_wt_foundational_audit_2026_07_29]]で当時のvintageモデルが
+# 汚染されていたと判明したため、絶対値は参考にしないこと。
+S7_AXIS_SUM_MAX = 1.5
 
 # フィールド全体の指数エントロピー上限（2026-07-26・ユーザー要望「30倍以上の
 # 高配当が見込めるレースに絞りたい」への対応。exp_upset_trio30_v2_wt.py /
@@ -438,6 +445,13 @@ def s7_wt_overlap_n(
 # 常に発生する（除外しない）。除外対象は軸2車**両方**が◎◯△のいずれかと一致する
 # ケースのみ。既存のwt_overlap_n（◎◯=mark1/2のみで判定・完全一致=2を既に除外）
 # とは独立な追加ゲート（mark3=△も加味）。
+#
+# 【2026-07-31改定】S7/7Aはこのゲートを撤廃した（下記s7_daily_select/
+# s7a_daily_select参照。当時の検証は汚染モデル時代のもので、クリーンな
+# 月次vintageモデルでの再検証ではaxis_sum<=1.5との組み合わせにより
+# mark3ゲート無しの方がROI・的中率とも上回った）。
+# S9/9A（s9_daily_select/s9a_daily_select）は9車立てでは軸選定の母集団が
+# 異なりS7と同一の再検証を行っていないため、このゲートを引き続き使用する。
 S7_MARK3_OVERLAP_MAX = 1
 
 
@@ -485,14 +499,14 @@ def s7_gate_label(
 
 
 def s7_daily_select(candidates: list[dict]) -> list[dict]:
-    """S7の選出（2026-07-26改定: 件数capを撤廃しentropy閾値ゲートへ置換）。
+    """S7の選出（2026-07-31改定: mark3ゲートを撤廃・axis_sum<=1.5に緩和）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"axis_sum": float, "wt_overlap_n": int | None, "entropy": float} を持つ dict。
 
     選出ロジック（全て閾値ゲート。件数による打ち切りは行わない）:
       - axis_sum > S7_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
-        想定レース）は除外（2026-07-24導入）
+        想定レース）は除外（2026-07-24導入。2026-07-31に1.3→1.5へ緩和）
       - entropy > S7_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
         いない）は除外（2026-07-26導入。低いentropy＝軸2車に予測確率が集中し
         残り5車が拮抗、という状態が三連複高配当の的中と強く相関することを
@@ -509,10 +523,17 @@ def s7_daily_select(candidates: list[dict]) -> list[dict]:
         確認したため、件数capそのものを廃止した）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
         （完全一致は honest全期間検証でROI75.7%の赤字区分と判明したため）
-      - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が
-        2（軸2車の両方が◎◯△のいずれかと一致）は除外（2026-07-27導入。
-        S7+S9合算honest検証でROI434.4%→182.9%まで低下すると判明。欠損時は
-        フェイルセーフとして2扱い＝除外。詳細はS7_MARK3_OVERLAP_MAX定義部参照）
+
+    【2026-07-31撤廃】wt_mark3_overlap_n によるゲートは廃止した。
+    クリーンな月次vintageモデルでのhonest全期間再検証
+    （scripts/exp_s7_cdf_regime_full_period.py・2024-01〜2026-07・31ヶ月）で、
+    axis_sum<=1.5との組み合わせにより mark3ゲート無しの方が
+    的中率41.0%(旧34.0%)・ROI79.3%(旧78.5%)・月次ROI標準偏差17.3(旧43.7)・
+    1日平均6.94件(旧0.61件)と全指標で上回ることを確認したため。
+    詳細は S7_AXIS_SUM_MAX / S7_MARK3_OVERLAP_MAX 定義部のコメント参照。
+    ※この変更によりS7の母集団が広がったため、旧mark3ゲートに依存していた
+    7Aの選出ロジック(s7a_daily_select)も2026-07-31に2ゲート化し、
+    新S7との重複選出がないことを検算済み（重複0件）。
 
     日次件数の上限（S7_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
     バッチだけでは日次合計が分からないため）。日次合計への適用は
@@ -525,7 +546,6 @@ def s7_daily_select(candidates: list[dict]) -> list[dict]:
         if c["axis_sum"] <= S7_AXIS_SUM_MAX
         and c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
-        and c.get("wt_mark3_overlap_n", 2) <= S7_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
@@ -641,16 +661,31 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
 # 設計:
 #   母集団 = s7_select_axis()/s9相当で軸選定成功 ∧ wt_overlap_n∈{0,1}（◎◯完全一致
 #     と印欠損は既存同様に除外）。
-#   7A: axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX
-#       の3条件のうち、不合格がちょうど1個（0個=S7・2個以上=対象外）。
-#   9A: 9車はaxis_sum閾値が未導入のため、entropy<=S9_ENTROPY_MAX・
-#       mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち、不合格がちょうど1個。
+#   7A: axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX
+#       の2条件のうち、不合格がちょうど1個（0個=S7・2個とも不合格=対象外）。
+#       【2026-07-31改定】旧来はmark3も含む3条件だったが、S7自体がmark3ゲートを
+#       撤廃した（s7_daily_select参照）ため、7Aも2条件に揃えた（mark3を条件に
+#       残すと「mark3のみ不合格」の候補が新S7にも旧7Aにも該当し重複選出になる
+#       ため）。
+#   9A: 9車はaxis_sum閾値が未導入・S9側のmark3ゲートは変更していないため、
+#       entropy<=S9_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち、
+#       不合格がちょうど1個（変更なし）。
 #   S7/S9とは論理的に排他（全条件合格=S7/S9、ちょうど1条件のみ不合格=7A/9A）。
+#   新7A(2条件)とのhonest全期間再検証で重複選出0件を確認済み
+#   （scripts/exp_7a_2gate_redefinition_validation.py・2024-01〜2026-07）。
 #   買い目 = 三連複 軸2車+残り流し（7車5点・9車7点。S7/S9と同一構造）。
 #
-# 直近実力（honest全期間の四半期別ボリューム減衰を踏まえた直近4四半期基準）:
-#   7A 約2.3〜4.0件/日 + S7 約1.15件/日 ≈ 7車合計 約3.5〜5件/日
-#   9A 約0.5〜1.7件/日 + S9 約0.25件/日 ≈ 9車合計 約0.75〜2件/日
+# 【2026-07-31・7A 2ゲート化の honest全期間再検証】
+#   旧7A(3ゲート・mark3含む): 4,691R・4.97件/日・的中42.8%・ROI81.4%・
+#     月次ROI標準偏差22.0
+#   新7A(2ゲート・mark3撤廃): 8,306R・8.81件/日・的中44.8%・ROI77.6%・
+#     月次ROI標準偏差13.4
+#   ROIは控除率75%を上回る水準を維持しつつ、的中率向上・変動縮小・
+#   件数増（約1.8倍）を確認したため採用。
+#
+# 直近実力（旧数値・参考。2026-07-31の2ゲート化で7Aの実績は上記に更新）:
+#   7A 約2.3〜4.0件/日 + S7 約1.15件/日 ≈ 7車合計 約3.5〜5件/日（旧設定時）
+#   9A 約0.5〜1.7件/日 + S9 約0.25件/日 ≈ 9車合計 約0.75〜2件/日（変更なし）
 # ═══════════════════════════════════════════════════════════════════════════
 
 S7A_STAKE = 100  # 円/点（ペーパー・7車5点=500円/レース）
@@ -658,17 +693,20 @@ S9A_STAKE = 100  # 円/点（ペーパー・9車7点=700円/レース）
 
 
 def s7a_daily_select(candidates: list[dict]) -> list[dict]:
-    """7Aの選出: S7の3ゲート(axis_sum/entropy/mark3)のうちちょうど1つだけ不合格の候補。
+    """7Aの選出: S7の2ゲート(axis_sum/entropy)のうちちょうど1つだけ不合格の候補。
 
     candidates: 各要素は最低限
-      {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None,
-       "wt_mark3_overlap_n": int | None} を持つ dict。
+      {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None} を持つ dict。
+
+    【2026-07-31改定】旧来はmark3も含む3ゲートだったが、S7自体がmark3ゲートを
+    撤廃した（s7_daily_select参照）ため2ゲートに揃えた。新S7との重複選出が
+    ないことをhonest全期間で検算済み（本セクション冒頭コメント参照）。
 
     - wt_overlap_n ∈ {0,1} 必須（◎◯完全一致=2・マーク欠損=None は対象外、S7と同様）
-    - wt_mark3_overlap_n が欠損（None）の場合も対象外（フェイルセーフ、S7と同様）
-    - axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX
-      の3条件のうち、不合格の個数がちょうど1個の候補のみ採用
-      （0個=S7本体の対象・2個以上は市場効率の壁でROI不採用、詳細は本セクション冒頭参照）
+    - axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX の2条件のうち、
+      不合格の個数がちょうど1個の候補のみ採用
+      （0個=S7本体の対象・2個とも不合格は市場効率の壁でROI不採用、
+        詳細は本セクション冒頭参照）
 
     returns 採用された候補のリスト（axis_sum昇順）。
     """
@@ -676,13 +714,9 @@ def s7a_daily_select(candidates: list[dict]) -> list[dict]:
     for c in candidates:
         if c.get("wt_overlap_n") not in (0, 1):
             continue
-        mark3 = c.get("wt_mark3_overlap_n")
-        if mark3 is None:
-            continue
         axis_ok = c["axis_sum"] <= S7_AXIS_SUM_MAX
         ent_ok = c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
-        mark3_ok = mark3 <= S7_MARK3_OVERLAP_MAX
-        n_fail = (not axis_ok) + (not ent_ok) + (not mark3_ok)
+        n_fail = (not axis_ok) + (not ent_ok)
         if n_fail == 1:
             pool.append(c)
     return sorted(pool, key=lambda c: c["axis_sum"])

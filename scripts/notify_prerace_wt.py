@@ -1981,14 +1981,12 @@ def main():
     # ── U(S2)候補・M(S3)候補処理 は 2026-07-21 全廃・2026-07-23 コード削除済み ──
     # 対象レース数・的中率・期待値の観点で継続困難と判断し廃止。
 
-    # ── S1候補（新設計・win軸1着固定・ペーパー）処理 ──────────────────────
-    # U/Mとの重複排除はない（独立戦略）。try/exceptで既存通知を阻害しない。
-    try:
-        s1_messages, s1_done = _process_s1_candidates(today, now_unix, notified)
-        messages += s1_messages
-        newly_done |= s1_done
-    except Exception as e:
-        logger.exception("S1候補処理失敗（SS/U/M通知には影響しない）: %s", e)
+    # ── S1候補処理 は 2026-07-31 全廃（呼び出し停止・関数は互換のため残置） ──
+    # ユーザー判断により「現在有効なデータとは言えない」として過去分picks_history
+    # （SEVEN_S1・1,504件・2024-01-02〜2026-07-30）を削除
+    # （バックアップ: data/backup/picks_history_s1_discarded_20260731.csv）。
+    # judge_s1/_process_s1_candidates はU/M同様、過去日再採点・分析スクリプト
+    # 互換のため残置するが、日次生成の呼び出しは停止する。
 
     # ── S7候補（単勝×複勝指数重なり軸×波乱度選出・ペーパー）処理 ──────────────
     # U/M/S1との重複排除はない（独立戦略）。try/exceptで既存通知を阻害しない。

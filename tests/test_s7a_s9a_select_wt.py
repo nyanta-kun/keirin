@@ -1,4 +1,8 @@
-"""strategy_wt.s7a_daily_select/s9a_daily_select（S7/S9の境界ランク7A/9A・2026-07-27導入）の純関数テスト。"""
+"""strategy_wt.s7a_daily_select/s9a_daily_select（S7/S9の境界ランク7A/9A・2026-07-27導入）の純関数テスト。
+
+2026-07-31: S7がmark3ゲートを撤廃したことに伴い、7Aも2ゲート化(axis_sum/entropyの
+みで判定)した。9Aは変更なし（entropy/mark3の2ゲートのまま）。
+"""
 from src.strategy_wt import (
     S7_AXIS_SUM_MAX, S7_ENTROPY_MAX, S7_MARK3_OVERLAP_MAX, S9_ENTROPY_MAX,
     s7a_daily_select, s9a_daily_select,
@@ -10,31 +14,26 @@ def _cand(axis_sum=1.0, entropy=1.0, wt_overlap_n=0, mark3=0):
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": mark3}
 
 
-# ── s7a_daily_select ──
+# ── s7a_daily_select（2026-07-31: axis_sum/entropyの2ゲートに変更） ──
 
 def test_7a_all_gates_pass_is_excluded():
-    """3ゲート全合格はS7本体の対象であり7Aには含まれない。"""
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX, mark3=S7_MARK3_OVERLAP_MAX)
+    """2ゲート全合格はS7本体の対象であり7Aには含まれない。"""
+    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX)
     assert s7a_daily_select([c]) == []
 
 
 def test_7a_axis_sum_only_fail_is_included():
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, entropy=S7_ENTROPY_MAX, mark3=S7_MARK3_OVERLAP_MAX)
+    c = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, entropy=S7_ENTROPY_MAX)
     assert s7a_daily_select([c]) == [c]
 
 
 def test_7a_entropy_only_fail_is_included():
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX + 0.1, mark3=S7_MARK3_OVERLAP_MAX)
+    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX + 0.1)
     assert s7a_daily_select([c]) == [c]
 
 
-def test_7a_mark3_only_fail_is_included():
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX, mark3=S7_MARK3_OVERLAP_MAX + 1)
-    assert s7a_daily_select([c]) == [c]
-
-
-def test_7a_two_gates_fail_is_excluded():
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, entropy=S7_ENTROPY_MAX + 0.1, mark3=S7_MARK3_OVERLAP_MAX)
+def test_7a_both_gates_fail_is_excluded():
+    c = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, entropy=S7_ENTROPY_MAX + 0.1)
     assert s7a_daily_select([c]) == []
 
 
@@ -44,8 +43,16 @@ def test_7a_wt_overlap_two_or_none_excluded_even_if_one_gate_fails():
     assert s7a_daily_select([c2, cn]) == []
 
 
-def test_7a_mark3_missing_excluded():
-    c = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, mark3=None)
+def test_7a_mark3_no_longer_affects_selection():
+    """2026-07-31撤廃: mark3の値・欠損はもはや7Aの判定に一切影響しない。"""
+    ok = _cand(axis_sum=S7_AXIS_SUM_MAX + 0.1, entropy=S7_ENTROPY_MAX, mark3=None)
+    assert s7a_daily_select([ok]) == [ok]
+
+
+def test_7a_mark3_only_fail_no_longer_qualifies_for_7a():
+    """axis_sum/entropyが両方合格（旧仕様ならmark3のみ不合格で7A対象）の場合、
+    2ゲート化後はS7本体の対象となり7Aには含まれない（新S7との重複防止）。"""
+    c = _cand(axis_sum=S7_AXIS_SUM_MAX, entropy=S7_ENTROPY_MAX, mark3=S7_MARK3_OVERLAP_MAX + 1)
     assert s7a_daily_select([c]) == []
 
 

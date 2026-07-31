@@ -1264,8 +1264,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.models.trainer import load_model
     from src.database import get_connection
     from src.strategy_wt import (
-        S1W_TOP3_GAP_MIN, line_score_features, race_signals, s1w_gate,
-        s1w_select, s7_daily_select, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
+        line_score_features, race_signals,
+        s7_daily_select, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
         s7_wt_overlap_n, s7a_daily_select, s9_daily_select, s9a_daily_select, ss_policy,
     )
     from pathlib import Path
@@ -1735,59 +1735,12 @@ def wave_picks_wt(target_date, output_path, model_name,
     # picks_history_u_archive / picks_history_m_archive へ退避済み。
     # judge_u/judge_m・m_axis_gate 等のロジックは2026-07-23に全削除済み。
 
-    # ── S1候補（新設計・win軸1着固定×3着内モデル相手2車・三連単2点流し・2026-07-19導入）──
-    # WT◎/システム◎の一致・不一致は問わない。7車全レース対象。
-    #   軸 = win model(lgbm_wt_win) レース内1位
-    #   相手 = 3着内モデルで軸を除いた残り車の上位2頭(p1,p2)
-    #   ゲート: top3_gap(p1-p2の3着内確率差) >= S1W_TOP3_GAP_MIN ∧
-    #     axis_win_prob<=S1W_AXIS_WIN_PROB_MAX ∧ 軸級班denyフィルター ∧
-    #     entropy<=S1W_ENTROPY_MAX（フィールド全体のpred_prob分布拡散度・
-    #     オッズ非依存。2026-07-27導入・S7/S9と同じentropyシグナルがS1でも
-    #     独立に機能することを確認）
-    #   買い目: 三連単 軸→p1→p2, 軸→p2→p1 の2点流し（目オッズ下限なし）
-    if include_7plus:
-        s1_candidates = []
-        if "pred_win" in df.columns:
-            for race_key, grp in df.groupby("race_key"):
-                if n_entries_map.get(race_key, 0) != 7:
-                    continue
-                grp_sorted = grp.sort_values("pred_prob", ascending=False).reset_index(drop=True)
-                if len(grp_sorted) != 7 or grp_sorted["pred_win"].isna().any():
-                    continue
-                if _hour_skip(_hour_of(grp_sorted)):
-                    continue
-                win_probs = {int(r.frame_no): float(r.pred_win)
-                             for r in grp_sorted.itertuples(index=False)}
-                top3_probs = {int(r.frame_no): float(r.pred_prob)
-                              for r in grp_sorted.itertuples(index=False)}
-                sel = s1w_select(win_probs, top3_probs)
-                if sel is None:
-                    continue
-                axis, p1, p2, top3_gap = sel
-                axis_win_prob = win_probs[axis]
-                _axis_rows = grp_sorted.loc[grp_sorted["frame_no"] == axis, "player_class"]
-                axis_player_class = _axis_rows.iloc[0] if not _axis_rows.empty else None
-                entropy = s7_field_entropy(top3_probs)
-                if not s1w_gate(top3_gap, axis_win_prob, axis_player_class, entropy):
-                    continue
-                s1_candidates.append({
-                    "race_key":   race_key,
-                    "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
-                    "race_no":    int(grp_sorted["race_no"].iloc[0]),
-                    "start_time": grp_sorted["start_time"].iloc[0],
-                    "top3_gap":   round(top3_gap, 4),
-                    "axis_win_prob": round(axis_win_prob, 4),
-                    "entropy":    round(entropy, 4),
-                    "axis": axis, "p1": p1, "p2": p2,
-                })
-        else:
-            click.echo("[wt] lgbm_wt_win が見つかりません。S1候補は生成しません。", err=True)
-
-        s1_suffix = "_night_s1_candidates.json" if out_stem.endswith("_night") else "_s1_candidates.json"
-        s1_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s1_suffix}"
-        with open(s1_path, "w", encoding="utf-8") as f:
-            json.dump(s1_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s1_path}  (S1候補 {len(s1_candidates)}件・win軸1着固定/ペーパー検証)")
+    # ── S1候補 は 2026-07-31 全廃 ────────────────────────────────────────
+    # ユーザー判断により「現在有効なデータとは言えない」として過去分
+    # picks_history（SEVEN_S1・1,504件・2024-01-02〜2026-07-30）を削除
+    # （バックアップ: data/backup/picks_history_s1_discarded_20260731.csv）。
+    # 候補生成を停止（U/M全廃と同じ設計: s1w_select/s1w_gate等のロジックは
+    # 過去日再採点・分析スクリプト互換のため残置、呼び出し元のみ停止）。
 
     # ── S7候補（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し・2026-07-21導入）──
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから

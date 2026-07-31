@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""7A（S7の境界ランク・3ゲート中1つだけ不合格・SEVEN_7A）の過去分バックフィル。
+"""7A（S7の境界ランク・2ゲート中1つだけ不合格・SEVEN_7A）の過去分バックフィル。
 
 7A の検証期間実績を picks_history（VPS PG）に構築する。
 
@@ -9,9 +9,11 @@
   波乱度指数(axis_sum) = 軸2車のpred_prob合計
   entropy = strategy_wt.s7_field_entropy()
   選出 = strategy_wt.s7a_daily_select():
-         wt_overlap_n∈{0,1} ∧ axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX・
-         mark3<=S7_MARK3_OVERLAP_MAX の3条件のうちちょうど1つだけ不合格の候補
-         （0個=S7本体・2個以上は対象外。詳細はsrc/strategy_wt.py参照）
+         wt_overlap_n∈{0,1} ∧ axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX
+         の2条件のうちちょうど1つだけ不合格の候補
+         （0個=S7本体・2個とも不合格は対象外。詳細はsrc/strategy_wt.py参照）
+         【2026-07-31改定】旧来はmark3も含む3条件だったが、S7自体がmark3ゲートを
+         撤廃したことに伴い2条件化した（新S7との重複選出防止）。
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。

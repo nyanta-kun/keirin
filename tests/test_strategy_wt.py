@@ -234,19 +234,22 @@ class TestS7DailySelect:
         cands = [self._cand("b", axis_sum=0.9), self._cand("a", axis_sum=0.5)]
         assert [c["race_key"] for c in s7_daily_select(cands)] == ["a", "b"]
 
-    def test_mark3_overlap_gate(self):
-        # 2026-07-27導入: 軸2車の両方が◎◯△(mark1/2/3)のいずれかと一致(=2)は除外
+    def test_mark3_overlap_gate_removed(self):
+        # 2026-07-31撤廃: mark3ゲートはS7から撤廃された。
+        # wt_mark3_overlap_nの値に関わらず、axis_sum/entropy/wt_overlap_nのみで
+        # 判定する（旧仕様ではwt_mark3_overlap_n=2は除外していたが、現行は通過する）。
         cands = [
             self._cand("ok0", wt_mark3_overlap_n=0),
             self._cand("ok1", wt_mark3_overlap_n=1),
-            self._cand("ng2", wt_mark3_overlap_n=2),
+            self._cand("was_ng2", wt_mark3_overlap_n=2),
         ]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"ok0", "ok1"}
+        assert {c["race_key"] for c in s7_daily_select(cands)} == {"ok0", "ok1", "was_ng2"}
 
-    def test_missing_mark3_overlap_fails_safe(self):
-        # wt_mark3_overlap_nキー欠損は2扱い(除外)。entropyの欠損フェイルセーフと同じ設計。
+    def test_missing_mark3_overlap_no_longer_matters(self):
+        # 2026-07-31撤廃: wt_mark3_overlap_nキーが無くても、他のゲートを
+        # 満たせば採用される（mark3自体を見なくなったため）。
         cands = [{"race_key": "no_mark3", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 0}]
-        assert s7_daily_select(cands) == []
+        assert {c["race_key"] for c in s7_daily_select(cands)} == {"no_mark3"}
 
 
 class TestS7EveningReselect:
