@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
-from src.strategy_wt import s7_gate_label
+from src.strategy_wt import rank_7s_gate_label
 
 GAMI_THRESHOLD = 7.0  # レース単位ガミ閾値（min全目。main.py / notify_prerace_wt.py と揃える）
 
@@ -270,12 +270,12 @@ def _third_list(axis1: int, axis2: int, n_cars: int) -> str:
 def _write_paper_candidates(target_date: str) -> None:
     """S7/S9/7A/9A（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
 
-    2026-07-21〜: S7（{rk}#7S7）を候補時点で書き込む。以前は発走15分前の
+    2026-07-21〜: S7（{rk}#7S）を候補時点で書き込む。以前は発走15分前の
     買い判定が成立して初めて行が生成されるため、それ以前は他の推奨外レースと
     区別がつかず、また15分前判定がオッズ条件で見送りになった場合は行自体が
     存在せず _mark_paper_miwokuri() のUPDATEが対象0件で空振りしていた
     （候補だったのに「推奨外」と見分けがつかない・ユーザー指摘で発覚）。
-    2026-07-28〜: S9（{rk}#9S9）・7A（{rk}#7A）・9A（{rk}#9A）も同様に候補時点で
+    2026-07-28〜: S9（{rk}#9S）・7A（{rk}#7A）・9A（{rk}#9A）も同様に候補時点で
     書き込む。従来はS7のみ候補時点表示で、S9/7A/9Aは発走15分前判定
     （notify_prerace_wt）が成立するまでページに現れなかった（ユーザー指摘で発覚。
     軸2車・波乱度・ゲート判定はいずれもオッズ非依存でモデル計算のみから確定するため
@@ -321,10 +321,10 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        gate_label = s7_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
+        gate_label = rank_7s_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
-            continue  # 重なり2・不明は候補として表示しない（s7_daily_select と同じ除外対象）
-        rows.append((f"{rk}#7S7", "SEVEN_S7", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", gate_label))
+            continue  # 重なり2・不明は候補として表示しない（rank_7s_daily_select と同じ除外対象）
+        rows.append((f"{rk}#7S", "RANK_7S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", gate_label))
 
     for c in _load((f"wave_picks_wt_{target_date}_s9_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s9_candidates.json")):
@@ -332,10 +332,10 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        gate_label = s7_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
+        gate_label = rank_7s_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
             continue  # S7と同じ基準（重なり2・不明は候補として表示しない）
-        rows.append((f"{rk}#9S9", "NINE_S9", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", gate_label))
+        rows.append((f"{rk}#9S", "RANK_9S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", gate_label))
 
     for c in _load((f"wave_picks_wt_{target_date}_s7a_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s7a_candidates.json")):
@@ -343,9 +343,9 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        # 7A候補JSON自体が既にs7a_daily_select()で境界ケースのみに絞り込み済み
-        # （s7_gate_label が None を返すケース）のため、ここでは再フィルタしない。
-        rows.append((f"{rk}#7A", "SEVEN_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
+        # 7A候補JSON自体が既にrank_7a_daily_select()で境界ケースのみに絞り込み済み
+        # （rank_7s_gate_label が None を返すケース）のため、ここでは再フィルタしない。
+        rows.append((f"{rk}#7A", "RANK_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
 
     for c in _load((f"wave_picks_wt_{target_date}_s9a_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s9a_candidates.json")):
@@ -353,7 +353,7 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        rows.append((f"{rk}#9A", "NINE_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None))
+        rows.append((f"{rk}#9A", "RANK_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None))
 
     if not rows:
         return

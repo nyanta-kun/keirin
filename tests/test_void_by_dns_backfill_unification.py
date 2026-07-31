@@ -1,8 +1,8 @@
 """backfill_*_rank_wt.py の欠車判定を void_by_dns へ統一した変更（2026-07-31
 是正・PMタスク C-2b）の回帰テスト。
 
-対象: scripts/backfill_s7_rank_wt.py / backfill_s9_rank_wt.py /
-      backfill_s7a_rank_wt.py / backfill_s9a_rank_wt.py / backfill_um_rank_wt.py
+対象: scripts/backfill_7s_rank_wt.py / backfill_9s_rank_wt.py /
+      backfill_7a_rank_wt.py / backfill_9a_rank_wt.py / backfill_um_rank_wt.py
 
 検証する性質:
   1. board（欠車判定用の盤面掲載車集合）が本番 notify_results_wt._board_frames
@@ -195,18 +195,18 @@ def _make_field_df(race_key: str, n_car: int = 7,
     return pd.DataFrame(rows)
 
 
-# axis1=1, axis2=2 は上記フィールドで s7_select_axis から一意に選定される
+# axis1=1, axis2=2 は上記フィールドで rank_7s_select_axis から一意に選定される
 # （win_top3==place_top3=={1,2,3}, overlap>=2 → top3_probs降順上位2 = 1,2）。
 AXIS1, AXIS2 = 1, 2
-# axis_sum=0.55<=S7_AXIS_SUM_MAX(1.5)。entropy(7車)≈1.7607<=S7_ENTROPY_MAX(1.8329)。
+# axis_sum=0.55<=RANK_7S_AXIS_SUM_MAX(1.5)。entropy(7車)≈1.7607<=RANK_7S_ENTROPY_MAX(1.8329)。
 assert 0.30 + 0.25 == pytest.approx(0.55)
 assert _field_entropy(_TOP3) < 1.8329
 
-# 9車版・低entropy分布（S9: entropy<=S9_ENTROPY_MAX(1.9938)を満たす。axis1=1,axis2=2）。
+# 9車版・低entropy分布（S9: entropy<=RANK_9S_ENTROPY_MAX(1.9938)を満たす。axis1=1,axis2=2）。
 _TOP3_9CAR = {1: 0.30, 2: 0.25, 3: 0.15, 4: 0.10, 5: 0.08, 6: 0.05, 7: 0.04, 8: 0.02, 9: 0.01}
-assert _field_entropy(_TOP3_9CAR) < 1.9938  # S9_ENTROPY_MAX
+assert _field_entropy(_TOP3_9CAR) < 1.9938  # RANK_9S_ENTROPY_MAX
 
-# 7A用・axis_sum(=1.99)がS7_AXIS_SUM_MAX(1.5)を超えるがentropyは低い分布
+# 7A用・axis_sum(=1.99)がRANK_7S_AXIS_SUM_MAX(1.5)を超えるがentropyは低い分布
 # （2ゲートのうちちょうど1つ（axis_sum）だけ不合格＝7A対象）。
 _TOP3_7A_AXISFAIL = {1: 1.0, 2: 0.99, 3: 0.05, 4: 0.03, 5: 0.02, 6: 0.01, 7: 0.01}
 assert _TOP3_7A_AXISFAIL[1] + _TOP3_7A_AXISFAIL[2] > 1.5  # axis_sum gate: FAIL
@@ -236,10 +236,10 @@ def _patch_common(monkeypatch, module, db: FakeDB, *, win_model_col="_stub_win",
 # ===========================================================================
 
 _MODULES_WITH_BOARD_LOADER = [
-    "backfill_s7_rank_wt",
-    "backfill_s9_rank_wt",
-    "backfill_s7a_rank_wt",
-    "backfill_s9a_rank_wt",
+    "backfill_7s_rank_wt",
+    "backfill_9s_rank_wt",
+    "backfill_7a_rank_wt",
+    "backfill_9a_rank_wt",
     "backfill_um_rank_wt",
 ]
 
@@ -296,13 +296,13 @@ def _ensure_strategy_wt_um_stub(monkeypatch):
 
 
 # ===========================================================================
-# 2)〜6) build_rows の欠車統一シナリオ（S7 系: backfill_s7_rank_wt.py）
+# 2)〜6) build_rows の欠車統一シナリオ（S7 系: backfill_7s_rank_wt.py）
 # ===========================================================================
 
 class TestS7BuildRowsVoidUnification:
-    """backfill_s7_rank_wt.build_rows() の欠車判定シナリオ。
+    """backfill_7s_rank_wt.build_rows() の欠車判定シナリオ。
 
-    5レース(race_key)をそれぞれ別日に配置し、S7_DAILY_CAP(=12)によるトリムの
+    5レース(race_key)をそれぞれ別日に配置し、RANK_7S_DAILY_CAP(=12)によるトリムの
     影響を受けないようにする（本テストの主目的は日次トリムではなく個々の
     レースの欠車判定なので、トリムが発火しない設計にしている）。
     """
@@ -436,7 +436,7 @@ class TestS7BuildRowsVoidUnification:
 
     # -- 実行ヘルパー ----------------------------------------------------
     def _run(self, db: FakeDB, monkeypatch) -> list[dict]:
-        import backfill_s7_rank_wt as mod
+        import backfill_7s_rank_wt as mod
 
         _patch_common(monkeypatch, mod, db)
 
@@ -473,9 +473,9 @@ def _run_gate_variant(monkeypatch, module, build_fn_name: str, db: FakeDB,
     return build_rows("lgbm_wt_eval", "2024-01-01", "2024-01-31", "lgbm_wt_win")
 
 
-def test_s9_partial_third_exclusion_does_not_void_race(monkeypatch):
+def test_rank_9s_partial_third_exclusion_does_not_void_race(monkeypatch):
     """S9(9車): 相手候補の1台(frame9)が盤面から欠けても除外されず6点になる。"""
-    module = __import__("backfill_s9_rank_wt")
+    module = __import__("backfill_9s_rank_wt")
     rk = "R_S9_PARTIAL"
     db = FakeDB()
     db.add_race(rk, 9, "2024-01-01")
@@ -490,7 +490,7 @@ def test_s9_partial_third_exclusion_does_not_void_race(monkeypatch):
         db.add_trio(rk, f"1-2-{x}", odds_value=10.0)
 
     rows = _run_gate_variant(monkeypatch, module, "build_rows", db, rk, _TOP3_9CAR)
-    matching = [r for r in rows if r["race_key"].endswith("#9S9")]
+    matching = [r for r in rows if r["race_key"].endswith("#9S")]
     assert len(matching) == 1, f"S9: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 6
@@ -498,13 +498,13 @@ def test_s9_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert "9" not in r["pred_combo"]
 
 
-def test_s7a_partial_third_exclusion_does_not_void_race(monkeypatch):
+def test_rank_7a_partial_third_exclusion_does_not_void_race(monkeypatch):
     """7A(7車): 相手候補の1台(frame7)が盤面から欠けても除外されず4点になる。
 
     7Aは axis_sum/entropy の2ゲートのうちちょうど1個不合格の候補が対象
     （_TOP3_7A_AXISFAIL は axis_sum のみ不合格・entropyは合格）。
     """
-    module = __import__("backfill_s7a_rank_wt")
+    module = __import__("backfill_7a_rank_wt")
     rk = "R_S7A_PARTIAL"
     db = FakeDB()
     db.add_race(rk, 7, "2024-01-01")
@@ -526,7 +526,7 @@ def test_s7a_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert "7" not in r["pred_combo"]
 
 
-def test_s9a_partial_third_exclusion_does_not_void_race(monkeypatch):
+def test_rank_9a_partial_third_exclusion_does_not_void_race(monkeypatch):
     """9A(9車): 相手候補の1台(frame9)が盤面から欠けても除外されず5点になる。
 
     9Aは entropy/mark3 の2ゲートのうちちょうど1個不合格の候補が対象。
@@ -535,7 +535,7 @@ def test_s9a_partial_third_exclusion_does_not_void_race(monkeypatch):
     taikou=frame5(axis外) → wt_overlap_n=len({1,2}&{1,5})=1(合格)、
     wt_mark3_overlap_n=len({1,2}&{1,5,2})=2(不合格)）。
     """
-    module = __import__("backfill_s9a_rank_wt")
+    module = __import__("backfill_9a_rank_wt")
     rk = "R_S9A_PARTIAL"
     db = FakeDB()
     db.add_race(rk, 9, "2024-01-01")

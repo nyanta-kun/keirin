@@ -1,6 +1,6 @@
-"""s7_evening_reselect.py の netkeirin 取り下げ漏れ検知・通知のテスト（D-7）。
+"""reselect_7s_evening.py の netkeirin 取り下げ漏れ検知・通知のテスト（D-7）。
 
-背景: s7_evening_reselect.py はentropyゲート通過後の日次件数トリムで未購入
+背景: reselect_7s_evening.py はentropyゲート通過後の日次件数トリムで未購入
 （bet_amount=0）プレースホルダを picks_history から削除する
 （_delete_dropped_placeholders）。この際、対象レースが既に netkeirin へ
 入稿済み（netkeirin_submissions に存在）だと、netkeirin側の下書きが
@@ -24,7 +24,7 @@ import sys
 
 import pytest
 
-import s7_evening_reselect as ser  # scripts/ は conftest で path 追加済
+import reselect_7s_evening as ser  # scripts/ は conftest で path 追加済
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ class _FakeConnection:
         self.executed.append((sql, tuple(params)))
         normalized = sql.strip().upper()
         if normalized.startswith("SELECT") and "NETKEIRIN_SUBMISSIONS" in sql.upper():
-            n_rank_keys = len(ser._S7_NETKEIRIN_RANK_KEYS)
+            n_rank_keys = len(ser._RANK_7S_NETKEIRIN_RANK_KEYS)
             keys = set(params[:-n_rank_keys])
             rank_keys = set(params[-n_rank_keys:])
             rows = [
@@ -165,7 +165,7 @@ def test_trim_continues_when_discord_notify_raises(monkeypatch):
         if sql.strip().upper().startswith("DELETE")
     ]
     assert len(delete_calls) == 1
-    assert delete_calls[0][1] == ("20260731_04_07#7S7",)
+    assert delete_calls[0][1] == ("20260731_04_07#7S",)
 
 
 def test_trim_continues_when_netkeirin_select_raises(monkeypatch):
@@ -211,7 +211,7 @@ def test_locked_race_excluded_from_dropped_set(monkeypatch):
     """main() のトリム集合計算 (day_selected - final) - locked を検証する。
 
     day_selected には rk_a（未購入・トリムで外れる）・rk_b（入稿済み・未購入・
-    トリムで外れる）・rk_locked（購入済みロック・s7_evening_reselect の結果
+    トリムで外れる）・rk_locked（購入済みロック・rank_7s_evening_reselect の結果
     final から漏れる想定）の3件を用意する。rk_locked は _locked_keys() が
     ロック対象として返すため、たとえ final から漏れても dropped 集合には
     含まれてはならない（実購入を誤って「取り下げてください」と警告しては
@@ -240,9 +240,9 @@ def test_locked_race_excluded_from_dropped_set(monkeypatch):
     monkeypatch.setattr(ser, "_load_raw", _fake_load_raw)
     monkeypatch.setattr(ser, "_locked_keys", lambda target_date: {"rk_locked"})
 
-    # s7_evening_reselect: 全員トリムで落ちる（rk_locked含む）という極端な
+    # rank_7s_evening_reselect: 全員トリムで落ちる（rk_locked含む）という極端な
     # ケースを想定し、ロック除外が dropped 計算側で効くことを確認する。
-    monkeypatch.setattr(ser, "s7_evening_reselect", lambda day, night, locked: [])
+    monkeypatch.setattr(ser, "rank_7s_evening_reselect", lambda day, night, locked: [])
 
     recorded: list[tuple[str, set]] = []
     monkeypatch.setattr(
@@ -264,7 +264,7 @@ def test_locked_race_excluded_from_dropped_set(monkeypatch):
             written.append(data)
 
     monkeypatch.setattr(ser, "open", lambda *a, **k: _FakeFile(), raising=False)
-    monkeypatch.setattr(sys, "argv", ["s7_evening_reselect.py", "2026-07-31"])
+    monkeypatch.setattr(sys, "argv", ["reselect_7s_evening.py", "2026-07-31"])
 
     ser.main()
 

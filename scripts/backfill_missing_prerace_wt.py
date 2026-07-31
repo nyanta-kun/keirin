@@ -5,7 +5,7 @@
 notify_prerace_wt.py のT-15分ライブ判定が何らかの理由（scraper障害・
 システム停止・rebuild_*_walkforward.py の事故等）で実行されず picks_history
 に記録が残らなかった日を検知し、最終オッズを使った build_rows() で
-S7(SEVEN_S7) の該当日分を後追いで補完する。
+S7(RANK_7S) の該当日分を後追いで補完する。
 
 2026-07-21: S3(7PLUS_M)は対象レース数・的中率・期待値の観点で全廃したため
 このスクリプトの補完対象からも除外した（残していると本番候補生成が停止した
@@ -46,7 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.backfill_s7_rank_wt import build_rows as build_rows_s7
+from scripts.backfill_7s_rank_wt import build_rows as build_rows_s7
 from src.database import get_connection
 from src.notify.discord import send as discord_send
 
@@ -76,7 +76,7 @@ def _pick_counts(rank: str, date_from: str, date_to: str) -> dict[str, int]:
 def _insert_additive(rows: list[dict]) -> int:
     """race_key が未存在の場合のみ INSERT する（既存行は一切変更しない）。
 
-    gate_label は S7(SEVEN_S7)行のみ有効（SS/S表示ランクの分岐に必須）。
+    gate_label は S7(RANK_7S)行のみ有効（SS/S表示ランクの分岐に必須）。
     win_rank/ratio は全廃済みS3(旧M)専用の列でこのスクリプトの対象外（常にNone）。
     """
     if not rows:
@@ -84,7 +84,7 @@ def _insert_additive(rows: list[dict]) -> int:
     with get_connection() as c:
         inserted = 0
         for r in rows:
-            is_s7 = r["rank"] == "SEVEN_S7"
+            is_s7 = r["rank"] == "RANK_7S"
             cur = c.execute(
                 "INSERT OR IGNORE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
@@ -121,10 +121,10 @@ def main() -> None:
     date_from = (today - timedelta(days=args.days)).isoformat()
 
     race_counts = _race_counts(date_from, date_to)
-    s7_counts = _pick_counts("SEVEN_S7", date_from, date_to)
+    rank_7s_counts = _pick_counts("RANK_7S", date_from, date_to)
 
     gap_dates_s7 = sorted(
-        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and s7_counts.get(d, 0) == 0
+        d for d, n in race_counts.items() if n >= MIN_RACES_FOR_DAY and rank_7s_counts.get(d, 0) == 0
     )
 
     print(f"[gap-heal] 確認期間: {date_from}〜{date_to}")

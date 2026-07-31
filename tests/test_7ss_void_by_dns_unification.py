@@ -153,8 +153,8 @@ def _patch_common(monkeypatch, db: FakeDB) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7車立て・sevenss_score が SEVENSS_SCORE_THRESHOLD(=4.796886) を確実に上回る
-# フィールド（実際の sevenss_field_features/sevenss_score で確認済み・score≈13.2）。
+# 7車立て・rank_7ss_score が RANK_7SS_SCORE_THRESHOLD(=4.796886) を確実に上回る
+# フィールド（実際の rank_7ss_field_features/rank_7ss_score で確認済み・score≈13.2）。
 # axis1=frame1(race_point最大)・axis2=frame2(◯・third_rate=12.0が◯△✕中で最大)。
 # ---------------------------------------------------------------------------
 
@@ -172,13 +172,13 @@ def _score_precondition_holds() -> float:
          "n_lines": None}
         for i in range(7)
     ]
-    feat = mod.sevenss_field_features(ents)
-    return mod.sevenss_score(feat)
+    feat = mod.rank_7ss_field_features(ents)
+    return mod.rank_7ss_score(feat)
 
 
 _SCORE = _score_precondition_holds()
-assert _SCORE >= mod.SEVENSS_SCORE_THRESHOLD, f"テスト用フィールドが閾値未満: {_SCORE}"
-assert mod.sevenss_select_axis([
+assert _SCORE >= mod.RANK_7SS_SCORE_THRESHOLD, f"テスト用フィールドが閾値未満: {_SCORE}"
+assert mod.rank_7ss_select_axis([
     {"frame_no": i + 1, "race_point": _RP[i], "third_rate": _TR[i],
      "prediction_mark": _MARKS.get(i + 1)} for i in range(7)
 ]) == (AXIS1, AXIS2)
@@ -211,7 +211,7 @@ def test_load_board_frames_wt_matches_board_frames_semantics(monkeypatch):
 # 2)〜6) build_rows の欠車統一シナリオ
 # ===========================================================================
 
-class TestSevenSSBuildRowsVoidUnification:
+class TestRank7SSBuildRowsVoidUnification:
     RACE_A = "RA20240101"   # 盤面7車ちょうど（回帰: 従来と同じ5点になること）
     RACE_B = "RB20240102"   # 相手1台だけ盤面欠け（4点に減るがレースは除外されない）
     RACE_C = "RC20240103"   # 軸1(frame1)が盤面欠け（レース無効）

@@ -3,8 +3,8 @@
 合成 picks_history を使って純粋関数をテストする。
 DBアクセス・ファイルI/O は monkeypatch で差し替え。
 
-ランク体系（2026-07-31〜）: 購入対象は SEVEN_S7(7S) / SEVEN_7A(7A) /
-NINE_S9(9S) / NINE_9A(9A) の4ランク。
+ランク体系（2026-07-31〜）: 購入対象は RANK_7S(7S) / RANK_7A(7A) /
+RANK_9S(9S) / RANK_9A(9A) の4ランク。
 - 旧 7PLUS_R(表示SS) は 2026-07-16 全廃
 - 旧 7PLUS_ST/STP(S/S+) は 2026-07-15 全廃
 - SEVEN_S1 は 2026-07-31 全廃（picks_history からも削除済み）
@@ -31,7 +31,7 @@ def _make_picks(*rows):
         result.append({
             "race_date": r.get("race_date", "2026-06-01"),
             "race_key": r.get("race_key", "20260601_11_01"),
-            "rank": r.get("rank", "SEVEN_S7"),
+            "rank": r.get("rank", "RANK_7S"),
             "n_combos": r.get("n_combos", 5),
             "hit": r.get("hit", False),
             "payout": r.get("payout", 0),
@@ -47,7 +47,7 @@ def test_ranks_are_current_and_exclude_abolished():
 
     2026-07-31 のレビューで検出した「全廃ランクのまま放置」の再発防止。
     """
-    assert lr.RANKS == ["SEVEN_S7", "SEVEN_7A", "NINE_S9", "NINE_9A"]
+    assert lr.RANKS == ["RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A"]
     for abolished in ("7PLUS_R", "7PLUS_ST", "7PLUS_STP", "7PLUS_U",
                       "7PLUS_M", "SEVEN_S1", "SIX_S1"):
         assert abolished not in lr.RANKS
@@ -59,15 +59,15 @@ def test_ranks_are_current_and_exclude_abolished():
 # ── 1. _rank_section ──────────────────────────────────────────────────
 
 def test_rank_section_basic():
-    """SEVEN_S7 が集計され、全廃済みランクはバケットに含まれない。"""
+    """RANK_7S が集計され、全廃済みランクはバケットに含まれない。"""
     picks = _make_picks(
-        {"rank": "SEVEN_S7", "hit": True, "payout": 1500, "bet_amount": 500},
-        {"rank": "SEVEN_S7", "hit": False, "payout": 0, "bet_amount": 500,
+        {"rank": "RANK_7S", "hit": True, "payout": 1500, "bet_amount": 500},
+        {"rank": "RANK_7S", "hit": False, "payout": 0, "bet_amount": 500,
          "race_key": "20260601_11_02"},
     )
     result = lr._rank_section(picks)
-    assert result["SEVEN_S7"]["n"] == 2
-    assert abs(result["SEVEN_S7"]["roi"] - 1.5) < 1e-9   # 1500/1000
+    assert result["RANK_7S"]["n"] == 2
+    assert abs(result["RANK_7S"]["roi"] - 1.5) < 1e-9   # 1500/1000
     assert "7PLUS_R" not in result
     assert "7PLUS_ST" not in result
 
@@ -75,20 +75,20 @@ def test_rank_section_basic():
 def test_rank_section_separates_all_four_ranks():
     """4ランクが混在しても互いに混ざらず分離集計されること。"""
     picks = _make_picks(
-        {"rank": "SEVEN_S7", "hit": True,  "payout": 1500, "bet_amount": 500,
+        {"rank": "RANK_7S", "hit": True,  "payout": 1500, "bet_amount": 500,
          "race_key": "rk1"},
-        {"rank": "SEVEN_7A", "hit": False, "payout": 0,    "bet_amount": 500,
+        {"rank": "RANK_7A", "hit": False, "payout": 0,    "bet_amount": 500,
          "race_key": "rk2"},
-        {"rank": "NINE_S9",  "hit": True,  "payout": 800,  "bet_amount": 500,
+        {"rank": "RANK_9S",  "hit": True,  "payout": 800,  "bet_amount": 500,
          "race_key": "rk3"},
-        {"rank": "NINE_9A",  "hit": False, "payout": 0,    "bet_amount": 500,
+        {"rank": "RANK_9A",  "hit": False, "payout": 0,    "bet_amount": 500,
          "race_key": "rk4"},
     )
     result = lr._rank_section(picks)
-    for rank in ("SEVEN_S7", "SEVEN_7A", "NINE_S9", "NINE_9A"):
+    for rank in ("RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A"):
         assert result[rank]["n"] == 1
-    assert abs(result["SEVEN_S7"]["roi"] - 3.0) < 1e-9
-    assert result["SEVEN_7A"]["roi"] == 0.0
+    assert abs(result["RANK_7S"]["roi"] - 3.0) < 1e-9
+    assert result["RANK_7A"]["roi"] == 0.0
 
 
 def test_rank_section_empty():
@@ -102,13 +102,13 @@ def test_rank_section_empty():
 def test_build_report_all_ranks_in_main(monkeypatch):
     """build_report の main_total に全4ランクが合算されることを確認。"""
     picks = _make_picks(
-        {"rank": "SEVEN_S7", "hit": True,  "payout": 1500, "bet_amount": 500,
+        {"rank": "RANK_7S", "hit": True,  "payout": 1500, "bet_amount": 500,
          "race_key": "rk1"},
-        {"rank": "SEVEN_7A", "hit": True,  "payout": 400,  "bet_amount": 500,
+        {"rank": "RANK_7A", "hit": True,  "payout": 400,  "bet_amount": 500,
          "race_key": "rk2"},
-        {"rank": "NINE_S9",  "hit": False, "payout": 0,    "bet_amount": 500,
+        {"rank": "RANK_9S",  "hit": False, "payout": 0,    "bet_amount": 500,
          "race_key": "rk3"},
-        {"rank": "NINE_9A",  "hit": False, "payout": 0,    "bet_amount": 500,
+        {"rank": "RANK_9A",  "hit": False, "payout": 0,    "bet_amount": 500,
          "race_key": "rk4"},
     )
     # DB・ファイルアクセスを差し替え
@@ -118,9 +118,9 @@ def test_build_report_all_ranks_in_main(monkeypatch):
 
     result = lr.build_report()
     assert result["main_total"]["n"] == 4
-    assert result["rank_raw"]["SEVEN_S7"]["total_bet"] == 500
-    assert result["rank_raw"]["SEVEN_S7"]["total_pay"] == 1500
-    assert result["rank_raw"]["SEVEN_7A"]["total_pay"] == 400
+    assert result["rank_raw"]["RANK_7S"]["total_bet"] == 500
+    assert result["rank_raw"]["RANK_7S"]["total_pay"] == 1500
+    assert result["rank_raw"]["RANK_7A"]["total_pay"] == 400
     # 合算は4ランク分（500*4=2000 / 1500+400=1900）
     assert result["rank_raw"]["_main_inv"] == 2000
     assert result["rank_raw"]["_main_pay"] == 1900
@@ -131,8 +131,8 @@ def test_build_report_all_ranks_in_main(monkeypatch):
 def test_picks_already_filtered_are_all_counted(monkeypatch):
     """_load_picks が返す行（見送り/候補/void除外済み）は build_report でそのまま計上される。"""
     picks = _make_picks(
-        {"rank": "SEVEN_S7", "hit": True,  "payout": 900, "bet_amount": 500},
-        {"rank": "SEVEN_S7", "hit": False, "payout": 0,   "bet_amount": 500},
+        {"rank": "RANK_7S", "hit": True,  "payout": 900, "bet_amount": 500},
+        {"rank": "RANK_7S", "hit": False, "payout": 0,   "bet_amount": 500},
     )
     monkeypatch.setattr(lr, "_load_picks", lambda *a, **k: picks)
     monkeypatch.setattr(lr, "_load_tags", lambda *a, **k: {})
@@ -140,7 +140,7 @@ def test_picks_already_filtered_are_all_counted(monkeypatch):
 
     result = lr.build_report()
     # 2件のみ計上
-    assert result["rank"]["SEVEN_S7"]["n"] == 2
+    assert result["rank"]["RANK_7S"]["n"] == 2
 
 
 def test_load_picks_sql_excludes_miwokuri_and_candidate_and_zero_bet():
@@ -160,9 +160,9 @@ def test_load_picks_sql_excludes_miwokuri_and_candidate_and_zero_bet():
 def test_tag_section_fav_mismatch(monkeypatch):
     """fav_mismatch=True のレースのみ別集計される。"""
     picks = _make_picks(
-        {"race_key": "rk1", "rank": "SEVEN_S7", "hit": True,  "payout": 1500, "bet_amount": 500},
-        {"race_key": "rk2", "rank": "SEVEN_S7", "hit": False, "payout": 0,    "bet_amount": 500},
-        {"race_key": "rk3", "rank": "SEVEN_S7", "hit": False, "payout": 0,    "bet_amount": 500},
+        {"race_key": "rk1", "rank": "RANK_7S", "hit": True,  "payout": 1500, "bet_amount": 500},
+        {"race_key": "rk2", "rank": "RANK_7S", "hit": False, "payout": 0,    "bet_amount": 500},
+        {"race_key": "rk3", "rank": "RANK_7S", "hit": False, "payout": 0,    "bet_amount": 500},
     )
     tags = {
         "rk1": {"fav_mismatch": True,  "upset_tier": "Q1_loose(<1.70)", "top3_sum": 1.5, "top3_sum_band": "Q1_loose(<1.70)"},
@@ -183,8 +183,8 @@ def test_tag_section_fav_mismatch(monkeypatch):
 def test_tag_section_all_ranks_included():
     """タグ別集計は購入対象ランクの全件が対象になる（独立除外は不要）。"""
     picks = _make_picks(
-        {"race_key": "rk1", "rank": "SEVEN_S7", "hit": True, "payout": 500, "bet_amount": 500},
-        {"race_key": "rk1", "rank": "NINE_S9",  "hit": True, "payout": 200, "bet_amount": 500},
+        {"race_key": "rk1", "rank": "RANK_7S", "hit": True, "payout": 500, "bet_amount": 500},
+        {"race_key": "rk1", "rank": "RANK_9S",  "hit": True, "payout": 200, "bet_amount": 500},
     )
     tags = {"rk1": {"fav_mismatch": True, "top3_sum": 1.5, "top3_sum_band": "Q1_loose(<1.70)", "upset_tier": None}}
     result = lr._tag_section(picks, tags)
@@ -246,14 +246,14 @@ def _make_result():
     main_s = roi_summary([1500, 0, 500], [500, 500, 500])
     return {
         "rank": {
-            "SEVEN_S7": main_s,
-            "SEVEN_7A": roi_summary([500], [500]),
+            "RANK_7S": main_s,
+            "RANK_7A": roi_summary([500], [500]),
         },
         "rank_raw": {
-            "SEVEN_S7": {"total_bet": 500, "total_pay": 1500},
-            "SEVEN_7A": {"total_bet": 500, "total_pay": 500},
-            "NINE_S9":  {"total_bet": 0, "total_pay": 0},
-            "NINE_9A":  {"total_bet": 0, "total_pay": 0},
+            "RANK_7S": {"total_bet": 500, "total_pay": 1500},
+            "RANK_7A": {"total_bet": 500, "total_pay": 500},
+            "RANK_9S":  {"total_bet": 0, "total_pay": 0},
+            "RANK_9A":  {"total_bet": 0, "total_pay": 0},
             "_main_inv": 1000, "_main_pay": 2000,
         },
         "main_total": main_s,
@@ -274,7 +274,7 @@ def test_render_text_runs():
     # 表示ラベル（内部rankの生文字列 SEVEN_* は表に出さない）
     assert "7S" in text
     assert "7A" in text
-    assert "SEVEN_S7" not in text
+    assert "RANK_7S" not in text
 
 
 def test_render_md_runs():

@@ -4,7 +4,7 @@
 周長別/時間帯別/グレード別 選手勝率は「モデル入力特徴としては符号不一致で不採用」との
 判定のみ残っており、race_type同様「事後セグメントフィルタとしての検証」は未実施だった。
 
-race_type・ライン連携と同じ設計で、S7本番pick(picks_history rank='SEVEN_S7'・D構成
+race_type・ライン連携と同じ設計で、S7本番pick(picks_history rank='RANK_7S'・D構成
 そのもの・527件)を下記3軸それぞれで単純にセグメント分解し、TRAINで有望セグメントを
 選定→TESTで一度だけ評価するブラインド検証を行う（選手個人のpoint-in-time条件別勝率
 ではなく、レース自体の条件によるセグメント分解である点に注意。特徴量検証時は選手×条件の
@@ -37,7 +37,7 @@ def load_s7_picks():
     with get_connection() as c:
         rows = c.execute(
             "SELECT race_key, race_date, hit, payout, bet_amount "
-            "FROM picks_history WHERE rank = 'SEVEN_S7'").fetchall()
+            "FROM picks_history WHERE rank = 'RANK_7S'").fetchall()
     picks = {}
     for r in rows:
         rk = r["race_key"].split("#")[0]

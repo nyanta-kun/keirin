@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""7SS（波乱軸選出・穴レース検知・SEVEN_SS）の過去分バックフィル。
+"""7SS（波乱軸選出・穴レース検知・RANK_7SS）の過去分バックフィル。
 
 S7/S9とは異なりモデル予測に依存しない（wt_entries の公表値のみで判定する）ため、
 モデルロード・特徴量ビルドが不要でシンプルに再構築できる。判定は本番
-（notify_prerace_wt.py の _build_sevenss_candidate + judge_s7 流用）と
+（notify_prerace_wt.py の _build_rank_7ss_candidate + judge_rank_7s 流用）と
 同一条件を最終オッズ盤面で再現する:
 
   7車ちょうど ∧ 盤面(trio)7車
   軸1 = race_point(競走得点)単独top1
   軸2 = WT公式印(prediction_mark 2,3,4=◯△✕)のうち軸1以外でthird_rate最大
-  穴指数 = strategy_wt.sevenss_score()（TRAIN 2022-2023凍結パラメータ）
-  採用条件 = 穴指数 >= SEVENSS_SCORE_THRESHOLD（TRAIN上位20%点）
+  穴指数 = strategy_wt.rank_7ss_score()（TRAIN 2022-2023凍結パラメータ）
+  採用条件 = 穴指数 >= RANK_7SS_SCORE_THRESHOLD（TRAIN上位20%点）
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。
@@ -24,10 +24,10 @@ _void_by_dns / src/evaluation/void_rules.py の基準（軸欠車=レース無�
 相手欠車=その目のみ除外して購入継続）と一致していなかった。相手(others)側の
 1台だけが盤面から欠けたケースで、本来は「その1台を除いた残り4台で購入継続」
 となるべきところ、レース全体を候補プールから除外していた（当時は
-backfill_s7_rank_wt.py 等5本の統一作業（PMタスク C-2b）の対象外だった
+backfill_7s_rank_wt.py 等5本の統一作業（PMタスク C-2b）の対象外だった
 ためこの乖離が残存し、その後 7SS が本番投入されたため本タスクで是正する）。
 
-【本タスクでの修正】backfill_s7_rank_wt.py（PMタスク C-2b で統一済み）と
+【本タスクでの修正】backfill_7s_rank_wt.py（PMタスク C-2b で統一済み）と
 同一の方式を採用した:
   - board（欠車判定用の盤面掲載車集合）は `_load_board_frames_wt()` で構築。
     notify_results_wt._board_frames と同一の構築方法（bet_type='trio' の
@@ -46,17 +46,17 @@ backfill_s7_rank_wt.py 等5本の統一作業（PMタスク C-2b）の対象外�
     が食い違う余地があったため。s7/s9/s7a/s9a と同型のバグ）。
 
   影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象。
-  backfill_s7_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
+  backfill_7s_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
   82,939件(97.0%)・盤面6車(1台欠け)=881件(1.03%)・盤面5車(2台欠け)=14件
   (0.02%)・盤面データなし=1,683件(1.97%)。
   「盤面データなし」（trio 行が1件も無い）レースは従来通り対象外のまま
   （`if not board: continue` で除外・void_by_dns 適用前の前提条件）。
 
-  【7SS 固有の連鎖確認】7SS は `sevenss_score(feat) >= SEVENSS_SCORE_THRESHOLD`
-  のみで採否を決める独立per-race判定であり、S7本体の `s7_evening_reselect`
-  のような日次候補プールのトリム（S7_DAILY_CAP）は存在しない
-  （src/strategy_wt.py の sevenss_* 関数・scripts/notify_prerace_wt.py の
-  `_process_sevenss_candidates` のいずれにも日次件数上限のロジックはない）。
+  【7SS 固有の連鎖確認】7SS は `rank_7ss_score(feat) >= RANK_7SS_SCORE_THRESHOLD`
+  のみで採否を決める独立per-race判定であり、S7本体の `rank_7s_evening_reselect`
+  のような日次候補プールのトリム（RANK_7S_DAILY_CAP）は存在しない
+  （src/strategy_wt.py の rank_7ss_* 関数・scripts/notify_prerace_wt.py の
+  `_process_rank_7ss_candidates` のいずれにも日次件数上限のロジックはない）。
   したがって「相手1台欠け」レースが新たに候補プールへ復帰しても、他レースの
   採否には一切連鎖しない。
 
@@ -79,8 +79,8 @@ from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.evaluation.void_rules import void_by_dns
 from src.strategy_wt import (
-    SEVENSS_SCORE_THRESHOLD, SEVENSS_STAKE, sevenss_field_features, sevenss_score,
-    sevenss_select_axis,
+    RANK_7SS_SCORE_THRESHOLD, RANK_7SS_STAKE, rank_7ss_field_features, rank_7ss_score,
+    rank_7ss_select_axis,
 )
 
 
@@ -115,7 +115,7 @@ def _load_trio_boards(race_keys: list[str]) -> dict:
 
 def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
     """欠車判定用の盤面掲載車集合を返す（notify_results_wt._board_frames /
-    backfill_s7_rank_wt.py._load_board_frames_wt と同一の構築方法）。
+    backfill_7s_rank_wt.py._load_board_frames_wt と同一の構築方法）。
 
     bet_type='trio' の combination に現れる車番の和集合。odds_value による
     フィルタは行わない（未確定・異常値でも盤面に車番として存在していれば
@@ -178,14 +178,14 @@ def build_rows(date_from: str, date_to: str) -> list[dict]:
         if len(fin) < 3:
             continue
 
-        axis = sevenss_select_axis(ents)
+        axis = rank_7ss_select_axis(ents)
         if axis is None:
             continue
-        feat = sevenss_field_features(ents)
+        feat = rank_7ss_field_features(ents)
         if feat is None:
             continue
-        score = sevenss_score(feat)
-        if score < SEVENSS_SCORE_THRESHOLD:
+        score = rank_7ss_score(feat)
+        if score < RANK_7SS_SCORE_THRESHOLD:
             continue
         axis1, axis2 = axis
 
@@ -225,11 +225,11 @@ def build_rows(date_from: str, date_to: str) -> list[dict]:
         rk = c_["race_key"]
         hit = c_["actual_top3"] in combos
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-        pay = trio_pay * SEVENSS_STAKE // 100 if hit else 0
-        bet = len(combos) * SEVENSS_STAKE
+        pay = trio_pay * RANK_7SS_STAKE // 100 if hit else 0
+        bet = len(combos) * RANK_7SS_STAKE
         rows.append({
             "race_date": c_["race_date"],
-            "race_key": f"{rk}#7SS", "rank": "SEVEN_SS",
+            "race_key": f"{rk}#7SS", "rank": "RANK_7SS",
             "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in bought_thirds)
                           + f" (score={c_['score']:.2f})",
             "n_combos": len(combos), "hit": int(hit), "payout": pay,
@@ -239,7 +239,7 @@ def build_rows(date_from: str, date_to: str) -> list[dict]:
 
 
 def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='SEVEN_SS' AND race_key LIKE '%#7SS' AND race_date BETWEEN ? AND ?"
+    cond = "rank='RANK_7SS' AND race_key LIKE '%#7SS' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
@@ -254,7 +254,7 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='SEVEN_SS' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='RANK_7SS' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",

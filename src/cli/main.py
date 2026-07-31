@@ -49,8 +49,8 @@ def _venue_name(venue_map: dict, venue_id) -> str:
 # バックテストと朝の実際の候補生成が一致しないと過去の検証結果が無意味になる
 # ため、朝バッチ（daily_picks_wt.sh 8:00）の生予測値（win_probs/top3_probs・
 # axis選定結果・WT印との重なり・sb_dyn特徴の欠損状況）をそのまま
-# data/logs/s7_gen_debug_{date}.jsonl に記録し、後日honest backtestの計算過程
-# （rebuild_s7_walkforward_pg.py等）と突き合わせて原因を特定する。
+# data/logs/rank_7s_gen_debug_{date}.jsonl に記録し、後日honest backtestの計算過程
+# （rebuild_7s_walkforward_pg.py等）と突き合わせて原因を特定する。
 # 記録失敗は本番の候補生成を止めないよう握りつぶす（ベストエフォート）。
 def _log_gen_debug(
     target_date: str, race_type: str, race_key: str, venue_id,
@@ -83,7 +83,7 @@ def _log_gen_debug(
             "sb_dyn_allzero_riders": sb_allzero,
         }
         log_path = (Path(__file__).resolve().parent.parent.parent
-                    / "data" / "logs" / f"s7_gen_debug_{target_date}.jsonl")
+                    / "data" / "logs" / f"rank_7s_gen_debug_{target_date}.jsonl")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(_json_dbg.dumps(rec, ensure_ascii=False) + "\n")
@@ -1265,8 +1265,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.database import get_connection
     from src.strategy_wt import (
         line_score_features, race_signals,
-        s7_daily_select, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
-        s7_wt_overlap_n, s7a_daily_select, s9_daily_select, s9a_daily_select, ss_policy,
+        rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
+        rank_7s_wt_overlap_n, rank_7a_daily_select, rank_9s_daily_select, rank_9a_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1744,25 +1744,25 @@ def wave_picks_wt(target_date, output_path, model_name,
 
     # ── S7候補（単勝×複勝指数トップ3重なり軸×波乱度選出・三連複2軸総流し・2026-07-21導入）──
     # 軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-    #         strategy_wt.s7_select_axis() で選定
+    #         strategy_wt.rank_7s_select_axis() で選定
     # 波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-    # entropy = strategy_wt.s7_field_entropy()（フィールド全体のpred_prob分布の
+    # entropy = strategy_wt.rank_7s_field_entropy()（フィールド全体のpred_prob分布の
     #   拡散度。オッズ非依存＝朝の時点で計算可能。2026-07-26導入）
-    # 選出 = strategy_wt.s7_daily_select()（2026-07-26改定・axis_sum/wt_overlap の
+    # 選出 = strategy_wt.rank_7s_daily_select()（2026-07-26改定・axis_sum/wt_overlap の
     #   件数capを撤廃しentropy閾値ゲートへ置換）
     #   軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
-    #   axis_sum<=S7_AXIS_SUM_MAX かつ entropy<=S7_ENTROPY_MAX を満たす候補のうち、
+    #   axis_sum<=RANK_7S_AXIS_SUM_MAX かつ entropy<=RANK_7S_ENTROPY_MAX を満たす候補のうち、
     #   重なり0(全く重ならない)・重なり1(片方一致)は件数上限なしで全件採用、
     #   重なり2(完全一致)は除外する。この時点（朝または夜どちらか一方のバッチ）
     #   では日次合計の枠取り合いが起きないため件数capは適用しない。
-    #   s7_evening_reselect() が朝夜の生プールを合算し、日次合計が S7_DAILY_CAP
+    #   rank_7s_evening_reselect() が朝夜の生プールを合算し、日次合計が RANK_7S_DAILY_CAP
     #   （通常運用ではほぼ発火しない安全網）を超える場合のみentropy昇順でトリムする。
     # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
     if include_7plus:
         # prediction_mark が df に無い場合のフォールバック（wt_entries から取得）
-        s7_pm_fallback = None
+        rank_7s_pm_fallback = None
         if "prediction_mark" not in df.columns:
-            s7_pm_fallback = {}
+            rank_7s_pm_fallback = {}
             with get_connection() as conn_s4:
                 for _rk_s4, _fno_s4, _pm_s4 in conn_s4.execute(
                     "SELECT e.race_key, e.frame_no, e.prediction_mark "
@@ -1770,9 +1770,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "WHERE r.race_date = ?", (target_date,)
                 ).fetchall():
                     if _pm_s4 is not None:
-                        s7_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
+                        rank_7s_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
 
-        s7_raw_candidates = []
+        rank_7s_raw_candidates = []
         if "pred_win" in df.columns:
             for race_key, grp in df.groupby("race_key"):
                 if n_entries_map.get(race_key, 0) != 7:
@@ -1786,22 +1786,22 @@ def wave_picks_wt(target_date, output_path, model_name,
                              for r in grp_sorted.itertuples(index=False)}
                 top3_probs = {int(r.frame_no): float(r.pred_prob)
                               for r in grp_sorted.itertuples(index=False)}
-                sel = s7_select_axis(win_probs, top3_probs)
+                sel = rank_7s_select_axis(win_probs, top3_probs)
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
-                entropy = s7_field_entropy(top3_probs)
+                entropy = rank_7s_field_entropy(top3_probs)
 
-                if s7_pm_fallback is None:
+                if rank_7s_pm_fallback is None:
                     _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
                               for r in grp_sorted.itertuples(index=False)}
                 else:
-                    _marks = s7_pm_fallback.get(race_key, {})
+                    _marks = rank_7s_pm_fallback.get(race_key, {})
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
                 wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
-                wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-                wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+                wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _log_gen_debug(target_date, "s7", race_key, grp_sorted["venue_id"].iloc[0],
                                win_probs, top3_probs, axis1, axis2, axis_sum, entropy,
@@ -1811,7 +1811,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
-                s7_raw_candidates.append({
+                rank_7s_raw_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                     "race_no":    int(grp_sorted["race_no"].iloc[0]),
@@ -1827,48 +1827,48 @@ def wave_picks_wt(target_date, output_path, model_name,
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
 
-        # 2026-07-26再設計: 件数capを撤廃したためこの時点の s7_daily_select() 適用結果が
+        # 2026-07-26再設計: 件数capを撤廃したためこの時点の rank_7s_daily_select() 適用結果が
         # そのまま最終候補になる（朝夕の枠取り合いが発生しないため先着問題も解消）。
-        # 生候補も別途保存する（scripts/s7_evening_reselect.py が朝夜の生プールを
+        # 生候補も別途保存する（scripts/rank_7s_evening_reselect.py が朝夜の生プールを
         # 合算してゲートを再適用する処理は引き続き行うが、単純併合になった）。
         is_night = out_stem.endswith("_night")
-        s7_raw_path = Path(output_path).parent / (
+        rank_7s_raw_path = Path(output_path).parent / (
             f"wave_picks_wt_{target_date}_night_s7_raw_candidates.json" if is_night
             else f"wave_picks_wt_{target_date}_s7_raw_candidates.json")
-        with open(s7_raw_path, "w", encoding="utf-8") as f:
-            json.dump(s7_raw_candidates, f, ensure_ascii=False, indent=2)
+        with open(rank_7s_raw_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7s_raw_candidates, f, ensure_ascii=False, indent=2)
 
-        s7_candidates = s7_daily_select(s7_raw_candidates)
-        s7_candidates.sort(key=lambda c: c["axis_sum"])
+        rank_7s_candidates = rank_7s_daily_select(rank_7s_raw_candidates)
+        rank_7s_candidates.sort(key=lambda c: c["axis_sum"])
 
-        s7_suffix = "_night_s7_candidates.json" if is_night else "_s7_candidates.json"
-        s7_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s7_suffix}"
-        with open(s7_path, "w", encoding="utf-8") as f:
-            json.dump(s7_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s7_path}  (S7候補 {len(s7_candidates)}件/{len(s7_raw_candidates)}件中"
+        rank_7s_suffix = "_night_s7_candidates.json" if is_night else "_s7_candidates.json"
+        rank_7s_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7s_suffix}"
+        with open(rank_7s_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7s_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {rank_7s_path}  (S7候補 {len(rank_7s_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・波乱度選出/ペーパー検証)")
 
         # ── 7A候補（S7の境界ランク・3ゲート中1つだけ不合格・2026-07-27導入）──
-        # 同じ s7_raw_candidates（軸選定成功した全7車候補）から、S7とは論理的に
-        # 排他な「惜しいレース」を選出する（詳細は strategy_wt.s7a_daily_select 参照）
-        s7a_candidates = s7a_daily_select(s7_raw_candidates)
-        s7a_suffix = "_night_s7a_candidates.json" if is_night else "_s7a_candidates.json"
-        s7a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s7a_suffix}"
-        with open(s7a_path, "w", encoding="utf-8") as f:
-            json.dump(s7a_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s7a_path}  (7A候補 {len(s7a_candidates)}件/{len(s7_raw_candidates)}件中"
+        # 同じ rank_7s_raw_candidates（軸選定成功した全7車候補）から、S7とは論理的に
+        # 排他な「惜しいレース」を選出する（詳細は strategy_wt.rank_7a_daily_select 参照）
+        rank_7a_candidates = rank_7a_daily_select(rank_7s_raw_candidates)
+        rank_7a_suffix = "_night_s7a_candidates.json" if is_night else "_s7a_candidates.json"
+        rank_7a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7a_suffix}"
+        with open(rank_7a_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7a_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {rank_7a_path}  (7A候補 {len(rank_7a_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・境界ランク/ペーパー検証)")
 
     # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
     # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は
-    # S7と同じ車数非依存の汎用実装（s7_select_axis/s7_field_entropy）を再利用。
-    # 選出 = strategy_wt.s9_daily_select()（entropy<=S9_ENTROPY_MAX ∧ wt_overlap∈{0,1}
+    # S7と同じ車数非依存の汎用実装（rank_7s_select_axis/rank_7s_field_entropy）を再利用。
+    # 選出 = strategy_wt.rank_9s_daily_select()（entropy<=RANK_9S_ENTROPY_MAX ∧ wt_overlap∈{0,1}
     #   のみ。axis_sum閾値・日次capは9車では未導入＝低ボリュームのため現時点で不要）。
     # 買い目 = 三連複 軸2車 + 残り7車のいずれか1車（7点・オッズ下限なし）
     if include_7plus:
-        s9_pm_fallback = None
+        rank_9s_pm_fallback = None
         if "prediction_mark" not in df.columns:
-            s9_pm_fallback = {}
+            rank_9s_pm_fallback = {}
             with get_connection() as conn_s9:
                 for _rk_s9, _fno_s9, _pm_s9 in conn_s9.execute(
                     "SELECT e.race_key, e.frame_no, e.prediction_mark "
@@ -1876,9 +1876,9 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "WHERE r.race_date = ?", (target_date,)
                 ).fetchall():
                     if _pm_s9 is not None:
-                        s9_pm_fallback.setdefault(_rk_s9, {})[int(_fno_s9)] = int(_pm_s9)
+                        rank_9s_pm_fallback.setdefault(_rk_s9, {})[int(_fno_s9)] = int(_pm_s9)
 
-        s9_candidates = []
+        rank_9s_candidates = []
         if "pred_win" in df.columns:
             for race_key, grp in df.groupby("race_key"):
                 if n_entries_map.get(race_key, 0) != 9:
@@ -1892,22 +1892,22 @@ def wave_picks_wt(target_date, output_path, model_name,
                              for r in grp_sorted.itertuples(index=False)}
                 top3_probs = {int(r.frame_no): float(r.pred_prob)
                               for r in grp_sorted.itertuples(index=False)}
-                sel = s7_select_axis(win_probs, top3_probs)
+                sel = rank_7s_select_axis(win_probs, top3_probs)
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
-                entropy = s7_field_entropy(top3_probs)
+                entropy = rank_7s_field_entropy(top3_probs)
 
-                if s9_pm_fallback is None:
+                if rank_9s_pm_fallback is None:
                     _marks = {int(r.frame_no): getattr(r, "prediction_mark", None)
                               for r in grp_sorted.itertuples(index=False)}
                 else:
-                    _marks = s9_pm_fallback.get(race_key, {})
+                    _marks = rank_9s_pm_fallback.get(race_key, {})
                 wt_honmei = next((fno for fno, v in _marks.items() if v == 1), None)
                 wt_taikou = next((fno for fno, v in _marks.items() if v == 2), None)
                 wt_ana = next((fno for fno, v in _marks.items() if v == 3), None)
-                wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-                wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+                wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+                wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
                 _log_gen_debug(target_date, "s9", race_key, grp_sorted["venue_id"].iloc[0],
                                win_probs, top3_probs, axis1, axis2, axis_sum, entropy,
@@ -1917,7 +1917,7 @@ def wave_picks_wt(target_date, output_path, model_name,
                 _class_map_s9 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
-                s9_candidates.append({
+                rank_9s_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                     "race_no":    int(grp_sorted["race_no"].iloc[0]),
@@ -1933,24 +1933,24 @@ def wave_picks_wt(target_date, output_path, model_name,
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S9候補は生成しません。", err=True)
 
-        s9_raw_candidates = s9_candidates
-        s9_raw_n = len(s9_raw_candidates)
-        s9_candidates = s9_daily_select(s9_raw_candidates)
+        rank_9s_raw_candidates = rank_9s_candidates
+        rank_9s_raw_n = len(rank_9s_raw_candidates)
+        rank_9s_candidates = rank_9s_daily_select(rank_9s_raw_candidates)
 
-        s9_suffix = "_night_s9_candidates.json" if out_stem.endswith("_night") else "_s9_candidates.json"
-        s9_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s9_suffix}"
-        with open(s9_path, "w", encoding="utf-8") as f:
-            json.dump(s9_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s9_path}  (S9候補 {len(s9_candidates)}件/{s9_raw_n}件中"
+        rank_9s_suffix = "_night_s9_candidates.json" if out_stem.endswith("_night") else "_s9_candidates.json"
+        rank_9s_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_9s_suffix}"
+        with open(rank_9s_path, "w", encoding="utf-8") as f:
+            json.dump(rank_9s_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {rank_9s_path}  (S9候補 {len(rank_9s_candidates)}件/{rank_9s_raw_n}件中"
                    f"・9車entropy選出/ペーパー検証)")
 
         # ── 9A候補（S9の境界ランク・2ゲート中1つだけ不合格・2026-07-27導入）──
-        s9a_candidates = s9a_daily_select(s9_raw_candidates)
-        s9a_suffix = "_night_s9a_candidates.json" if out_stem.endswith("_night") else "_s9a_candidates.json"
-        s9a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{s9a_suffix}"
-        with open(s9a_path, "w", encoding="utf-8") as f:
-            json.dump(s9a_candidates, f, ensure_ascii=False, indent=2)
-        click.echo(f"[保存先] {s9a_path}  (9A候補 {len(s9a_candidates)}件/{s9_raw_n}件中"
+        rank_9a_candidates = rank_9a_daily_select(rank_9s_raw_candidates)
+        rank_9a_suffix = "_night_s9a_candidates.json" if out_stem.endswith("_night") else "_s9a_candidates.json"
+        rank_9a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_9a_suffix}"
+        with open(rank_9a_path, "w", encoding="utf-8") as f:
+            json.dump(rank_9a_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {rank_9a_path}  (9A候補 {len(rank_9a_candidates)}件/{rank_9s_raw_n}件中"
                    f"・境界ランク/ペーパー検証)")
 
     # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──

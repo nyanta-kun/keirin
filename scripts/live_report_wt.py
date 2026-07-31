@@ -9,11 +9,11 @@ G02: 採否判断の唯一の裁定者（live実測）を見える化する。
   5. --from/--to 期間指定、--format md でマークダウン出力
 
 ランク体系は notify_prerace_wt.py / notify_results_wt.py に準拠。内部 rank 列は
-SEVEN_S7(表示7S)・SEVEN_7A(表示7A)・NINE_S9(表示9S)・NINE_9A(表示9A) の4つが購入
+RANK_7S(表示7S)・RANK_7A(表示7A)・RANK_9S(表示9S)・RANK_9A(表示9A) の4つが購入
 対象（見送り miwokuri=True・候補行は集計から除外・notify_results_wt.py の
 集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
 SEVEN_S1 は2026-07-31に全廃済み（picks_history からも削除済み）のため対象外。
-SEVEN_SS（波乱軸選出・穴レース検知）はモデル非依存の別戦略で、本ツールが対象とする
+RANK_7SS（波乱軸選出・穴レース検知）はモデル非依存の別戦略で、本ツールが対象とする
 「モデル系ペーパーランクのlive実測」とは性質が異なる（見せ場・穴レース検知が目的で
 ROI改善は非目標）ため、単一正本側の設計として意図的に対象外にしている
 （src/strategy_wt.PaperRankSpec.in_live_report=False。notify_results_wt.py::
@@ -51,7 +51,7 @@ from roi_robustness_wt import roi_summary  # noqa: E402
 # ── ランク体系（2026-07-31〜・単一正本 src/strategy_wt.CURRENT_PAPER_RANKS を
 # 参照する。他ファイル独自のハードコードは廃止・再発防止のため） ──
 # 内部rank（DB格納値） → 表示ラベル。購入対象はin_live_report=Trueの4つのみ
-# （見送り/候補は集計除外・SEVEN_SS は上記docstring参照の理由で対象外）。
+# （見送り/候補は集計除外・RANK_7SS は上記docstring参照の理由で対象外）。
 RANKS = [spec.rank for spec in CURRENT_PAPER_RANKS if spec.in_live_report]
 RANK_LABELS = {
     spec.rank: spec.label for spec in CURRENT_PAPER_RANKS if spec.in_live_report
@@ -63,7 +63,7 @@ RANK_LABELS = {
 def _load_picks(date_from: str | None, date_to: str | None) -> list[dict]:
     """picks_history から route='wt' の購入確定行（見送り・候補を除く）を取得。
 
-    購入対象ランクは RANKS（SEVEN_S7/SEVEN_7A/NINE_S9/NINE_9A の現行4ランク）のみ。
+    購入対象ランクは RANKS（RANK_7S/RANK_7A/RANK_9S/RANK_9A の現行4ランク）のみ。
     見送り(miwokuri=True)・候補行・bet_amount=0（プレースホルダー行）は集計対象外
     （notify_results_wt.py の _query_stats と同一条件）。
     """

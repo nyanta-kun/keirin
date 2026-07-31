@@ -163,8 +163,8 @@ def test_is_senbatsu():
 # ── S7 entropyゲート・件数cap撤廃（2026-07-26） ─────────────────────────────
 
 from src.strategy_wt import (  # noqa: E402
-    S7_AXIS_SUM_MAX, S7_DAILY_CAP, S7_ENTROPY_MAX, s7_daily_select, s7_evening_reselect,
-    s7_field_entropy, s7_wt_mark3_overlap_n,
+    RANK_7S_AXIS_SUM_MAX, RANK_7S_DAILY_CAP, RANK_7S_ENTROPY_MAX, rank_7s_daily_select, rank_7s_evening_reselect,
+    rank_7s_field_entropy, rank_7s_wt_mark3_overlap_n,
 )
 
 
@@ -172,16 +172,16 @@ class TestS7FieldEntropy:
     def test_concentrated_distribution_low_entropy(self):
         # 1車に確率が集中 → entropyはほぼ0
         probs = {1: 1.0, 2: 0.0, 3: 0.0, 4: 0.0, 5: 0.0, 6: 0.0, 7: 0.0}
-        assert s7_field_entropy(probs) < 0.01
+        assert rank_7s_field_entropy(probs) < 0.01
 
     def test_uniform_distribution_max_entropy(self):
         # 7車均等 → entropy = ln(7)
         import math
         probs = {i: 1.0 for i in range(1, 8)}
-        assert s7_field_entropy(probs) == pytest.approx(math.log(7), abs=1e-6)
+        assert rank_7s_field_entropy(probs) == pytest.approx(math.log(7), abs=1e-6)
 
     def test_zero_total_returns_zero(self):
-        assert s7_field_entropy({1: 0.0, 2: 0.0}) == 0.0
+        assert rank_7s_field_entropy({1: 0.0, 2: 0.0}) == 0.0
 
 
 class TestS7DailySelect:
@@ -194,45 +194,45 @@ class TestS7DailySelect:
             self._cand("r1", wt_overlap_n=0),
             self._cand("r2", wt_overlap_n=1),
         ]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"r1", "r2"}
+        assert {c["race_key"] for c in rank_7s_daily_select(cands)} == {"r1", "r2"}
 
     def test_overlap2_and_none_excluded(self):
         cands = [
             self._cand("r1", wt_overlap_n=2),
             self._cand("r2", wt_overlap_n=None),
         ]
-        assert s7_daily_select(cands) == []
+        assert rank_7s_daily_select(cands) == []
 
     def test_axis_sum_gate(self):
         cands = [
-            self._cand("ok", axis_sum=S7_AXIS_SUM_MAX),
-            self._cand("ng", axis_sum=S7_AXIS_SUM_MAX + 0.01),
+            self._cand("ok", axis_sum=RANK_7S_AXIS_SUM_MAX),
+            self._cand("ng", axis_sum=RANK_7S_AXIS_SUM_MAX + 0.01),
         ]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"ok"}
+        assert {c["race_key"] for c in rank_7s_daily_select(cands)} == {"ok"}
 
     def test_entropy_gate(self):
         cands = [
-            self._cand("ok", entropy=S7_ENTROPY_MAX),
-            self._cand("ng", entropy=S7_ENTROPY_MAX + 0.01),
+            self._cand("ok", entropy=RANK_7S_ENTROPY_MAX),
+            self._cand("ng", entropy=RANK_7S_ENTROPY_MAX + 0.01),
         ]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"ok"}
+        assert {c["race_key"] for c in rank_7s_daily_select(cands)} == {"ok"}
 
     def test_missing_entropy_fails_safe(self):
         # entropyキー欠損は「常に通過(0.0扱い)」ではなく「常に除外(inf扱い)」。
         # 2026-07-26に旧形式(entropyフィールド無し)の生候補が誤って全通過した
         # 事故の再発防止テスト。
         cands = [{"race_key": "no_entropy", "axis_sum": 0.5, "wt_overlap_n": 0}]
-        assert s7_daily_select(cands) == []
+        assert rank_7s_daily_select(cands) == []
 
     def test_no_count_cap(self):
         # 2026-07-26以前は重なり1候補が件数capで打ち切られていたが、現行は
         # 閾値ゲートを通過した候補は何件でも全件採用される。
         cands = [self._cand(f"r{i}", wt_overlap_n=1) for i in range(50)]
-        assert len(s7_daily_select(cands)) == 50
+        assert len(rank_7s_daily_select(cands)) == 50
 
     def test_sorted_by_axis_sum(self):
         cands = [self._cand("b", axis_sum=0.9), self._cand("a", axis_sum=0.5)]
-        assert [c["race_key"] for c in s7_daily_select(cands)] == ["a", "b"]
+        assert [c["race_key"] for c in rank_7s_daily_select(cands)] == ["a", "b"]
 
     def test_mark3_overlap_gate_removed(self):
         # 2026-07-31撤廃: mark3ゲートはS7から撤廃された。
@@ -243,32 +243,32 @@ class TestS7DailySelect:
             self._cand("ok1", wt_mark3_overlap_n=1),
             self._cand("was_ng2", wt_mark3_overlap_n=2),
         ]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"ok0", "ok1", "was_ng2"}
+        assert {c["race_key"] for c in rank_7s_daily_select(cands)} == {"ok0", "ok1", "was_ng2"}
 
     def test_missing_mark3_overlap_no_longer_matters(self):
         # 2026-07-31撤廃: wt_mark3_overlap_nキーが無くても、他のゲートを
         # 満たせば採用される（mark3自体を見なくなったため）。
         cands = [{"race_key": "no_mark3", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 0}]
-        assert {c["race_key"] for c in s7_daily_select(cands)} == {"no_mark3"}
+        assert {c["race_key"] for c in rank_7s_daily_select(cands)} == {"no_mark3"}
 
 
 class TestS7EveningReselect:
     def test_merges_day_and_night_under_cap(self):
         day = [{"race_key": "d1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}]
         night = [{"race_key": "n1", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}]
-        merged = s7_evening_reselect(day, night)
+        merged = rank_7s_evening_reselect(day, night)
         assert {c["race_key"] for c in merged} == {"d1", "n1"}
 
     def test_trims_to_daily_cap_by_entropy_ascending(self):
-        # 2026-07-26再導入: 日次合計がS7_DAILY_CAP(=12)を超える場合のみ
+        # 2026-07-26再導入: 日次合計がRANK_7S_DAILY_CAP(=12)を超える場合のみ
         # entropy昇順（最も自信がある順）で上位のみ残す。
-        # entropy値は全てゲート(S7_ENTROPY_MAX=1.8329)以下に収める。
+        # entropy値は全てゲート(RANK_7S_ENTROPY_MAX=1.8329)以下に収める。
         day = [{"race_key": f"d{i}", "axis_sum": 0.5, "entropy": 0.01 * i, "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                for i in range(8)]
         night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (8 + i), "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                  for i in range(8)]
-        merged = s7_evening_reselect(day, night)
-        assert len(merged) == S7_DAILY_CAP
+        merged = rank_7s_evening_reselect(day, night)
+        assert len(merged) == RANK_7S_DAILY_CAP
         kept = {c["race_key"] for c in merged}
         # entropy 0.00〜0.11（d0..d7, n0..n3）の12件が残り、0.12以降(n4..n7)は落ちる
         assert kept == {f"d{i}" for i in range(8)} | {f"n{i}" for i in range(4)}
@@ -280,22 +280,22 @@ class TestS7EveningReselect:
         night = [{"race_key": f"n{i}", "axis_sum": 0.5, "entropy": 0.01 * (100 + i), "wt_overlap_n": 1, "wt_mark3_overlap_n": 0}
                  for i in range(8)]
         # n7はentropyが最も高く通常なら真っ先に落ちるが、ロック済みなら残る
-        merged = s7_evening_reselect(day, night, locked_keys={"n7"})
+        merged = rank_7s_evening_reselect(day, night, locked_keys={"n7"})
         assert "n7" in {c["race_key"] for c in merged}
-        assert len(merged) == S7_DAILY_CAP
+        assert len(merged) == RANK_7S_DAILY_CAP
 
     def test_locked_keys_survive_even_when_gate_would_reject(self):
         # 2026-07-26修正: ロック済み候補はentropy欠損等でゲート自体に落ちても保護される
         # （2026-07-26のデプロイ移行期に実際に起きた「旧形式raw candidatesがentropy
         # フィールド無し」というケースを想定）。
         day = [{"race_key": "locked_but_gate_fails", "axis_sum": 999.0, "wt_overlap_n": 0}]
-        merged = s7_evening_reselect(day, [], locked_keys={"locked_but_gate_fails"})
+        merged = rank_7s_evening_reselect(day, [], locked_keys={"locked_but_gate_fails"})
         assert {c["race_key"] for c in merged} == {"locked_but_gate_fails"}
 
 
 # ── S9（S7の9車立て版・独立ランク・2026-07-26） ─────────────────────────────
 
-from src.strategy_wt import S9_ENTROPY_MAX, s9_daily_select  # noqa: E402
+from src.strategy_wt import RANK_9S_ENTROPY_MAX, rank_9s_daily_select  # noqa: E402
 
 
 class TestS9DailySelect:
@@ -305,26 +305,26 @@ class TestS9DailySelect:
 
     def test_overlap0_and_overlap1_pass(self):
         cands = [self._cand("r1", wt_overlap_n=0), self._cand("r2", wt_overlap_n=1)]
-        assert {c["race_key"] for c in s9_daily_select(cands)} == {"r1", "r2"}
+        assert {c["race_key"] for c in rank_9s_daily_select(cands)} == {"r1", "r2"}
 
     def test_overlap2_and_none_excluded(self):
         cands = [self._cand("r1", wt_overlap_n=2), self._cand("r2", wt_overlap_n=None)]
-        assert s9_daily_select(cands) == []
+        assert rank_9s_daily_select(cands) == []
 
     def test_entropy_gate(self):
         cands = [
-            self._cand("ok", entropy=S9_ENTROPY_MAX),
-            self._cand("ng", entropy=S9_ENTROPY_MAX + 0.01),
+            self._cand("ok", entropy=RANK_9S_ENTROPY_MAX),
+            self._cand("ng", entropy=RANK_9S_ENTROPY_MAX + 0.01),
         ]
-        assert {c["race_key"] for c in s9_daily_select(cands)} == {"ok"}
+        assert {c["race_key"] for c in rank_9s_daily_select(cands)} == {"ok"}
 
     def test_missing_entropy_fails_safe(self):
         cands = [{"race_key": "no_entropy", "axis_sum": 0.5, "wt_overlap_n": 0}]
-        assert s9_daily_select(cands) == []
+        assert rank_9s_daily_select(cands) == []
 
     def test_no_count_cap(self):
         cands = [self._cand(f"r{i}", wt_overlap_n=1) for i in range(50)]
-        assert len(s9_daily_select(cands)) == 50
+        assert len(rank_9s_daily_select(cands)) == 50
 
     def test_mark3_overlap_gate(self):
         cands = [
@@ -332,27 +332,27 @@ class TestS9DailySelect:
             self._cand("ok1", wt_mark3_overlap_n=1),
             self._cand("ng2", wt_mark3_overlap_n=2),
         ]
-        assert {c["race_key"] for c in s9_daily_select(cands)} == {"ok0", "ok1"}
+        assert {c["race_key"] for c in rank_9s_daily_select(cands)} == {"ok0", "ok1"}
 
     def test_missing_mark3_overlap_fails_safe(self):
         cands = [{"race_key": "no_mark3", "axis_sum": 0.5, "entropy": 1.0, "wt_overlap_n": 0}]
-        assert s9_daily_select(cands) == []
+        assert rank_9s_daily_select(cands) == []
 
 
 class TestS7WtMark3OverlapN:
     def test_both_axis_match_marks(self):
         # axis1=◎(mark1相当) axis2=△(mark3相当) → 2車ともマッチ=2
-        assert s7_wt_mark3_overlap_n(1, 3, wt_honmei=1, wt_taikou=2, wt_ana=3) == 2
+        assert rank_7s_wt_mark3_overlap_n(1, 3, wt_honmei=1, wt_taikou=2, wt_ana=3) == 2
 
     def test_one_axis_matches(self):
-        assert s7_wt_mark3_overlap_n(1, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 1
+        assert rank_7s_wt_mark3_overlap_n(1, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 1
 
     def test_no_axis_matches(self):
-        assert s7_wt_mark3_overlap_n(8, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 0
+        assert rank_7s_wt_mark3_overlap_n(8, 9, wt_honmei=1, wt_taikou=2, wt_ana=3) == 0
 
     def test_missing_any_mark_returns_none(self):
-        assert s7_wt_mark3_overlap_n(1, 2, wt_honmei=1, wt_taikou=2, wt_ana=None) is None
-        assert s7_wt_mark3_overlap_n(1, 2, wt_honmei=None, wt_taikou=2, wt_ana=3) is None
+        assert rank_7s_wt_mark3_overlap_n(1, 2, wt_honmei=1, wt_taikou=2, wt_ana=None) is None
+        assert rank_7s_wt_mark3_overlap_n(1, 2, wt_honmei=None, wt_taikou=2, wt_ana=3) is None
 
 
 # ── S1w_gate（win軸1着固定・2026-07-27にentropy条件追加） ───────────────────

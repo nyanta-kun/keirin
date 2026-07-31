@@ -3,7 +3,7 @@
 [[keirin_roi_validation_crisis_2026_07_29]] の残タスク。`exp_elo_linecoop_wt.py`で
 「ライン連携実績(lc_n_prev/lc_rate/lc_max_n)」はモデル入力特徴としては採否未確定
 （Elo同様に一緒に検証されたのみで単独結論なし）のまま残っていた。本スクリプトは
-race_typeの検証と同じ設計で、S7本番(picks_history rank='SEVEN_S7', D構成=現行本番
+race_typeの検証と同じ設計で、S7本番(picks_history rank='RANK_7S', D構成=現行本番
 定義そのもの・527件)の軸2車(axis1/axis2)について「過去に同ラインを組んだ実績」を
 事後セグメントフィルタとして評価する。
 
@@ -41,7 +41,7 @@ def load_s7_picks():
     with get_connection() as c:
         rows = c.execute(
             "SELECT race_key, race_date, pred_combo, hit, payout, bet_amount "
-            "FROM picks_history WHERE rank = 'SEVEN_S7'").fetchall()
+            "FROM picks_history WHERE rank = 'RANK_7S'").fetchall()
     picks = {}
     for r in rows:
         m = COMBO_RE.match(r["pred_combo"] or "")

@@ -1,6 +1,6 @@
 """集計対象ランクの単一正本（src/strategy_wt.CURRENT_PAPER_RANKS）の回帰テスト。
 
-是正タスク B-6（_query_stats のIN句からSEVEN_SSが漏れ、月次/年次サマリーに
+是正タスク B-6（_query_stats のIN句からRANK_7SSが漏れ、月次/年次サマリーに
 16,273行が一切反映されない）+ C-1（4箇所独立ハードコードの単一正本化）。
 
 過去に「集計対象ランクのハードコードされたリスト」が
@@ -38,7 +38,7 @@ import live_report_wt as lr
 
 
 # 現行5ランク（2026-07-31時点・picks_history実データで件数・期間・ROIを確認済み）。
-CURRENT_RANK_NAMES = {"SEVEN_S7", "SEVEN_7A", "NINE_S9", "NINE_9A", "SEVEN_SS"}
+CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A", "RANK_7SS"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
@@ -83,20 +83,20 @@ def test_each_current_rank_has_unique_rank_and_suffix():
     assert len(suffixes) == len(set(suffixes))
 
 
-def test_seven_s7_is_the_only_header_total_member():
-    """ヘッダー合計(in_header_total)に含まれるのはSEVEN_S7のみ（7A/9A/9S/SSは除外）。
+def test_rank_7s_is_the_only_header_total_member():
+    """ヘッダー合計(in_header_total)に含まれるのはRANK_7Sのみ（7A/9A/9S/SSは除外）。
 
     notify_results_wt.py の既存設計方針「7A/9Aはヘッダー合計には含めないが
     _query_statsには含める」を単一正本側で保持していることの確認。
     """
     header_members = {spec.rank for spec in sw.CURRENT_PAPER_RANKS if spec.in_header_total}
-    assert header_members == {"SEVEN_S7"}
+    assert header_members == {"RANK_7S"}
 
 
 def test_seven_ss_excluded_from_live_report_only():
-    """in_live_report=FalseはSEVEN_SSのみ（他4ランクは全てTrue）。"""
+    """in_live_report=FalseはRANK_7SSのみ（他4ランクは全てTrue）。"""
     excluded = {spec.rank for spec in sw.CURRENT_PAPER_RANKS if not spec.in_live_report}
-    assert excluded == {"SEVEN_SS"}
+    assert excluded == {"RANK_7SS"}
 
 
 # ── 2. notify_results_wt.py::_query_stats（B-6の中心） ──────────────────
@@ -141,7 +141,7 @@ class _FakeConn:
 def test_query_stats_sql_contains_all_five_current_ranks(monkeypatch):
     """_query_stats が実際に発行するSQLのIN句に現行5ランク全てが入ること。
 
-    2026-07-31以前は独自ハードコードのIN句にSEVEN_SSが漏れており、
+    2026-07-31以前は独自ハードコードのIN句にRANK_7SSが漏れており、
     picks_historyの16,273行が月次/年次サマリーに一切反映されなかった
     （B-6の実害）。以後は単一正本から動的生成するため、この検証は
     strategy_wt.CURRENT_PAPER_RANKSを更新するだけで将来のランク追加にも
@@ -165,7 +165,7 @@ def test_query_stats_sql_contains_all_five_current_ranks(monkeypatch):
 
 
 def test_query_stats_result_reflects_seven_ss_rows(monkeypatch):
-    """_query_stats がSEVEN_SS分の行を実際に合算できること（機能面の確認）。"""
+    """_query_stats がRANK_7SS分の行を実際に合算できること（機能面の確認）。"""
     fake = _FakeConn(row=_FakeRow(races=16273, hits=4000, returns_=8_000_000, bets=8_136_500))
     monkeypatch.setattr(nr, "get_connection", lambda: fake)
 
@@ -246,8 +246,8 @@ def test_live_report_ranks_matches_single_source_subset():
 
 
 def test_live_report_ranks_excludes_seven_ss():
-    """live_report_wt.RANKS は意図的にSEVEN_SSを含まない（既存テストの前提と一致）。"""
-    assert "SEVEN_SS" not in lr.RANKS
+    """live_report_wt.RANKS は意図的にRANK_7SSを含まない（既存テストの前提と一致）。"""
+    assert "RANK_7SS" not in lr.RANKS
 
 
 def test_live_report_rank_labels_matches_single_source():
@@ -311,15 +311,15 @@ def test_all_four_locations_agree_on_current_rank_universe():
 
 
 def test_regression_seven_ss_present_everywhere_it_should_be():
-    """本タスクの直接の契機（SEVEN_SSがpicks_historyに16,273行あるのに
+    """本タスクの直接の契機（RANK_7SSがpicks_historyに16,273行あるのに
     _query_statsのIN句から漏れていた）が解消されていることの単体確認。
     """
-    assert "SEVEN_SS" in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
-    assert "'SEVEN_SS'" in nr._QUERY_STATS_RANKS_SQL
+    assert "RANK_7SS" in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
+    assert "'RANK_7SS'" in nr._QUERY_STATS_RANKS_SQL
     assert "#7SS" in nr._PAPER_SUFFIXES
-    assert ("7SS", "SEVEN_SS", "#7SS") in sme.PAPER_RANKS
+    assert ("7SS", "RANK_7SS", "#7SS") in sme.PAPER_RANKS
     # live_report_wt は意図的に対象外（本文の判断・報告の通り）
-    assert "SEVEN_SS" not in lr.RANKS
+    assert "RANK_7SS" not in lr.RANKS
 
 
 def test_regression_seven_s1_absent_everywhere():

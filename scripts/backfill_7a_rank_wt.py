@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""7A（S7の境界ランク・2ゲート中1つだけ不合格・SEVEN_7A）の過去分バックフィル。
+"""7A（S7の境界ランク・2ゲート中1つだけ不合格・RANK_7A）の過去分バックフィル。
 
 7A の検証期間実績を picks_history（VPS PG）に構築する。
 
   7車ちょうど ∧ 盤面(trio)7車
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-          strategy_wt.s7_select_axis() で選定
+          strategy_wt.rank_7s_select_axis() で選定
   波乱度指数(axis_sum) = 軸2車のpred_prob合計
-  entropy = strategy_wt.s7_field_entropy()
-  選出 = strategy_wt.s7a_daily_select():
-         wt_overlap_n∈{0,1} ∧ axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX
+  entropy = strategy_wt.rank_7s_field_entropy()
+  選出 = strategy_wt.rank_7a_daily_select():
+         wt_overlap_n∈{0,1} ∧ axis_sum<=RANK_7S_AXIS_SUM_MAX・entropy<=RANK_7S_ENTROPY_MAX
          の2条件のうちちょうど1つだけ不合格の候補
          （0個=S7本体・2個とも不合格は対象外。詳細はsrc/strategy_wt.py参照）
          【2026-07-31改定】旧来はmark3も含む3条件だったが、S7自体がmark3ゲートを
@@ -24,7 +24,7 @@
 【旧実装の問題】従来は `if len(board) != N_CAR: continue`（盤面がちょうど7車で
 なければレースごと除外）としており、本番 notify_results_wt._void_by_dns /
 src/evaluation/void_rules.py の基準（軸欠車=レース無効・相手欠車=その目のみ
-除外して購入継続）と一致していなかった（backfill_s7_rank_wt.py と同型の構造。
+除外して購入継続）と一致していなかった（backfill_7s_rank_wt.py と同型の構造。
 詳細説明は同ファイルも参照）。
 
 【本タスクでの修正】board（欠車判定用の盤面掲載車集合）は
@@ -35,16 +35,16 @@ odds_value フィルタなし）。軸/相手の欠車判定は `void_by_dns()`�
 `len(combos)` から算出していたため計算式の変更は不要。
 
   影響規模（読み取り専用DB調査・2026-07-31、n_entries=7 の全レース対象。
-  backfill_s7_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
+  backfill_7s_rank_wt.py と共通の母集団）: 全85,517レース中、盤面7車ちょうど=
   82,939件(97.0%)・盤面6車(1台欠け)=881件(1.03%)・盤面5車(2台欠け)=14件
   (0.02%)・盤面データなし=1,683件(1.97%)。「盤面データなし」レースは従来通り
   対象外のまま（`if not board: continue`）。
 
-  7A(`s7a_daily_select`)自体は日次capを持たない独立per-race判定のため、
-  S7本体（`s7_evening_reselect`の日次capトリム）のような連鎖リスクはない。
+  7A(`rank_7a_daily_select`)自体は日次capを持たない独立per-race判定のため、
+  S7本体（`rank_7s_evening_reselect`の日次capトリム）のような連鎖リスクはない。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/backfill_s7a_rank_wt.py \
+    PYTHONPATH=. .venv/bin/python scripts/backfill_7a_rank_wt.py \
         --start 2024-01-01 --end 2026-07-25 [--model lgbm_wt_eval] \
         [--wipe] [--dry-run]
 """
@@ -65,8 +65,8 @@ from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S7A_STAKE, s7_field_entropy, s7_select_axis, s7_wt_mark3_overlap_n,
-    s7_wt_overlap_n, s7a_daily_select,
+    RANK_7A_STAKE, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
+    rank_7s_wt_overlap_n, rank_7a_daily_select,
 )
 
 N_CAR = 7
@@ -180,11 +180,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
-        sel = s7_select_axis(win_probs, top3_probs)
+        sel = rank_7s_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
-        entropy = s7_field_entropy(top3_probs)
+        entropy = rank_7s_field_entropy(top3_probs)
 
         # 欠車判定を本番と同一の void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）。
         # 軸欠車=レース無効／相手欠車=その目のみ除外して購入継続（可変点数）。
@@ -200,8 +200,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
         wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
-        wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-        wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+        wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
@@ -211,11 +211,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         })
 
     rows: list[dict] = []
-    for c_ in s7a_daily_select(candidates):
+    for c_ in rank_7a_daily_select(candidates):
         axis1, axis2 = c_["axis1"], c_["axis2"]
         trio = c_["trio"]
         # combos/bought_thirds を同期して構築（pred_combo は実際に買った目のみを
-        # 列挙する。2026-07-31 是正・PMタスク C-2b。backfill_s7_rank_wt.py 参照）。
+        # 列挙する。2026-07-31 是正・PMタスク C-2b。backfill_7s_rank_wt.py 参照）。
         combos, bought_thirds = [], []
         for x in c_["others"]:
             key = frozenset({axis1, axis2, x})
@@ -227,11 +227,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         rk = c_["race_key"]
         hit = c_["actual_top3"] in combos
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-        pay = trio_pay * S7A_STAKE // 100 if hit else 0
-        bet = len(combos) * S7A_STAKE
+        pay = trio_pay * RANK_7A_STAKE // 100 if hit else 0
+        bet = len(combos) * RANK_7A_STAKE
         rows.append({
             "race_date": c_["race_date"],
-            "race_key": f"{rk}#7A", "rank": "SEVEN_7A",
+            "race_key": f"{rk}#7A", "rank": "RANK_7A",
             "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in bought_thirds)
                           + f" (axis_sum={c_['axis_sum']:.1f})",
             "n_combos": len(combos), "hit": int(hit), "payout": pay,
@@ -241,12 +241,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
 
 def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='SEVEN_7A' AND race_key LIKE '%#7A' AND race_date BETWEEN ? AND ?"
+    cond = "rank='RANK_7A' AND race_key LIKE '%#7A' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
             (date_from, date_to)).fetchone()[0]
-        print(f"[backfill-s7a] 既存 #7A 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[backfill-7a] 既存 #7A 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
@@ -256,13 +256,13 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='SEVEN_7A' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='RANK_7A' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
                         ("%#7A", date_from, date_to))
             n = cur.fetchone()[0]
-            print(f"[backfill-s7a] VPS PG 既存 #7A 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            print(f"[backfill-7a] VPS PG 既存 #7A 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
                             ("%#7A", date_from, date_to))
@@ -281,11 +281,11 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
             " :payout,:trio_payout,:bet_amount,'wt',:miwokuri,:gate_label)",
             rows_ins)
         conn.commit()
-    print(f"[backfill-s7a] get_connection先 {len(rows)}件 書き込み完了")
+    print(f"[backfill-7a] get_connection先 {len(rows)}件 書き込み完了")
 
     db_url = os.environ.get("KEIRIN_DB_URL")
     if not db_url:
-        print("[backfill-s7a] KEIRIN_DB_URL 未設定 → VPS PG ミラーはスキップ")
+        print("[backfill-7a] KEIRIN_DB_URL 未設定 → VPS PG ミラーはスキップ")
         return
     import psycopg2
     from psycopg2.extras import execute_batch
@@ -306,7 +306,7 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
                   bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE,
                   gate_label=EXCLUDED.gate_label
             """, rows, page_size=200)
-    print(f"[backfill-s7a] VPS PG {len(rows)}件 書き込み完了")
+    print(f"[backfill-7a] VPS PG {len(rows)}件 書き込み完了")
 
 
 def main() -> None:
@@ -322,7 +322,7 @@ def main() -> None:
 
     from datetime import date
     end = args.end or date.today().strftime("%Y-%m-%d")
-    print(f"[backfill-s7a] model={args.model} win_model={args.win_model} {args.start}〜{end}", flush=True)
+    print(f"[backfill-7a] model={args.model} win_model={args.win_model} {args.start}〜{end}", flush=True)
 
     if args.wipe:
         wipe_rows(args.start, end, args.dry_run)
@@ -333,12 +333,12 @@ def main() -> None:
     bet = sum(r["bet_amount"] for r in rows)
     ret = sum(r["payout"] for r in rows)
     roi = ret / bet * 100 if bet else 0
-    print(f"[backfill-s7a] 7A(境界ランク): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
+    print(f"[backfill-7a] 7A(境界ランク): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
           f"投資{bet:,} → 回収{ret:,} ROI {roi:.1f}%", flush=True)
 
     insert_rows(rows, args.dry_run)
     if args.dry_run:
-        print("[backfill-s7a] DRY RUN（書き込みなし）")
+        print("[backfill-7a] DRY RUN（書き込みなし）")
 
 
 if __name__ == "__main__":

@@ -270,7 +270,7 @@ def s1w_gate(
 # 波乱度指数 = 軸2車のpred_top3_pct合計（axis_sum）。低いほど「軸自体が本命でない」
 #   ＝波乱度が高いレースと解釈する。レース全体のエントロピー（拮抗度）で絞ると
 #   ROIが悪化する（絞り込みなし85.7%→73.5%）ことを確認済みで不採用。
-# 選出 = 当日の該当レースをaxis_sum昇順に並べ、上位 S7_DAILY_TOP_N 件を採用
+# 選出 = 当日の該当レースをaxis_sum昇順に並べ、上位 RANK_7S_DAILY_TOP_N 件を採用
 #   （1レース単位の閾値ゲートではなく日次クロスレースランキング）。
 # 買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）。
 #
@@ -293,15 +293,15 @@ def s1w_gate(
 # 的中率はほぼ横ばいなのにROIが重なり数に応じて単調に悪化する構造を確認
 # （完全一致時は市場に織り込まれ済みで払戻が縮む＝コンセンサスピックの低配当化）。
 # ユーザー指示により、重なり0は無条件で全件採用・重なり1はaxis_sum昇順で固定
-# S7_DAILY_TOP_N件・重なり2は完全除外という選出方式へ変更（1日の採用本数は
+# RANK_7S_DAILY_TOP_N件・重なり2は完全除外という選出方式へ変更（1日の採用本数は
 # 重なり0の発生数に応じて可変・honest全期間で平均10.77R/日）。
 # honest全期間再構築（この方式）: 9,927R（922日・10.77R/日）・的中36.3%・
 # **ROI131.3%**（旧方式の128.1%から改善）。内訳: 重なり0(943R)的中39.4%/ROI232.8%・
 # 重なり1(8984R)的中36.0%/ROI120.6%。
 # ═══════════════════════════════════════════════════════════════════════════
 
-S7_NE = 7                  # 対象車数（7車ちょうど）
-S7_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
+RANK_7S_NE = 7                  # 対象車数（7車ちょうど）
+RANK_7S_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 
 # 三連複が安くなりやすい（極端な人気決着になりやすい）レースの除外上限。
 #
@@ -311,7 +311,7 @@ S7_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 #   scripts/exp_s7_cdf_regime_full_period.py）で再較正した。
 #   現行(axis_sum<=1.3・mark3<=1併用): 576R・0.61件/日・的中34.0%・ROI78.5%・
 #     月次ROI標準偏差43.7（月次0%回数1）
-#   新設定(axis_sum<=1.5・mark3ゲート撤廃＝下記s7_daily_select参照):
+#   新設定(axis_sum<=1.5・mark3ゲート撤廃＝下記rank_7s_daily_select参照):
 #     6,546R・6.94件/日・**的中41.0%**・**ROI79.3%**・
 #     **月次ROI標準偏差17.3**（月次0%回数0）
 # 的中率・ROIとも改善しつつ月次変動を約1/2.5に抑え、日次件数を約11倍
@@ -326,7 +326,7 @@ S7_STAKE = 100             # 円/点（ペーパー・5点=500円/レース）
 # シミュレーションでROI131.3%→147.1%として1.3を採用したが、
 # [[keirin_wt_foundational_audit_2026_07_29]]で当時のvintageモデルが
 # 汚染されていたと判明したため、絶対値は参考にしないこと。
-S7_AXIS_SUM_MAX = 1.5
+RANK_7S_AXIS_SUM_MAX = 1.5
 
 # フィールド全体の指数エントロピー上限（2026-07-26・ユーザー要望「30倍以上の
 # 高配当が見込めるレースに絞りたい」への対応。exp_upset_trio30_v2_wt.py /
@@ -349,13 +349,13 @@ S7_AXIS_SUM_MAX = 1.5
 # 同数条件での比較（axis_sum昇順で同じ件数を採用した場合）でも、entropy選定は
 # 7四半期中6四半期で明確に上回り、残り1四半期も同水準（axis_sumの代替ではなく
 # 独立した追加情報。spearman相関≈-0.08で axis_sum とはほぼ無相関）。
-# 採用ペースは平均2.56件/日（S7_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
-S7_ENTROPY_MAX = 1.8329
+# 採用ペースは平均2.56件/日（RANK_7S_AXIS_SUM_MAX等の既存ゲートは全て維持のまま）。
+RANK_7S_ENTROPY_MAX = 1.8329
 
 # 日次合計の上限（entropy昇順で採用・2026-07-26再導入）。
 # 件数capをentropyゲートに置換した初日（2026-07-26）、entropyフィールドを
 # 持たない旧形式の生候補JSON（デプロイ前に生成された朝バッチ分）が
-# s7_daily_select() の `c.get("entropy", 0.0)` フォールバックにより
+# rank_7s_daily_select() の `c.get("entropy", 0.0)` フォールバックにより
 # entropy=0.0扱い＝常にゲート通過してしまい、1日26件という honest全期間
 # walk-forward(2024-01-01〜2026-07-25・832日、最大9件/日)では一度も
 # 発生しなかった規模の異常発生を招いた（原因判明後、フォールバックは
@@ -366,13 +366,13 @@ S7_ENTROPY_MAX = 1.8329
 # 最大9件/日のため、この上限は通常運用ではほぼ発火しない安全網であり、
 # capの値を8/10/12/15/無制限で振っても全期間ROI/件数は完全に同一
 # （exp_s4_daily_cap_by_entropy.py参照）。異常発生時のみ効く設計。
-S7_DAILY_CAP = 12
+RANK_7S_DAILY_CAP = 12
 
 
-def s7_field_entropy(top3_probs: dict[int, float]) -> float:
+def rank_7s_field_entropy(top3_probs: dict[int, float]) -> float:
     """レース全体（出走7車）の指数エントロピー（占有率ベースの拮抗度）を返す。
 
-    top3_probs: {frame_no: pred_prob}（s7_select_axis と同じ入力）。
+    top3_probs: {frame_no: pred_prob}（rank_7s_select_axis と同じ入力）。
     値が低いほど予測確率が一部の車（主に軸2車）に集中している状態。
     オッズを一切使わないため、発走前・オッズ非公開の朝の時点でも計算可能。
     """
@@ -387,7 +387,7 @@ def s7_field_entropy(top3_probs: dict[int, float]) -> float:
     return ent
 
 
-def s7_select_axis(
+def rank_7s_select_axis(
     win_probs: dict[int, float], top3_probs: dict[int, float],
 ) -> tuple[int, int, float] | None:
     """S7の軸2車とaxis_sum（波乱度指数の元）を選定する。
@@ -421,14 +421,14 @@ def s7_select_axis(
     return axis1, axis2, axis_sum
 
 
-def s7_wt_overlap_n(
+def rank_7s_wt_overlap_n(
     axis1: int, axis2: int, wt_honmei: int | None, wt_taikou: int | None,
 ) -> int | None:
     """S7の軸2車とWINTICKET公式予想の◎◯（honmei/taikou）との重なり数を返す。
 
     wt_honmei: prediction_mark==1（◎）の frame_no。
     wt_taikou: prediction_mark==2（◯）の frame_no。
-    いずれか欠損時は None（重なり判定不能・s7_daily_select では除外対象）。
+    いずれか欠損時は None（重なり判定不能・rank_7s_daily_select では除外対象）。
     """
     if wt_honmei is None or wt_taikou is None:
         return None
@@ -447,24 +447,24 @@ def s7_wt_overlap_n(
 # ケースのみ。既存のwt_overlap_n（◎◯=mark1/2のみで判定・完全一致=2を既に除外）
 # とは独立な追加ゲート（mark3=△も加味）。
 #
-# 【2026-07-31改定】S7/7Aはこのゲートを撤廃した（下記s7_daily_select/
-# s7a_daily_select参照。当時の検証は汚染モデル時代のもので、クリーンな
+# 【2026-07-31改定】S7/7Aはこのゲートを撤廃した（下記rank_7s_daily_select/
+# rank_7a_daily_select参照。当時の検証は汚染モデル時代のもので、クリーンな
 # 月次vintageモデルでの再検証ではaxis_sum<=1.5との組み合わせにより
 # mark3ゲート無しの方がROI・的中率とも上回った）。
-# S9/9A（s9_daily_select/s9a_daily_select）は9車立てでは軸選定の母集団が
+# S9/9A（rank_9s_daily_select/rank_9a_daily_select）は9車立てでは軸選定の母集団が
 # 異なりS7と同一の再検証を行っていないため、このゲートを引き続き使用する。
-S7_MARK3_OVERLAP_MAX = 1
+RANK_7S_MARK3_OVERLAP_MAX = 1
 
 
-def s7_wt_mark3_overlap_n(
+def rank_7s_wt_mark3_overlap_n(
     axis1: int, axis2: int,
     wt_honmei: int | None, wt_taikou: int | None, wt_ana: int | None,
 ) -> int | None:
     """S7/S9の軸2車とWINTICKET公式印◎◯△（mark1/2/3・honmei/taikou/ana）との
-    重なり数を返す（s7_wt_overlap_nの◎◯のみの判定に△を加えた拡張版）。
+    重なり数を返す（rank_7s_wt_overlap_nの◎◯のみの判定に△を加えた拡張版）。
 
     wt_ana: prediction_mark==3（△）の frame_no。
-    いずれか欠損時は None（判定不能・s7_daily_select/s9_daily_select では
+    いずれか欠損時は None（判定不能・rank_7s_daily_select/rank_9s_daily_select では
     フェイルセーフとして除外対象扱いにする）。
     """
     if wt_honmei is None or wt_taikou is None or wt_ana is None:
@@ -488,7 +488,7 @@ def s7_wt_mark3_overlap_n(
 # axis1_class/axis2_classパラメータは廃止後もコール側の互換のため残置（未使用）。
 
 
-def s7_gate_label(
+def rank_7s_gate_label(
     wt_overlap_n: int | None,
     axis1_class: str | None = None, axis2_class: str | None = None,
 ) -> str | None:
@@ -503,19 +503,19 @@ def s7_gate_label(
     return None
 
 
-def s7_daily_select(candidates: list[dict]) -> list[dict]:
+def rank_7s_daily_select(candidates: list[dict]) -> list[dict]:
     """S7の選出（2026-07-31改定: mark3ゲートを撤廃・axis_sum<=1.5に緩和）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"axis_sum": float, "wt_overlap_n": int | None, "entropy": float} を持つ dict。
 
     選出ロジック（全て閾値ゲート。件数による打ち切りは行わない）:
-      - axis_sum > S7_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
+      - axis_sum > RANK_7S_AXIS_SUM_MAX（三連複が5倍未満に安くなりやすい極端な人気決着
         想定レース）は除外（2026-07-24導入。2026-07-31に1.3→1.5へ緩和）
-      - entropy > S7_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
+      - entropy > RANK_7S_ENTROPY_MAX（フィールド全体の予測確率が拡散＝軸2車に集中して
         いない）は除外（2026-07-26導入。低いentropy＝軸2車に予測確率が集中し
         残り5車が拮抗、という状態が三連複高配当の的中と強く相関することを
-        2024-2026の8四半期walk-forwardで確認。詳細はS7_ENTROPY_MAX定義部参照）。
+        2024-2026の8四半期walk-forwardで確認。詳細はRANK_7S_ENTROPY_MAX定義部参照）。
         entropyキー欠損時は float("inf")扱い＝必ず除外する（フェイルセーフ。
         2026-07-26に0.0デフォルトだった旧実装が「欠損=常に通過」というフェイル
         オープンな挙動になっており、デプロイ当日の旧形式生候補JSON経由で
@@ -535,41 +535,41 @@ def s7_daily_select(candidates: list[dict]) -> list[dict]:
     axis_sum<=1.5との組み合わせにより mark3ゲート無しの方が
     的中率41.0%(旧34.0%)・ROI79.3%(旧78.5%)・月次ROI標準偏差17.3(旧43.7)・
     1日平均6.94件(旧0.61件)と全指標で上回ることを確認したため。
-    詳細は S7_AXIS_SUM_MAX / S7_MARK3_OVERLAP_MAX 定義部のコメント参照。
+    詳細は RANK_7S_AXIS_SUM_MAX / RANK_7S_MARK3_OVERLAP_MAX 定義部のコメント参照。
     ※この変更によりS7の母集団が広がったため、旧mark3ゲートに依存していた
-    7Aの選出ロジック(s7a_daily_select)も2026-07-31に2ゲート化し、
+    7Aの選出ロジック(rank_7a_daily_select)も2026-07-31に2ゲート化し、
     新S7との重複選出がないことを検算済み（重複0件）。
 
-    日次件数の上限（S7_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
+    日次件数の上限（RANK_7S_DAILY_CAP）は本関数では適用しない（朝夜どちらか一方の
     バッチだけでは日次合計が分からないため）。日次合計への適用は
-    s7_evening_reselect() を参照。
+    rank_7s_evening_reselect() を参照。
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
     pool = [
         c for c in candidates
-        if c["axis_sum"] <= S7_AXIS_SUM_MAX
-        and c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
+        if c["axis_sum"] <= RANK_7S_AXIS_SUM_MAX
+        and c.get("entropy", float("inf")) <= RANK_7S_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
 
-def s7_evening_reselect(
+def rank_7s_evening_reselect(
     day_raw: list[dict], night_raw: list[dict], locked_keys: set[str] = frozenset(),
 ) -> list[dict]:
     """S7の朝夜統合選出（2026-07-26改定: entropyゲート通過後、日次合計を
-    S7_DAILY_CAP件まで entropy昇順（＝最も自信がある順）でトリムする）。
+    RANK_7S_DAILY_CAP件まで entropy昇順（＝最も自信がある順）でトリムする）。
 
-    day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、s7_select_axis+
-      s7_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
+    day_raw/night_raw: 朝/夜それぞれの生候補（選出前の全件、rank_7s_select_axis+
+      rank_7s_wt_overlap_n+entropy計算を通した dict のリスト。各要素に "race_key" が必要）。
     locked_keys: 既に買い判定済み（picks_history に bet_amount>0 で記録済み）の
       race_key の集合。ゲート・トリムいずれでも除外しない（実購入は取り消せない
-      ため）。ロック済み候補は s7_daily_select() のゲート判定より前に分離する
+      ため）。ロック済み候補は rank_7s_daily_select() のゲート判定より前に分離する
       （2026-07-26修正: ロック済みでもゲート内で先に弾かれれば結果的に未保護に
       なる抜け穴があったため、ゲート適用前に確定で救済する設計に変更）。
 
-    S7_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
+    RANK_7S_DAILY_CAP は honest全期間(832日)で実際にゲート通過が最大9件/日だった
     ことから、通常運用ではほぼ発火しない安全網として設計されている
     （exp_s4_daily_cap_by_entropy.py参照）。
 
@@ -577,9 +577,9 @@ def s7_evening_reselect(
     """
     all_raw = day_raw + night_raw
     locked = [c for c in all_raw if c.get("race_key") in locked_keys]
-    gated = s7_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
+    gated = rank_7s_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
     unlocked = sorted(gated, key=lambda c: c["entropy"])
-    remaining_budget = max(0, S7_DAILY_CAP - len(locked))
+    remaining_budget = max(0, RANK_7S_DAILY_CAP - len(locked))
     return locked + unlocked[:remaining_budget]
 
 
@@ -593,8 +593,8 @@ def s7_evening_reselect(
 # （表示・集計を分離。ボリューム・買い目コスト(7点流し=700円 vs 5点=500円)が
 # 異なるため）。
 #
-# 軸選定(s7_select_axis)・フィールドentropy計算(s7_field_entropy)・
-# WT◎◯重なり判定(s7_wt_overlap_n)・表示ランク(s7_gate_label)はいずれも
+# 軸選定(rank_7s_select_axis)・フィールドentropy計算(rank_7s_field_entropy)・
+# WT◎◯重なり判定(rank_7s_wt_overlap_n)・表示ランク(rank_7s_gate_label)はいずれも
 # 車数非依存の汎用実装のためそのまま再利用する。
 #
 # 買い目 = 三連複 軸2車 + 残り7車のいずれか1車（7点・オッズ下限なし）
@@ -610,38 +610,38 @@ def s7_evening_reselect(
 # WT公式◎◯と全く重ならない）は小n(3-53/四半期)だが多くの四半期でROI200〜4683%と
 # 極めて高い（7車のSS+/SS帯と同型のパターン）。
 #
-# axis_sum閾値（S7_AXIS_SUM_MAX相当）は9車では未較正のため導入していない
+# axis_sum閾値（RANK_7S_AXIS_SUM_MAX相当）は9車では未較正のため導入していない
 # （entropy単体で真のwalk-forward検証済み・複数の未較正閾値を積み増すことに
 # よる過学習リスクを避けた。将来的な追加検証の余地あり）。
-S9_NE = 9                   # 対象車数（9車ちょうど）
-S9_STAKE = 100               # 円/点（ペーパー・7点=700円/レース）
-S9_ENTROPY_MAX = 1.9938
+RANK_9S_NE = 9                   # 対象車数（9車ちょうど）
+RANK_9S_STAKE = 100               # 円/点（ペーパー・7点=700円/レース）
+RANK_9S_ENTROPY_MAX = 1.9938
 
 
-def s9_daily_select(candidates: list[dict]) -> list[dict]:
+def rank_9s_daily_select(candidates: list[dict]) -> list[dict]:
     """S9の選出。S7と同じ閾値ゲート方式（axis_sum閾値は9車では未導入）。
 
     candidates: 候補レースのリスト。各要素は最低限
       {"wt_overlap_n": int | None, "entropy": float} を持つ dict。
 
     選出ロジック:
-      - entropy > S9_ENTROPY_MAX は除外（詳細は上部コメント参照）。
+      - entropy > RANK_9S_ENTROPY_MAX は除外（詳細は上部コメント参照）。
         entropyキー欠損時は float("inf")扱い＝必ず除外（フェイルセーフ。
         S7での同種事故を踏まえた設計）
       - wt_overlap_n == 0（◎◯と全く重ならない）・1（片方だけ重なる）:
         上記ゲート通過分を全件採用（件数capなし。S9は元々低ボリュームのため
-        S7のようなS9_DAILY_CAP安全網は現時点で不要と判断）
+        S7のようなRANK_9S_DAILY_CAP安全網は現時点で不要と判断）
       - wt_overlap_n == 2（◎◯と完全一致）・None（WTマーク欠損）: 除外
       - wt_mark3_overlap_n（軸2車とWT公式印◎◯△=mark1/2/3との重なり数）が2は
-        除外（2026-07-27導入・S7と共通のゲート。詳細はS7_MARK3_OVERLAP_MAX参照）
+        除外（2026-07-27導入・S7と共通のゲート。詳細はRANK_7S_MARK3_OVERLAP_MAX参照）
 
     returns 採用された候補のリスト（axis_sum昇順・表示用の並び順のみ）。
     """
     pool = [
         c for c in candidates
-        if c.get("entropy", float("inf")) <= S9_ENTROPY_MAX
+        if c.get("entropy", float("inf")) <= RANK_9S_ENTROPY_MAX
         and c.get("wt_overlap_n") in (0, 1)
-        and c.get("wt_mark3_overlap_n", 2) <= S7_MARK3_OVERLAP_MAX
+        and c.get("wt_mark3_overlap_n", 2) <= RANK_7S_MARK3_OVERLAP_MAX
     ]
     return sorted(pool, key=lambda c: c["axis_sum"])
 
@@ -664,16 +664,16 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
 #   対象外（この条件でも常にROI<100%）。
 #
 # 設計:
-#   母集団 = s7_select_axis()/s9相当で軸選定成功 ∧ wt_overlap_n∈{0,1}（◎◯完全一致
+#   母集団 = rank_7s_select_axis()/s9相当で軸選定成功 ∧ wt_overlap_n∈{0,1}（◎◯完全一致
 #     と印欠損は既存同様に除外）。
-#   7A: axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX
+#   7A: axis_sum<=RANK_7S_AXIS_SUM_MAX・entropy<=RANK_7S_ENTROPY_MAX
 #       の2条件のうち、不合格がちょうど1個（0個=S7・2個とも不合格=対象外）。
 #       【2026-07-31改定】旧来はmark3も含む3条件だったが、S7自体がmark3ゲートを
-#       撤廃した（s7_daily_select参照）ため、7Aも2条件に揃えた（mark3を条件に
+#       撤廃した（rank_7s_daily_select参照）ため、7Aも2条件に揃えた（mark3を条件に
 #       残すと「mark3のみ不合格」の候補が新S7にも旧7Aにも該当し重複選出になる
 #       ため）。
 #   9A: 9車はaxis_sum閾値が未導入・S9側のmark3ゲートは変更していないため、
-#       entropy<=S9_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち、
+#       entropy<=RANK_9S_ENTROPY_MAX・mark3<=RANK_7S_MARK3_OVERLAP_MAX の2条件のうち、
 #       不合格がちょうど1個（変更なし）。
 #   S7/S9とは論理的に排他（全条件合格=S7/S9、ちょうど1条件のみ不合格=7A/9A）。
 #   新7A(2条件)とのhonest全期間再検証で重複選出0件を確認済み
@@ -693,22 +693,22 @@ def s9_daily_select(candidates: list[dict]) -> list[dict]:
 #   9A 約0.5〜1.7件/日 + S9 約0.25件/日 ≈ 9車合計 約0.75〜2件/日（変更なし）
 # ═══════════════════════════════════════════════════════════════════════════
 
-S7A_STAKE = 100  # 円/点（ペーパー・7車5点=500円/レース）
-S9A_STAKE = 100  # 円/点（ペーパー・9車7点=700円/レース）
+RANK_7A_STAKE = 100  # 円/点（ペーパー・7車5点=500円/レース）
+RANK_9A_STAKE = 100  # 円/点（ペーパー・9車7点=700円/レース）
 
 
-def s7a_daily_select(candidates: list[dict]) -> list[dict]:
+def rank_7a_daily_select(candidates: list[dict]) -> list[dict]:
     """7Aの選出: S7の2ゲート(axis_sum/entropy)のうちちょうど1つだけ不合格の候補。
 
     candidates: 各要素は最低限
       {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None} を持つ dict。
 
     【2026-07-31改定】旧来はmark3も含む3ゲートだったが、S7自体がmark3ゲートを
-    撤廃した（s7_daily_select参照）ため2ゲートに揃えた。新S7との重複選出が
+    撤廃した（rank_7s_daily_select参照）ため2ゲートに揃えた。新S7との重複選出が
     ないことをhonest全期間で検算済み（本セクション冒頭コメント参照）。
 
     - wt_overlap_n ∈ {0,1} 必須（◎◯完全一致=2・マーク欠損=None は対象外、S7と同様）
-    - axis_sum<=S7_AXIS_SUM_MAX・entropy<=S7_ENTROPY_MAX の2条件のうち、
+    - axis_sum<=RANK_7S_AXIS_SUM_MAX・entropy<=RANK_7S_ENTROPY_MAX の2条件のうち、
       不合格の個数がちょうど1個の候補のみ採用
       （0個=S7本体の対象・2個とも不合格は市場効率の壁でROI不採用、
         詳細は本セクション冒頭参照）
@@ -719,19 +719,19 @@ def s7a_daily_select(candidates: list[dict]) -> list[dict]:
     for c in candidates:
         if c.get("wt_overlap_n") not in (0, 1):
             continue
-        axis_ok = c["axis_sum"] <= S7_AXIS_SUM_MAX
-        ent_ok = c.get("entropy", float("inf")) <= S7_ENTROPY_MAX
+        axis_ok = c["axis_sum"] <= RANK_7S_AXIS_SUM_MAX
+        ent_ok = c.get("entropy", float("inf")) <= RANK_7S_ENTROPY_MAX
         n_fail = (not axis_ok) + (not ent_ok)
         if n_fail == 1:
             pool.append(c)
     return sorted(pool, key=lambda c: c["axis_sum"])
 
 
-def s9a_daily_select(candidates: list[dict]) -> list[dict]:
+def rank_9a_daily_select(candidates: list[dict]) -> list[dict]:
     """9Aの選出: S9の2ゲート(entropy/mark3)のうちちょうど1つだけ不合格の候補。
 
-    s7a_daily_select() の9車版。9車はaxis_sum閾値が未導入（S9同様）のため、
-    entropy<=S9_ENTROPY_MAX・mark3<=S7_MARK3_OVERLAP_MAX の2条件のうち
+    rank_7a_daily_select() の9車版。9車はaxis_sum閾値が未導入（S9同様）のため、
+    entropy<=RANK_9S_ENTROPY_MAX・mark3<=RANK_7S_MARK3_OVERLAP_MAX の2条件のうち
     不合格がちょうど1個の候補のみ採用する。
     """
     pool = []
@@ -741,8 +741,8 @@ def s9a_daily_select(candidates: list[dict]) -> list[dict]:
         mark3 = c.get("wt_mark3_overlap_n")
         if mark3 is None:
             continue
-        ent_ok = c.get("entropy", float("inf")) <= S9_ENTROPY_MAX
-        mark3_ok = mark3 <= S7_MARK3_OVERLAP_MAX
+        ent_ok = c.get("entropy", float("inf")) <= RANK_9S_ENTROPY_MAX
+        mark3_ok = mark3 <= RANK_7S_MARK3_OVERLAP_MAX
         n_fail = (not ent_ok) + (not mark3_ok)
         if n_fail == 1:
             pool.append(c)
@@ -842,9 +842,9 @@ def ss_policy(
 # 買い目 = 三連複 軸2車+残り5車流し（5点・S7と同じ100円/点）。
 # ═══════════════════════════════════════════════════════════════════════════
 
-SEVENSS_STAKE = 100  # 円/点（ペーパー・5点=500円/レース）
+RANK_7SS_STAKE = 100  # 円/点（ペーパー・5点=500円/レース）
 
-SEVENSS_FEATURES = (
+RANK_7SS_FEATURES = (
     "rp_max", "rp_std", "rp_gap12",
     "fr_max", "fr_std", "fr_gap12",
     "tr_max", "tr_std", "tr_gap12",
@@ -853,21 +853,21 @@ SEVENSS_FEATURES = (
 
 # TRAIN(2022-01-01〜2023-12-31・7車立て・n=22,953)のみで確定した凍結パラメータ。
 # TESTでの再計算・再学習は一切行わない（honest固定閾値）。
-SEVENSS_MU = {
+RANK_7SS_MU = {
     "rp_max": 88.290582, "rp_std": 3.683336, "rp_gap12": 2.264474,
     "fr_max": 35.481724, "fr_std": 11.360250, "fr_gap12": 13.195604,
     "tr_max": 66.454028, "tr_std": 15.218289, "tr_gap12": 10.974465,
     "n_lines": 3.454015, "max_line_size": 2.885941, "n_solo": 1.105607,
     "line_entropy": 1.146982,
 }
-SEVENSS_SD = {
+RANK_7SS_SD = {
     "rp_max": 14.343346, "rp_std": 2.951000, "rp_gap12": 2.233535,
     "fr_max": 17.586289, "fr_std": 5.714892, "fr_gap12": 13.676320,
     "tr_max": 14.768138, "tr_std": 5.438257, "tr_gap12": 9.756276,
     "n_lines": 1.160679, "max_line_size": 0.749428, "n_solo": 1.871859,
     "line_entropy": 0.283591,
 }
-SEVENSS_SIGN = {
+RANK_7SS_SIGN = {
     "rp_max": 1.0, "rp_std": -1.0, "rp_gap12": -1.0,
     "fr_max": -1.0, "fr_std": -1.0, "fr_gap12": -1.0,
     "tr_max": -1.0, "tr_std": -1.0, "tr_gap12": -1.0,
@@ -875,10 +875,10 @@ SEVENSS_SIGN = {
     "line_entropy": 1.0,
 }
 # TRAIN上位20%点（この値以上を「穴指数」高＝波乱予兆レースとして採用）
-SEVENSS_SCORE_THRESHOLD = 4.796886
+RANK_7SS_SCORE_THRESHOLD = 4.796886
 
 
-def _sevenss_entropy(vals: list[float]) -> float:
+def _rank_7ss_entropy(vals: list[float]) -> float:
     total = sum(vals)
     if total <= 0:
         return 0.0
@@ -889,7 +889,7 @@ def _sevenss_entropy(vals: list[float]) -> float:
     return ent
 
 
-def _sevenss_pop_std(vals: list[float]) -> float:
+def _rank_7ss_pop_std(vals: list[float]) -> float:
     """母集団標準偏差（ddof=0・exp_upset50系スクリプトのnp.std(default)と同一定義）。"""
     n = len(vals)
     if n == 0:
@@ -898,7 +898,7 @@ def _sevenss_pop_std(vals: list[float]) -> float:
     return math.sqrt(sum((v - mean) ** 2 for v in vals) / n)
 
 
-def sevenss_field_features(entries: list[dict]) -> dict[str, float] | None:
+def rank_7ss_field_features(entries: list[dict]) -> dict[str, float] | None:
     """entries（各要素: race_point/first_rate/third_rate/line_groupを持つdict）
     から13特徴を計算する。値欠損時は None。
     """
@@ -919,26 +919,26 @@ def sevenss_field_features(entries: list[dict]) -> dict[str, float] | None:
     n_lines = float(entries[0].get("n_lines") or len(line_sizes) or 0)
     max_line_size = float(max(line_sizes.values())) if line_sizes else 0.0
     n_solo = float(sum(1 for v in line_sizes.values() if v == 1))
-    line_entropy = _sevenss_entropy(list(line_sizes.values())) if line_sizes else 0.0
+    line_entropy = _rank_7ss_entropy(list(line_sizes.values())) if line_sizes else 0.0
 
     return {
-        "rp_max": rps[0], "rp_std": _sevenss_pop_std(rps), "rp_gap12": rps[0] - rps[1],
-        "fr_max": frs[0], "fr_std": _sevenss_pop_std(frs), "fr_gap12": frs[0] - frs[1],
-        "tr_max": trs[0], "tr_std": _sevenss_pop_std(trs), "tr_gap12": trs[0] - trs[1],
+        "rp_max": rps[0], "rp_std": _rank_7ss_pop_std(rps), "rp_gap12": rps[0] - rps[1],
+        "fr_max": frs[0], "fr_std": _rank_7ss_pop_std(frs), "fr_gap12": frs[0] - frs[1],
+        "tr_max": trs[0], "tr_std": _rank_7ss_pop_std(trs), "tr_gap12": trs[0] - trs[1],
         "n_lines": n_lines, "max_line_size": max_line_size, "n_solo": n_solo,
         "line_entropy": line_entropy,
     }
 
 
-def sevenss_score(feat: dict[str, float]) -> float:
+def rank_7ss_score(feat: dict[str, float]) -> float:
     """穴指数（標準化合算スコア）。高いほど波乱（三連複50倍以上）寄り。"""
     return sum(
-        SEVENSS_SIGN[f] * (feat[f] - SEVENSS_MU[f]) / SEVENSS_SD[f]
-        for f in SEVENSS_FEATURES
+        RANK_7SS_SIGN[f] * (feat[f] - RANK_7SS_MU[f]) / RANK_7SS_SD[f]
+        for f in RANK_7SS_FEATURES
     )
 
 
-def sevenss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
+def rank_7ss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
     """7SSの軸2車を選定する。
 
     軸1 = race_point(競走得点)単独top1。
@@ -988,38 +988,68 @@ def sevenss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
 class PaperRankSpec:
     """1つの現行ペーパーランクの集計メタデータ（picks_history.rank に対応）。"""
 
-    rank: str              # picks_history.rank の内部値（例: "SEVEN_S7"）
-    suffix: str            # race_key の "#" サフィックス（例: "#7S7"）
+    rank: str              # picks_history.rank の内部値（例: "RANK_7S"）
+    suffix: str            # race_key の "#" サフィックス（例: "#7S"）
     label: str             # 表示ラベル（例: "7S"）
     in_header_total: bool  # notify_results_wt.py の[7+車]ヘッダー合計(p7b/p7r/p7h・n7)に含めるか
     in_live_report: bool   # live_report_wt.py の集計対象(RANKS)に含めるか
 
 
-# 現行5ランク（2026-07-31時点・picks_history実データで件数・期間・ROIを確認済み）。
+# 現行5ランク（2026-07-31 内部rank/suffixをRANK_+表示ラベル方式へ全面改名。
+# 表示ラベル自体は変更なし。件数・期間・ROIは旧名時点の実績値）。
 # 並び順は Discord 表示・各参照先ファイルでの反復順とも一致させる。
 #
-#   rank        suffix   label  件数     期間                    ROI
-#   SEVEN_S7    #7S7     7S     6,572   2024-01-01〜2026-07-31  79.1%
-#   SEVEN_7A    #7A      7A    11,419   2024-01-01〜2026-07-31  77.4%
-#   NINE_S9     #9S9     9S       109   2024-01-11〜2026-06-12  79.2%
-#   NINE_9A     #9A      9A       967   2024-01-05〜2026-07-23  71.9%
-#   SEVEN_SS    #7SS     7SS   16,273   2022-12-01〜2026-07-30  73.5%
+# 命名規則: 内部rank = "RANK_" + 表示ラベル、suffix = "#" + 表示ラベル
+# （3表現が完全に1対1）。旧名は S7/S9 のみ suffix が "#7S7"/"#9S9" と表示ラベル
+# 非対称だったため、今回の改名でその不揃いを是正した（7A/9A/7SSは元々規則に
+# 合致していたため suffix・表示ラベルとも変更なし）。
 #
-# in_header_total: S7のみTrue（ヘッダー合計 p7b/p7r/p7h・n7 に算入する既存方針。
-#   kiseki Webサマリーのトップラインと揃える）。7A/9S/9A は境界ランク・独立ランクと
-#   して別集計する既存方針のためFalse。SS（波乱軸選出・穴レース検知）もモデル系の
-#   本体ランクとは性質が異なる独立戦略のため別集計＝False。
-# in_live_report: SS のみFalse。live_report_wt.py は「採否判断の唯一の裁定者」を
-#   自称するモデル系4ランク専用のツールで、SS はモデル非依存の別戦略（見せ場・
-#   穴レース検知が目的でROI改善は非目標）のため意図的に対象外とする
-#   （2026-07-31 SS導入時からの方針。_query_stats・model_evaluation には含める）。
+#   新rank    新suffix  表示ラベル  旧rank(参考)  旧suffix(参考)  件数     期間                    ROI
+#   RANK_7S   #7S       7S        SEVEN_S7      #7S7            6,572   2024-01-01〜2026-07-31  79.1%
+#   RANK_7A   #7A       7A        SEVEN_7A      #7A(変更なし)  11,419   2024-01-01〜2026-07-31  77.4%
+#   RANK_9S   #9S       9S        NINE_S9       #9S9              109   2024-01-11〜2026-06-12  79.2%
+#   RANK_9A   #9A       9A        NINE_9A       #9A(変更なし)     967   2024-01-05〜2026-07-23  71.9%
+#   RANK_7SS  #7SS      7SS       SEVEN_SS      #7SS(変更なし) 16,273   2022-12-01〜2026-07-30  73.5%
+#
+# 旧名→新名の機械的な参照が必要な場合（過去CSV/ログの読み解き等）は
+# LEGACY_RANK_NAME_MAP / LEGACY_SUFFIX_MAP を参照すること。
+#
+# in_header_total: RANK_7SのみTrue（ヘッダー合計 p7b/p7r/p7h・n7 に算入する既存
+#   方針。kiseki Webサマリーのトップラインと揃える）。RANK_7A/RANK_9S/RANK_9A は
+#   境界ランク・独立ランクとして別集計する既存方針のためFalse。RANK_7SS（波乱軸
+#   選出・穴レース検知）もモデル系の本体ランクとは性質が異なる独立戦略のため
+#   別集計＝False。
+# in_live_report: RANK_7SS のみFalse。live_report_wt.py は「採否判断の唯一の
+#   裁定者」を自称するモデル系4ランク専用のツールで、RANK_7SS はモデル非依存の
+#   別戦略（見せ場・穴レース検知が目的でROI改善は非目標）のため意図的に対象外
+#   とする（2026-07-31 導入時からの方針。_query_stats・model_evaluation には
+#   含める）。
 CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
-    PaperRankSpec("SEVEN_S7", "#7S7", "7S",  in_header_total=True,  in_live_report=True),
-    PaperRankSpec("SEVEN_7A", "#7A",  "7A",  in_header_total=False, in_live_report=True),
-    PaperRankSpec("NINE_S9",  "#9S9", "9S",  in_header_total=False, in_live_report=True),
-    PaperRankSpec("NINE_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
-    PaperRankSpec("SEVEN_SS", "#7SS", "7SS", in_header_total=False, in_live_report=False),
+    PaperRankSpec("RANK_7S",  "#7S",  "7S",  in_header_total=True,  in_live_report=True),
+    PaperRankSpec("RANK_7A",  "#7A",  "7A",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("RANK_9S",  "#9S",  "9S",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("RANK_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("RANK_7SS", "#7SS", "7SS", in_header_total=False, in_live_report=False),
 )
+
+# 旧名(2026-07-31改名前)→新名のマッピング（過去のCSVバックアップ・Discordログ・
+# netkeirin_submissions等、DB移行対象外の履歴データを読み解く際にのみ使用する。
+# 本番コードから通常参照する必要はない（新規ロジックは必ずCURRENT_PAPER_RANKSの
+# 新名を直接使うこと）。表示ラベルは変更していないため LEGACY_LABEL_MAP は無い。
+LEGACY_RANK_NAME_MAP: dict[str, str] = {
+    "SEVEN_S7": "RANK_7S",
+    "SEVEN_7A": "RANK_7A",
+    "NINE_S9": "RANK_9S",
+    "NINE_9A": "RANK_9A",
+    "SEVEN_SS": "RANK_7SS",
+}
+LEGACY_SUFFIX_MAP: dict[str, str] = {
+    "#7S7": "#7S",
+    "#7A": "#7A",
+    "#9S9": "#9S",
+    "#9A": "#9A",
+    "#7SS": "#7SS",
+}
 
 
 @dataclass(frozen=True)

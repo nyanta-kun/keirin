@@ -80,9 +80,9 @@ echo "[$(date '+%H:%M:%S')] 夜レース(19時〜)の推奨を生成..."
 # 2b. S7（Sランク）朝夜統合再選出（2026-07-22新設計）: 朝夜の生候補プールを合算し
 #     axis_sumランキングを組み直す。既に買い判定済み(ロック済み)のレースは変更しない。
 #     朝が先着で枠を使い切り夜の優良候補を取りこぼす問題への対処
-#     （scripts/s7_evening_reselect.py 参照）。
+#     （scripts/reselect_7s_evening.py 参照）。
 echo "[$(date '+%H:%M:%S')] S7（Sランク）朝夜統合再選出..."
-.venv/bin/python3 scripts/s7_evening_reselect.py "$TODAY" \
+.venv/bin/python3 scripts/reselect_7s_evening.py "$TODAY" \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] S7統合再選出に失敗（継続）"
 

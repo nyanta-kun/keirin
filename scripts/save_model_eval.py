@@ -55,17 +55,17 @@ HOLD = ("2026-03-01", "2026-06-30")
 # 2026-07-16: 旧S1（7PLUS_R・実賭け）全廃 → 全ランクがペーパー。
 # 2026-07-17: S1(SIX_S1)/A(7PLUS_A) 全廃・S3(7PLUS_M) は新定義（不一致×gap12≥0.10）。
 # 2026-07-21: S2(7PLUS_U)/S3(7PLUS_M) を対象レース数・的中率・期待値の観点で全廃。
-# 2026-07-21: S7(SEVEN_S7)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
+# 2026-07-21: S7(RANK_7S)を軸2車とWT◎◯の重なりでSS(重なり0)/S(重なり1)の2ランクへ
 # 再編。picks_history.gate_label列（SS/S）で絞り込んでいた（当時の4要素目）。
 # 2026-07-23: SS のうち軸2車が各グレード最上位クラス(S1/A1)を含まないサブセットを
 # "SS+" として観察用に追加していたが、サンプル数不足のため2026-07-27に廃止・
 # SSへ統合した（既存picks_historyのgate_label='SS+'行も'SS'へ一括更新済み）。
 # 2026-07-31: 旧PAPER_RANKS（このファイル独自のハードコード）は、既に2026-07-31に
-# 全廃済みの SEVEN_S1 が残存する一方、SS/S分割はs7_gate_label()がSへ統合され
+# 全廃済みの SEVEN_S1 が残存する一方、SS/S分割はrank_7s_gate_label()がSへ統合され
 # 事実上死んでいる（"SS"行は永久にn=0）という食い違った独自定義になっていた
 # （notify_results_wt.py::_query_stats・live_report_wt.py::RANKS とも内容が異なる
 # 事故の一種・是正タスクB-6/C-1）。単一正本 src/strategy_wt.CURRENT_PAPER_RANKS
-# から導出する形に変更し、gate_label分割は廃止（SS+S=SEVEN_S7全体を1行に統合。
+# から導出する形に変更し、gate_label分割は廃止（SS+S=RANK_7S全体を1行に統合。
 # 情報量の欠落はない＝旧SS行が常に0件だったため合算しても差分なし）。
 PAPER_HOLD = ("2026-04-13", "2026-06-30")
 PAPER_RANKS: list[tuple[str, str, str]] = [
@@ -428,9 +428,9 @@ def main() -> None:
         # 廃止ランク行の掃除（表示に古い体系が混ざらないように）:
         # 旧S1(#7R)・旧VAL、2026-07-17 全廃の S1(#6S1)
         # ※ "#7A" は 2026-07-17 に全廃された旧A(7PLUS_A)由来の掃除対象だったが、
-        #   現在は境界ランクSEVEN_7Aが同じsuffix("#7A")を使う（単一正本
+        #   現在は境界ランクRANK_7Aが同じsuffix("#7A")を使う（単一正本
         #   CURRENT_PAPER_RANKS 参照）。このDELETEはsave_to_db()の直前に走り
-        #   直後にSEVEN_7Aの最新行が再挿入されるため実害はない（削除→即再挿入で
+        #   直後にRANK_7Aの最新行が再挿入されるため実害はない（削除→即再挿入で
         #   実質no-op）が、意味が変わっている点に注意。
         with get_connection() as conn:
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7R'")
@@ -440,7 +440,10 @@ def main() -> None:
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7U'")
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7M'")
             # 2026-07-21: S7を軸2車とWT◎◯の重なりでSS/Sへ再編したため、
-            # 旧統合S7行（"#7S7"で終わる。"#7SS"/"#7S"とは末尾一致で衝突しない）を削除
+            # 旧統合S7行（当時のsuffix "#7S7"で終わる。2026-07-31のRANK_7S
+            # suffix改名("#7S7"→"#7S")後も、この行が指すのはSS/S再編**前**の
+            # 完全に死んだ旧データであり現行の"#7S"/"#7SS"とは無関係。文字列が
+            # 偶然似ているだけで削除対象は別物のため、この行はリネームしない）
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S7'")
             # 2026-07-31: S1(SEVEN_S1)全廃（是正タスクB-6/C-1でPAPER_RANKSから除外）。
             # 旧"#7S1"行は再生成されなくなるため明示的に削除する。

@@ -38,10 +38,10 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    S1W_STAKE, S1W_TOP3_GAP_MIN, S7_STAKE, S7A_STAKE, S9_STAKE, S9A_STAKE, SS_STAKE,
-    SEVENSS_SCORE_THRESHOLD, SEVENSS_STAKE,
-    line_score_features, s7_gate_label, sevenss_field_features, sevenss_score,
-    sevenss_select_axis, ss_policy,
+    S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
+    RANK_7SS_SCORE_THRESHOLD, RANK_7SS_STAKE,
+    line_score_features, rank_7s_gate_label, rank_7ss_field_features, rank_7ss_score,
+    rank_7ss_select_axis, ss_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,7 +371,7 @@ def _determine_live_rank(
 def _u_third_list(combos: list[str], dark: int, mate: int) -> list[int]:
     """買い目文字列（"a-b-c"）から3車目（軸2車以外）のリストを返す。
 
-    関数名は旧U戦略に由来するが、現在はS7（_insert_s7_pick）が共有利用する
+    関数名は旧U戦略に由来するが、現在はS7（_insert_rank_7s_pick）が共有利用する
     汎用ヘルパー（U/M戦略は2026-07-23に削除済み）。
     """
     thirds: list[int] = []
@@ -631,10 +631,10 @@ def _process_s1_candidates(today: str, now_unix: int, notified: set[str]) -> tup
     return messages, newly_done
 
 
-def judge_s7(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+def judge_rank_7s(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     """S7（単勝×複勝指数トップ3重なり軸×波乱度選出）の発走前ライブオッズ判定（純関数・DB非依存）。
 
-    cand:        朝のS7候補JSON行（axis1/axis2・朝時点の s7_daily_select() による
+    cand:        朝のS7候補JSON行（axis1/axis2・朝時点の rank_7s_daily_select() による
                  日次選出＝WT◎◯重なり考慮版で選出済み・2026-07-21〜）
     trio_lookup: _build_odds_lookup(odds_data, "trio") が返す {frozenset: odds} 辞書
 
@@ -704,7 +704,7 @@ def judge_s7(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     return "buy", detail
 
 
-def _load_s7_candidates(today: str) -> list[dict]:
+def _load_rank_7s_candidates(today: str) -> list[dict]:
     """当日のS7候補 JSON（昼 + 夜）を読み込む。"""
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
@@ -719,26 +719,26 @@ def _load_s7_candidates(today: str) -> list[dict]:
     return out
 
 
-def _insert_s7_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
+def _insert_rank_7s_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
                      gate_label: str | None = None) -> None:
-    """S7（波乱度選出・ペーパー）の記録行 {base}#7S7 を picks_history に即時反映する（SQLite + VPS PG）。
+    """S7（波乱度選出・ペーパー）の記録行 {base}#7S を picks_history に即時反映する（SQLite + VPS PG）。
 
     実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
-    （n_combos × S7_STAKE）で記録する（三連複のため trio_payout を使う）。
+    （n_combos × RANK_7S_STAKE）で記録する（三連複のため trio_payout を使う）。
     翌朝の notify_results_wt.py が decisions（{rk}#S7）に基づき最終確定（採点）する。
 
     gate_label: "SS"（軸2車がWT◎◯と全く重ならない＝wt_overlap_n=0）/
                 "S"（片方だけ重なる＝wt_overlap_n=1）。2026-07-21〜。
     """
-    store_key = race_key + "#7S7"
-    bet = n_combos * S7_STAKE
+    store_key = race_key + "#7S"
+    bet = n_combos * RANK_7S_STAKE
     try:
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
                 "VALUES (?,?,?,?,?,0,0,0,?,'wt',False,?)",
-                (race_date, store_key, "SEVEN_S7", pred_combo, n_combos, bet, gate_label),
+                (race_date, store_key, "RANK_7S", pred_combo, n_combos, bet, gate_label),
             )
             conn.commit()
     except Exception as e:
@@ -758,13 +758,13 @@ def _insert_s7_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
                         "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE, "
                         "gate_label=EXCLUDED.gate_label",
-                        (race_date, store_key, "SEVEN_S7", pred_combo, n_combos, bet, gate_label),
+                        (race_date, store_key, "RANK_7S", pred_combo, n_combos, bet, gate_label),
                     )
         except Exception as e:
             logger.warning("S7 pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_s7_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
+def _build_rank_7s_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
     """S7（波乱度選出・ペーパー）の15分前 Discord 通知メッセージ。
 
     gate_label: "SS"（軸2車がWT◎◯と全く重ならない）/ "S"（片方だけ重なる）。
@@ -797,7 +797,7 @@ def _build_s7_message(cand: dict, race_info: dict, detail: dict, gate_label: str
         f"🎲 **[{label}]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         + (f"（{label_desc}）" if label_desc else "") + "\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S7_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7S_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -806,14 +806,14 @@ def _build_s7_message(cand: dict, race_info: dict, detail: dict, gate_label: str
     )
 
 
-def _process_s7_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+def _process_rank_7s_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
     """S7候補の発走前判定・記録・通知メッセージ生成。
 
     returns (messages, newly_done)
-      messages:   [(s7_key, msg)]（buy 成立分のみ）
+      messages:   [(rank_7s_key, msg)]（buy 成立分のみ）
       newly_done: 処理完了キー {race_key}#S7 の集合（オッズ取得失敗は含めない=再試行）
     """
-    cands = _load_s7_candidates(today)
+    cands = _load_rank_7s_candidates(today)
     if not cands:
         return [], set()
 
@@ -839,7 +839,7 @@ def _process_s7_candidates(today: str, now_unix: int, notified: set[str]) -> tup
     newly_done: set[str] = set()
     for cand, ri in in_window:
         rk = cand["race_key"]
-        s7_key = f"{rk}#S7"
+        rank_7s_key = f"{rk}#S7"
         try:
             odds_data = scraper.fetch_odds(
                 venue_id  = ri["venue_id"],
@@ -857,21 +857,21 @@ def _process_s7_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_s7(cand, trio_lookup)
+        decision, detail = judge_rank_7s(cand, trio_lookup)
         if decision == "不明":
             print(f"[prerace] {rk} S7候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
             continue
 
         wt_overlap_n = cand.get("wt_overlap_n")
-        gate_label = s7_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
+        gate_label = rank_7s_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
 
         # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
-        _save_decision(today, s7_key, {
+        _save_decision(today, rank_7s_key, {
             "decision": decision,
-            "rank": "SEVEN_S7",
+            "rank": "RANK_7S",
             "paper": True,
-            "stake": S7_STAKE,
+            "stake": RANK_7S_STAKE,
             "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": wt_overlap_n,
             "gate_label": gate_label,
@@ -883,13 +883,13 @@ def _process_s7_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_s7_pick(rk, today, pred, len(combos), gate_label)
-            messages.append((s7_key, _build_s7_message(cand, ri, detail, gate_label)))
+            _insert_rank_7s_pick(rk, today, pred, len(combos), gate_label)
+            messages.append((rank_7s_key, _build_rank_7s_message(cand, ri, detail, gate_label)))
             print(f"[prerace] {rk} S7候補 → buy（ペーパー・{len(combos)}点・{gate_label}）", flush=True)
         else:
-            _mark_paper_miwokuri(rk, "#7S7")  # 候補行をオッズ見送り表示に更新
+            _mark_paper_miwokuri(rk, "#7S")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} S7候補 → skip: {detail.get('skip_reason')}", flush=True)
-        newly_done.add(s7_key)
+        newly_done.add(rank_7s_key)
         time.sleep(0.3)
     return messages, newly_done
 
@@ -900,7 +900,7 @@ def _process_s7_candidates(today: str, now_unix: int, notified: set[str]) -> tup
 # 当日の対象レースを直接DBから読み直して算出する（S1/S7/S9/7A/9Aのように
 # JSON候補ファイルを読む方式ではない）。
 
-def _load_sevenss_today_races(today: str) -> list[dict]:
+def _load_rank_7ss_today_races(today: str) -> list[dict]:
     """当日の7車立て・非中止レース一覧を wt_races から直接取得する（venue_info.name結合）。"""
     with get_connection() as conn:
         rows = conn.execute(
@@ -913,7 +913,7 @@ def _load_sevenss_today_races(today: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _load_sevenss_entries(race_keys: list[str]) -> dict[str, list[dict]]:
+def _load_rank_7ss_entries(race_keys: list[str]) -> dict[str, list[dict]]:
     by_race: dict[str, list[dict]] = {}
     if not race_keys:
         return by_race
@@ -930,39 +930,39 @@ def _load_sevenss_entries(race_keys: list[str]) -> dict[str, list[dict]]:
     return by_race
 
 
-def _build_sevenss_candidate(entries: list[dict]) -> dict | None:
+def _build_rank_7ss_candidate(entries: list[dict]) -> dict | None:
     """entries(7件)から穴指数・軸1/軸2を算出する。閾値未満・判定不能はNone。"""
     if len(entries) != 7:
         return None
-    axis = sevenss_select_axis(entries)
+    axis = rank_7ss_select_axis(entries)
     if axis is None:
         return None
-    feat = sevenss_field_features(entries)
+    feat = rank_7ss_field_features(entries)
     if feat is None:
         return None
-    score = sevenss_score(feat)
-    if score < SEVENSS_SCORE_THRESHOLD:
+    score = rank_7ss_score(feat)
+    if score < RANK_7SS_SCORE_THRESHOLD:
         return None
     axis1, axis2 = axis
     return {"axis1": axis1, "axis2": axis2, "score": score}
 
 
-def _insert_sevenss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
     """7SS（波乱軸選出・ペーパー）の記録行 {base}#7SS を picks_history に即時反映する。
 
     実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
-    （n_combos × SEVENSS_STAKE）で記録する。gate_label は使わない（単一
+    （n_combos × RANK_7SS_STAKE）で記録する。gate_label は使わない（単一
     サブランク・7A/9Aと同じ扱い）。
     """
     store_key = race_key + "#7SS"
-    bet = n_combos * SEVENSS_STAKE
+    bet = n_combos * RANK_7SS_STAKE
     try:
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
                 "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, "SEVEN_SS", pred_combo, n_combos, bet),
+                (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
             )
             conn.commit()
     except Exception as e:
@@ -981,13 +981,13 @@ def _insert_sevenss_pick(race_key: str, race_date: str, pred_combo: str, n_combo
                         "ON CONFLICT (race_key) DO UPDATE SET "
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
                         "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, "SEVEN_SS", pred_combo, n_combos, bet),
+                        (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
                     )
         except Exception as e:
             logger.warning("7SS pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_sevenss_message(cand: dict, race_info: dict, detail: dict) -> str:
+def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
     """7SS（波乱軸選出・ペーパー）の15分前 Discord 通知メッセージ。"""
     venue = race_info.get("venue_name") or race_info.get("venue_id", "?")
     race_no = race_info.get("race_no", "?")
@@ -1011,16 +1011,16 @@ def _build_sevenss_message(cand: dict, race_info: dict, detail: dict) -> str:
     return (
         f"🎰 **[7SS]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 競走得点1位×WT印内3着内率最大 {axis1}/{axis2}\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * SEVENSS_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7SS_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
-        f"  **穴指数(波乱予兆スコア)={cand.get('score', 0):.2f}**（閾値{SEVENSS_SCORE_THRESHOLD:.2f}以上を採用）\n"
+        f"  **穴指数(波乱予兆スコア)={cand.get('score', 0):.2f}**（閾値{RANK_7SS_SCORE_THRESHOLD:.2f}以上を採用）\n"
         f"\n"
         f"  📊 現在オッズ（締切10分前）:\n"
         + "\n".join(lines)
     )
 
 
-def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+def _process_rank_7ss_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
     """7SS候補の発走前算出・判定・記録・通知メッセージ生成。
 
     S7等と異なり朝の候補JSONを使わず、当日の全7車立てレースをこの場で
@@ -1028,7 +1028,7 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
 
     returns (messages, newly_done)
     """
-    races = _load_sevenss_today_races(today)
+    races = _load_rank_7ss_today_races(today)
     if not races:
         return [], set()
 
@@ -1043,7 +1043,7 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
     if not in_window:
         return [], set()
 
-    entries_by_race = _load_sevenss_entries([ri["race_key"] for ri in in_window])
+    entries_by_race = _load_rank_7ss_entries([ri["race_key"] for ri in in_window])
 
     scraper = WinticketScraper(request_interval=1.0)
     messages: list[tuple[str, str]] = []
@@ -1055,7 +1055,7 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
         if not entries:
             newly_done.add(ss_key)
             continue
-        cand = _build_sevenss_candidate(entries)
+        cand = _build_rank_7ss_candidate(entries)
         if cand is None:
             # 穴指数が閾値未満・軸選定不能＝この戦略の対象外（見送り記録もしない）
             newly_done.add(ss_key)
@@ -1078,7 +1078,7 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_s7(cand, trio_lookup)  # 買い目構造(軸2車+5点流し)が同一のため共用
+        decision, detail = judge_rank_7s(cand, trio_lookup)  # 買い目構造(軸2車+5点流し)が同一のため共用
         if decision == "不明":
             print(f"[prerace] {rk} 7SS候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
@@ -1087,9 +1087,9 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
         # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
         _save_decision(today, ss_key, {
             "decision": decision,
-            "rank": "SEVEN_SS",
+            "rank": "RANK_7SS",
             "paper": True,
-            "stake": SEVENSS_STAKE,
+            "stake": RANK_7SS_STAKE,
             "score": cand.get("score"),
             **detail,
         })
@@ -1099,8 +1099,8 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_sevenss_pick(rk, today, pred, len(combos))
-            messages.append((ss_key, _build_sevenss_message(cand, ri, detail)))
+            _insert_rank_7ss_pick(rk, today, pred, len(combos))
+            messages.append((ss_key, _build_rank_7ss_message(cand, ri, detail)))
             print(f"[prerace] {rk} 7SS候補 → buy（ペーパー・{len(combos)}点・穴指数{cand['score']:.2f}）", flush=True)
         else:
             print(f"[prerace] {rk} 7SS候補 → skip: {detail.get('skip_reason')}", flush=True)
@@ -1109,10 +1109,10 @@ def _process_sevenss_candidates(today: str, now_unix: int, notified: set[str]) -
     return messages, newly_done
 
 
-def judge_s9(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+def judge_rank_9s(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     """S9（S7の9車立て版）の発走前ライブオッズ判定（純関数・DB非依存）。
 
-    judge_s7 の9車版（盤面判定が9車・買い目が残り7車流し=7点になる点のみ異なる）。
+    judge_rank_7s の9車版（盤面判定が9車・買い目が残り7車流し=7点になる点のみ異なる）。
     """
     detail: dict = {"axis1": None, "axis2": None, "combos": [], "leg_odds": {}, "skip_reason": None}
     try:
@@ -1167,7 +1167,7 @@ def judge_s9(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     return "buy", detail
 
 
-def _load_s9_candidates(today: str) -> list[dict]:
+def _load_rank_9s_candidates(today: str) -> list[dict]:
     """当日のS9候補 JSON（昼 + 夜）を読み込む。"""
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
@@ -1182,21 +1182,21 @@ def _load_s9_candidates(today: str) -> list[dict]:
     return out
 
 
-def _insert_s9_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
+def _insert_rank_9s_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int,
                      gate_label: str | None = None) -> None:
-    """S9（9車entropy選出・ペーパー）の記録行 {base}#9S9 を picks_history に即時反映する。
+    """S9（9車entropy選出・ペーパー）の記録行 {base}#9S を picks_history に即時反映する。
 
-    _insert_s7_pick の9車版（rank='NINE_S9'・race_key末尾#9S9・S9_STAKE）。
+    _insert_rank_7s_pick の9車版（rank='RANK_9S'・race_key末尾#9S・RANK_9S_STAKE）。
     """
-    store_key = race_key + "#9S9"
-    bet = n_combos * S9_STAKE
+    store_key = race_key + "#9S"
+    bet = n_combos * RANK_9S_STAKE
     try:
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
                 "VALUES (?,?,?,?,?,0,0,0,?,'wt',False,?)",
-                (race_date, store_key, "NINE_S9", pred_combo, n_combos, bet, gate_label),
+                (race_date, store_key, "RANK_9S", pred_combo, n_combos, bet, gate_label),
             )
             conn.commit()
     except Exception as e:
@@ -1216,13 +1216,13 @@ def _insert_s9_pick(race_key: str, race_date: str, pred_combo: str, n_combos: in
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
                         "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE, "
                         "gate_label=EXCLUDED.gate_label",
-                        (race_date, store_key, "NINE_S9", pred_combo, n_combos, bet, gate_label),
+                        (race_date, store_key, "RANK_9S", pred_combo, n_combos, bet, gate_label),
                     )
         except Exception as e:
             logger.warning("S9 pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_s9_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
+def _build_rank_9s_message(cand: dict, race_info: dict, detail: dict, gate_label: str | None) -> str:
     """S9（9車entropy選出・ペーパー）の15分前 Discord 通知メッセージ。"""
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
@@ -1248,7 +1248,7 @@ def _build_s9_message(cand: dict, race_info: dict, detail: dict, gate_label: str
         f"🎲 **[{label}]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         + (f"（{label_desc}）" if label_desc else "") + "\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S9_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_9S_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1257,14 +1257,14 @@ def _build_s9_message(cand: dict, race_info: dict, detail: dict, gate_label: str
     )
 
 
-def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
-    """S9候補の発走前判定・記録・通知メッセージ生成（_process_s7_candidates の9車版）。
+def _process_rank_9s_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """S9候補の発走前判定・記録・通知メッセージ生成（_process_rank_7s_candidates の9車版）。
 
     returns (messages, newly_done)
-      messages:   [(s9_key, msg)]（buy 成立分のみ）
+      messages:   [(rank_9s_key, msg)]（buy 成立分のみ）
       newly_done: 処理完了キー {race_key}#S9 の集合（オッズ取得失敗は含めない=再試行）
     """
-    cands = _load_s9_candidates(today)
+    cands = _load_rank_9s_candidates(today)
     if not cands:
         return [], set()
 
@@ -1290,7 +1290,7 @@ def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tup
     newly_done: set[str] = set()
     for cand, ri in in_window:
         rk = cand["race_key"]
-        s9_key = f"{rk}#S9"
+        rank_9s_key = f"{rk}#S9"
         try:
             odds_data = scraper.fetch_odds(
                 venue_id  = ri["venue_id"],
@@ -1308,20 +1308,20 @@ def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_s9(cand, trio_lookup)
+        decision, detail = judge_rank_9s(cand, trio_lookup)
         if decision == "不明":
             print(f"[prerace] {rk} S9候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
             continue
 
         wt_overlap_n = cand.get("wt_overlap_n")
-        gate_label = s7_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
+        gate_label = rank_7s_gate_label(wt_overlap_n, cand.get("axis1_class"), cand.get("axis2_class"))
 
-        _save_decision(today, s9_key, {
+        _save_decision(today, rank_9s_key, {
             "decision": decision,
-            "rank": "NINE_S9",
+            "rank": "RANK_9S",
             "paper": True,
-            "stake": S9_STAKE,
+            "stake": RANK_9S_STAKE,
             "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": wt_overlap_n,
             "gate_label": gate_label,
@@ -1333,22 +1333,22 @@ def _process_s9_candidates(today: str, now_unix: int, notified: set[str]) -> tup
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_s9_pick(rk, today, pred, len(combos), gate_label)
-            messages.append((s9_key, _build_s9_message(cand, ri, detail, gate_label)))
+            _insert_rank_9s_pick(rk, today, pred, len(combos), gate_label)
+            messages.append((rank_9s_key, _build_rank_9s_message(cand, ri, detail, gate_label)))
             print(f"[prerace] {rk} S9候補 → buy（ペーパー・{len(combos)}点・{gate_label}）", flush=True)
         else:
-            _mark_paper_miwokuri(rk, "#9S9")  # 候補行をオッズ見送り表示に更新
+            _mark_paper_miwokuri(rk, "#9S")  # 候補行をオッズ見送り表示に更新
             print(f"[prerace] {rk} S9候補 → skip: {detail.get('skip_reason')}", flush=True)
-        newly_done.add(s9_key)
+        newly_done.add(rank_9s_key)
         time.sleep(0.3)
     return messages, newly_done
 
 
 # ── 7A/9A（S7/S9の境界ランク・3ゲート/2ゲート中1つだけ不合格・2026-07-27導入） ──
 # 盤面判定・買い目構成のロジックは車数依存部分のみで、S7/S9本体と全く同一
-# （軸2車+残り流し）のため judge_s7()/judge_s9() をそのまま再利用する。
+# （軸2車+残り流し）のため judge_rank_7s()/judge_rank_9s() をそのまま再利用する。
 
-def _load_s7a_candidates(today: str) -> list[dict]:
+def _load_rank_7a_candidates(today: str) -> list[dict]:
     """当日の7A候補 JSON（昼 + 夜）を読み込む。"""
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
@@ -1363,20 +1363,20 @@ def _load_s7a_candidates(today: str) -> list[dict]:
     return out
 
 
-def _insert_s7a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+def _insert_rank_7a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
     """7A（境界ランク・ペーパー）の記録行 {base}#7A を picks_history に即時反映する。
 
-    _insert_s7_pick の7A版（rank='SEVEN_7A'・race_key末尾#7A・S7A_STAKE・gate_labelなし）。
+    _insert_rank_7s_pick の7A版（rank='RANK_7A'・race_key末尾#7A・RANK_7A_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#7A"
-    bet = n_combos * S7A_STAKE
+    bet = n_combos * RANK_7A_STAKE
     try:
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
                 "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, "SEVEN_7A", pred_combo, n_combos, bet),
+                (race_date, store_key, "RANK_7A", pred_combo, n_combos, bet),
             )
             conn.commit()
     except Exception as e:
@@ -1395,13 +1395,13 @@ def _insert_s7a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: i
                         "ON CONFLICT (race_key) DO UPDATE SET "
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
                         "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, "SEVEN_7A", pred_combo, n_combos, bet),
+                        (race_date, store_key, "RANK_7A", pred_combo, n_combos, bet),
                     )
         except Exception as e:
             logger.warning("7A pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_s7a_message(cand: dict, race_info: dict, detail: dict) -> str:
+def _build_rank_7a_message(cand: dict, race_info: dict, detail: dict) -> str:
     """7A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
@@ -1422,7 +1422,7 @@ def _build_s7a_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎲 **[7A]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         f"（S7の境界ランク・3ゲート中1つだけ不合格）\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S7A_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7A_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1431,9 +1431,9 @@ def _build_s7a_message(cand: dict, race_info: dict, detail: dict) -> str:
     )
 
 
-def _process_s7a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
-    """7A候補の発走前判定・記録・通知メッセージ生成（_process_s7_candidates の7A版）。"""
-    cands = _load_s7a_candidates(today)
+def _process_rank_7a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """7A候補の発走前判定・記録・通知メッセージ生成（_process_rank_7s_candidates の7A版）。"""
+    cands = _load_rank_7a_candidates(today)
     if not cands:
         return [], set()
 
@@ -1459,7 +1459,7 @@ def _process_s7a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
     newly_done: set[str] = set()
     for cand, ri in in_window:
         rk = cand["race_key"]
-        s7a_key = f"{rk}#7A"
+        rank_7a_key = f"{rk}#7A"
         try:
             odds_data = scraper.fetch_odds(
                 venue_id  = ri["venue_id"],
@@ -1477,15 +1477,15 @@ def _process_s7a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_s7(cand, trio_lookup)
+        decision, detail = judge_rank_7s(cand, trio_lookup)
         if decision == "不明":
             print(f"[prerace] {rk} 7A候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
             continue
 
-        _save_decision(today, s7a_key, {
-            "decision": decision, "rank": "SEVEN_7A", "paper": True,
-            "stake": S7A_STAKE, "axis_sum": cand.get("axis_sum"),
+        _save_decision(today, rank_7a_key, {
+            "decision": decision, "rank": "RANK_7A", "paper": True,
+            "stake": RANK_7A_STAKE, "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
         })
 
@@ -1494,18 +1494,18 @@ def _process_s7a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_s7a_pick(rk, today, pred, len(combos))
-            messages.append((s7a_key, _build_s7a_message(cand, ri, detail)))
+            _insert_rank_7a_pick(rk, today, pred, len(combos))
+            messages.append((rank_7a_key, _build_rank_7a_message(cand, ri, detail)))
             print(f"[prerace] {rk} 7A候補 → buy（ペーパー・{len(combos)}点）", flush=True)
         else:
             _mark_paper_miwokuri(rk, "#7A")
             print(f"[prerace] {rk} 7A候補 → skip: {detail.get('skip_reason')}", flush=True)
-        newly_done.add(s7a_key)
+        newly_done.add(rank_7a_key)
         time.sleep(0.3)
     return messages, newly_done
 
 
-def _load_s9a_candidates(today: str) -> list[dict]:
+def _load_rank_9a_candidates(today: str) -> list[dict]:
     """当日の9A候補 JSON（昼 + 夜）を読み込む。"""
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
@@ -1520,20 +1520,20 @@ def _load_s9a_candidates(today: str) -> list[dict]:
     return out
 
 
-def _insert_s9a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+def _insert_rank_9a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
     """9A（境界ランク・ペーパー）の記録行 {base}#9A を picks_history に即時反映する。
 
-    _insert_s9_pick の9A版（rank='NINE_9A'・race_key末尾#9A・S9A_STAKE・gate_labelなし）。
+    _insert_rank_9s_pick の9A版（rank='RANK_9A'・race_key末尾#9A・RANK_9A_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#9A"
-    bet = n_combos * S9A_STAKE
+    bet = n_combos * RANK_9A_STAKE
     try:
         with get_connection() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO picks_history "
                 "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
                 "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, "NINE_9A", pred_combo, n_combos, bet),
+                (race_date, store_key, "RANK_9A", pred_combo, n_combos, bet),
             )
             conn.commit()
     except Exception as e:
@@ -1552,13 +1552,13 @@ def _insert_s9a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: i
                         "ON CONFLICT (race_key) DO UPDATE SET "
                         "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
                         "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, "NINE_9A", pred_combo, n_combos, bet),
+                        (race_date, store_key, "RANK_9A", pred_combo, n_combos, bet),
                     )
         except Exception as e:
             logger.warning("9A pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
-def _build_s9a_message(cand: dict, race_info: dict, detail: dict) -> str:
+def _build_rank_9a_message(cand: dict, race_info: dict, detail: dict) -> str:
     """9A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
     venue = cand.get("venue_name", "?")
     race_no = race_info.get("race_no", cand.get("race_no", "?"))
@@ -1579,7 +1579,7 @@ def _build_s9a_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎲 **[9A]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         f"（S9の境界ランク・2ゲート中1つだけ不合格）\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * S9A_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_9A_STAKE:,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1588,9 +1588,9 @@ def _build_s9a_message(cand: dict, race_info: dict, detail: dict) -> str:
     )
 
 
-def _process_s9a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
-    """9A候補の発走前判定・記録・通知メッセージ生成（_process_s9_candidates の9A版）。"""
-    cands = _load_s9a_candidates(today)
+def _process_rank_9a_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """9A候補の発走前判定・記録・通知メッセージ生成（_process_rank_9s_candidates の9A版）。"""
+    cands = _load_rank_9a_candidates(today)
     if not cands:
         return [], set()
 
@@ -1616,7 +1616,7 @@ def _process_s9a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
     newly_done: set[str] = set()
     for cand, ri in in_window:
         rk = cand["race_key"]
-        s9a_key = f"{rk}#9A"
+        rank_9a_key = f"{rk}#9A"
         try:
             odds_data = scraper.fetch_odds(
                 venue_id  = ri["venue_id"],
@@ -1634,15 +1634,15 @@ def _process_s9a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_s9(cand, trio_lookup)
+        decision, detail = judge_rank_9s(cand, trio_lookup)
         if decision == "不明":
             print(f"[prerace] {rk} 9A候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
             continue
 
-        _save_decision(today, s9a_key, {
-            "decision": decision, "rank": "NINE_9A", "paper": True,
-            "stake": S9A_STAKE, "axis_sum": cand.get("axis_sum"),
+        _save_decision(today, rank_9a_key, {
+            "decision": decision, "rank": "RANK_9A", "paper": True,
+            "stake": RANK_9A_STAKE, "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
         })
 
@@ -1651,13 +1651,13 @@ def _process_s9a_candidates(today: str, now_unix: int, notified: set[str]) -> tu
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
             pred = (f"{detail['axis1']}={detail['axis2']}-"
                     + ",".join(map(str, thirds)))
-            _insert_s9a_pick(rk, today, pred, len(combos))
-            messages.append((s9a_key, _build_s9a_message(cand, ri, detail)))
+            _insert_rank_9a_pick(rk, today, pred, len(combos))
+            messages.append((rank_9a_key, _build_rank_9a_message(cand, ri, detail)))
             print(f"[prerace] {rk} 9A候補 → buy（ペーパー・{len(combos)}点）", flush=True)
         else:
             _mark_paper_miwokuri(rk, "#9A")
             print(f"[prerace] {rk} 9A候補 → skip: {detail.get('skip_reason')}", flush=True)
-        newly_done.add(s9a_key)
+        newly_done.add(rank_9a_key)
         time.sleep(0.3)
     return messages, newly_done
 
@@ -2208,45 +2208,45 @@ def main():
     # ── S7候補（単勝×複勝指数重なり軸×波乱度選出・ペーパー）処理 ──────────────
     # U/M/S1との重複排除はない（独立戦略）。try/exceptで既存通知を阻害しない。
     try:
-        s7_messages, s7_done = _process_s7_candidates(today, now_unix, notified)
-        messages += s7_messages
-        newly_done |= s7_done
+        rank_7s_messages, rank_7s_done = _process_rank_7s_candidates(today, now_unix, notified)
+        messages += rank_7s_messages
+        newly_done |= rank_7s_done
     except Exception as e:
         logger.exception("S7候補処理失敗（SS/U/M/S1通知には影響しない）: %s", e)
 
     # ── 7SS候補（波乱軸選出・穴レース検知・ペーパー）処理 ────────────────────
     # 2026-07-31導入。モデル非依存の独立戦略・S7等との重複排除はない。
     try:
-        sevenss_messages, sevenss_done = _process_sevenss_candidates(today, now_unix, notified)
-        messages += sevenss_messages
-        newly_done |= sevenss_done
+        rank_7ss_messages, rank_7ss_done = _process_rank_7ss_candidates(today, now_unix, notified)
+        messages += rank_7ss_messages
+        newly_done |= rank_7ss_done
     except Exception as e:
         logger.exception("7SS候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── S9候補（S7の9車立て版・独立ランク・ペーパー）処理 ────────────────────
     # 2026-07-26導入。S7等との重複排除はない（独立戦略・車数も異なる）。
     try:
-        s9_messages, s9_done = _process_s9_candidates(today, now_unix, notified)
-        messages += s9_messages
-        newly_done |= s9_done
+        rank_9s_messages, rank_9s_done = _process_rank_9s_candidates(today, now_unix, notified)
+        messages += rank_9s_messages
+        newly_done |= rank_9s_done
     except Exception as e:
         logger.exception("S9候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── 7A候補（S7の境界ランク・ペーパー）処理 ──────────────────────────────
     # 2026-07-27導入。S7とは論理的に排他（3ゲート中1つだけ不合格）。
     try:
-        s7a_messages, s7a_done = _process_s7a_candidates(today, now_unix, notified)
-        messages += s7a_messages
-        newly_done |= s7a_done
+        rank_7a_messages, rank_7a_done = _process_rank_7a_candidates(today, now_unix, notified)
+        messages += rank_7a_messages
+        newly_done |= rank_7a_done
     except Exception as e:
         logger.exception("7A候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── 9A候補（S9の境界ランク・ペーパー）処理 ──────────────────────────────
     # 2026-07-27導入。S9とは論理的に排他（2ゲート中1つだけ不合格）。
     try:
-        s9a_messages, s9a_done = _process_s9a_candidates(today, now_unix, notified)
-        messages += s9a_messages
-        newly_done |= s9a_done
+        rank_9a_messages, rank_9a_done = _process_rank_9a_candidates(today, now_unix, notified)
+        messages += rank_9a_messages
+        newly_done |= rank_9a_done
     except Exception as e:
         logger.exception("9A候補処理失敗（他ランク通知には影響しない）: %s", e)
 

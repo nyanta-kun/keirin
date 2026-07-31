@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""S7（単勝×複勝指数トップ3重なり軸×波乱度選出・SEVEN_S7）の過去分バックフィル。
+"""S7（単勝×複勝指数トップ3重なり軸×波乱度選出・RANK_7S）の過去分バックフィル。
 
 S7 の検証期間実績を picks_history（SQLite + VPS PG）に構築する。
-判定は本番（wave-picks-wt の候補選定 + notify_prerace_wt.judge_s7）と
+判定は本番（wave-picks-wt の候補選定 + notify_prerace_wt.judge_rank_7s）と
 同一条件を最終オッズ盤面で再現する:
 
   7車ちょうど ∧ 盤面(trio)7車
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
-          strategy_wt.s7_select_axis() で選定
+          strategy_wt.rank_7s_select_axis() で選定
   波乱度指数(axis_sum) = 軸2車のpred_prob合計。低いほど採用
-  entropy = strategy_wt.s7_field_entropy()（フィールド全体のpred_prob分布の
+  entropy = strategy_wt.rank_7s_field_entropy()（フィールド全体のpred_prob分布の
             拡散度。オッズ非依存。2026-07-26導入）
-  選出 = strategy_wt.s7_evening_reselect()（2026-07-26改定・axis_sum/entropy
-         閾値ゲート＋日次S7_DAILY_CAP件のentropy昇順トリム）:
+  選出 = strategy_wt.rank_7s_evening_reselect()（2026-07-26改定・axis_sum/entropy
+         閾値ゲート＋日次RANK_7S_DAILY_CAP件のentropy昇順トリム）:
          軸2車がWINTICKET公式◎◯(prediction_mark 1,2)と重なる数で3区分し、
-         axis_sum<=S7_AXIS_SUM_MAX かつ entropy<=S7_ENTROPY_MAX の
+         axis_sum<=RANK_7S_AXIS_SUM_MAX かつ entropy<=RANK_7S_ENTROPY_MAX の
          レース単位閾値ゲートを満たす候補のうち、重なり0(全く重ならない)・
          重なり1(片方一致)を採用（重なり2(完全一致)・マーク欠損は除外）。
-         日次合計がS7_DAILY_CAPを超える場合のみentropy昇順で上位のみ残す
+         日次合計がRANK_7S_DAILY_CAPを超える場合のみentropy昇順で上位のみ残す
          （honest全期間ではほぼ発火しない安全網）
   買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
 
@@ -58,18 +58,18 @@ _void_by_dns / src/evaluation/void_rules.py の基準（軸欠車=レース無�
   「盤面データなし」（trio 行が1件も無い）レースは従来通り対象外のまま
   （`if not board: continue` で除外・void_by_dns 適用前の前提条件）。
 
-  【S7 固有の連鎖に関する注意】s7_evening_reselect() は日次候補プール全体を
-  entropy 昇順で S7_DAILY_CAP(=12)件までトリムする設計のため、本修正で
+  【S7 固有の連鎖に関する注意】rank_7s_evening_reselect() は日次候補プール全体を
+  entropy 昇順で RANK_7S_DAILY_CAP(=12)件までトリムする設計のため、本修正で
   「相手1台欠け」レースが新たに候補プールに加わることで、同日の**他の**
-  候補の採否（トリムの足切りライン）まで連鎖しうる。s7_evening_reselect()
+  候補の採否（トリムの足切りライン）まで連鎖しうる。rank_7s_evening_reselect()
   自体は axis_sum/entropy/wt_overlap_n のみを見て判定するため、可変点数の
   候補が混じっても関数自体は無改修で正しく動作する。日次合計が
-  S7_DAILY_CAP を超えるのは honest 全期間で稀（最大9件/日）なため通常は
+  RANK_7S_DAILY_CAP を超えるのは honest 全期間で稀（最大9件/日）なため通常は
   連鎖しないと推測されるが、正確な影響量は honest 全期間の実再構築でのみ
   確認できる（本タスクでは実行しない）。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/backfill_s7_rank_wt.py \
+    PYTHONPATH=. .venv/bin/python scripts/backfill_7s_rank_wt.py \
         --start 2024-01-01 --end 2026-07-10 [--model lgbm_wt_eval] \
         [--wipe] [--dry-run]
 """
@@ -90,8 +90,8 @@ from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S7_STAKE, s7_evening_reselect, s7_field_entropy, s7_gate_label, s7_select_axis,
-    s7_wt_mark3_overlap_n, s7_wt_overlap_n,
+    RANK_7S_STAKE, rank_7s_evening_reselect, rank_7s_field_entropy, rank_7s_gate_label, rank_7s_select_axis,
+    rank_7s_wt_mark3_overlap_n, rank_7s_wt_overlap_n,
 )
 
 
@@ -152,7 +152,7 @@ def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
 
 def build_rows(model_name: str, date_from: str, date_to: str,
                 win_model_name: str = "lgbm_wt_win") -> list[dict]:
-    """バックフィル対象の S7(#7S7) 行（採点済み）を構築する。"""
+    """バックフィル対象の S7(#7S) 行（採点済み）を構築する。"""
     model = load_model(model_name)
     win_model = load_model(win_model_name)
     df = build_features_wt(load_raw_data_wt(min_date=date_from, max_date=date_to))
@@ -205,11 +205,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
         class_map = {int(r.frame_no): r.player_class for r in g.itertuples(index=False)}
-        sel = s7_select_axis(win_probs, top3_probs)
+        sel = rank_7s_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
-        entropy = s7_field_entropy(top3_probs)
+        entropy = rank_7s_field_entropy(top3_probs)
 
         # 欠車判定を本番と同一の void_by_dns へ統一（2026-07-31 是正・PMタスク C-2b）。
         # 軸欠車=レース無効／相手欠車=その目のみ除外して購入継続（可変点数）。
@@ -225,8 +225,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
         wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
-        wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-        wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+        wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
@@ -236,7 +236,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
 
-    # ── 日次選出: s7_evening_reselect()（axis_sum/entropy閾値ゲート＋日次S7_DAILY_CAP） ──
+    # ── 日次選出: rank_7s_evening_reselect()（axis_sum/entropy閾値ゲート＋日次RANK_7S_DAILY_CAP） ──
     by_day: dict[str, list[dict]] = defaultdict(list)
     for c_ in candidates:
         by_day[c_["race_date"]].append(c_)
@@ -246,7 +246,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         # バックフィルはAM/PMバッチ分割を再現しないため、day_raw=day_cands・
         # night_raw=空リスト・locked_keys=空集合（過去分に「既に買い判定済み」は
         # 存在しない）で1日分をまとめて処理する。
-        for c_ in s7_evening_reselect(day_cands, [], set()):
+        for c_ in rank_7s_evening_reselect(day_cands, [], set()):
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
             # combos/bought_thirds を同期して構築する（2026-07-31 是正・PMタスク C-2b）。
@@ -264,12 +264,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             rk = c_["race_key"]
             hit = c_["actual_top3"] in combos
             trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-            pay = trio_pay * S7_STAKE // 100 if hit else 0
-            bet = len(combos) * S7_STAKE
-            gate_label = s7_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
+            pay = trio_pay * RANK_7S_STAKE // 100 if hit else 0
+            bet = len(combos) * RANK_7S_STAKE
+            gate_label = rank_7s_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
             rows.append({
                 "race_date": d,
-                "race_key": f"{rk}#7S7", "rank": "SEVEN_S7",
+                "race_key": f"{rk}#7S", "rank": "RANK_7S",
                 "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in bought_thirds)
                               + f" (axis_sum={c_['axis_sum']:.1f})",
                 "n_combos": len(combos), "hit": int(hit), "payout": pay,
@@ -279,12 +279,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
 
 def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='SEVEN_S7' AND race_key LIKE '%#7S7' AND race_date BETWEEN ? AND ?"
+    cond = "rank='RANK_7S' AND race_key LIKE '%#7S' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
             (date_from, date_to)).fetchone()[0]
-        print(f"[backfill] 既存 #7S7 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[backfill] 既存 #7S 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
@@ -294,16 +294,16 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='SEVEN_S7' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='RANK_7S' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
-                        ("%#7S7", date_from, date_to))
+                        ("%#7S", date_from, date_to))
             n = cur.fetchone()[0]
-            print(f"[backfill] VPS PG 既存 #7S7 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            print(f"[backfill] VPS PG 既存 #7S 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
-                            ("%#7S7", date_from, date_to))
+                            ("%#7S", date_from, date_to))
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
@@ -354,7 +354,7 @@ def main() -> None:
     ap.add_argument("--model", default="lgbm_wt_eval")
     ap.add_argument("--win-model", default="lgbm_wt_win")
     ap.add_argument("--wipe", action="store_true",
-                    help="書き込み前に対象期間の既存 #7S7 行を削除")
+                    help="書き込み前に対象期間の既存 #7S 行を削除")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 

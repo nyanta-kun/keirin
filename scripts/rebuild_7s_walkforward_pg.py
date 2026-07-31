@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S7(SEVEN_S7)の全期間honest再構築（月次凍結vintageモデル体系・2026-07-29改定）。
+"""S7(RANK_7S)の全期間honest再構築（月次凍結vintageモデル体系・2026-07-29改定）。
 
 [[keirin_s7_foundational_rethink_2026_07_29]]。従来は四半期QUARTERS+静的TAIL_FROM
 という2層構造で、TAIL_FROMと実際のlgbm_wt_evalのtest_fromが週次で乖離し続ける
@@ -14,8 +14,8 @@
 `scripts/train_monthly_vintage_models.py`が別途担当）。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py [--dry-run]
-    PYTHONPATH=. .venv/bin/python scripts/rebuild_s7_walkforward_pg.py --tail-only
+    PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py [--dry-run]
+    PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py --tail-only
 """
 from __future__ import annotations
 
@@ -26,21 +26,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.backfill_s7_rank_wt import build_rows
+from scripts.backfill_7s_rank_wt import build_rows
 from src.database import get_connection
 from src.wt_vintage_config import monthly_windows
 
 
 def wipe_rows_pg(date_from: str, date_to: str, dry_run: bool) -> None:
-    """backfill_s7_rank_wt.wipe_rows と違い get_connection() 単一経路のみ使う
+    """backfill_7s_rank_wt.wipe_rows と違い get_connection() 単一経路のみ使う
     （KEIRIN_DB_URLをpopしないためget_connection()自体が既にVPS PGを指しており、
     そのままだと元のwipe_rows/insert_rowsの「ローカル+VPSミラー」二重書き込みが
     同一PGへ二重に当たり、insert側はUNIQUE(race_key)違反で失敗するため）。"""
-    cond = "rank='SEVEN_S7' AND race_key LIKE '%#7S7' AND race_date BETWEEN ? AND ?"
+    cond = "rank='RANK_7S' AND race_key LIKE '%#7S' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
                           (date_from, date_to)).fetchone()[0]
-        print(f"[rebuild-s4-pg] 既存 #7S7 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[rebuild-s4-pg] 既存 #7S 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
