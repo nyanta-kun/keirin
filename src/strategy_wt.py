@@ -814,3 +814,150 @@ def ss_policy(
     if is_senbatsu(race_type):
         return "選抜", 0
     return None, SS_STAKE
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7SS（波乱軸選出・穴レース検知・2026-07-31導入）
+#
+# S7/S9の「本命ピックアップ」とは逆に、高配当の的中（見せ場・購入者への
+# アピール）を狙う独立戦略。モデル予測に依存せず、wt_entriesの公表値
+# （競走得点・1着率・3着内率・WT公式印・ライン構成）のみで判定する
+# （2022年以降のデータで即座にhonest backtestが可能な設計）。
+#
+# 検証（TRAIN=2022-01-01〜2023-12-31 / TEST=2024-01-01〜2026-07-30・
+# scripts/exp_upset50_*_2026_07_31.py 系列）:
+#   ①「拮抗度（際立った実力上位馬の不在）」を表す13特徴の標準化合算スコアが
+#     高いレースほど、勝ち三連複が50倍以上になる確率が高い（再現性あり・
+#     lift 1.1〜1.2倍程度と控えめ）。
+#   ②軸選定は「race_point(競走得点)単独top1」が「1着率+3着内率」複合より
+#     一貫して優れる。
+#   ③軸2はWT公式印(◯△✕=prediction_mark 2,3,4)のうち軸1と重ならない
+#     3着内率最大の1頭が最も安定（TRAIN/TESTの目減りが最小）。
+#   ④この組み合わせでもROIは70〜72%（TEST）止まりで控除率75%の壁・
+#     ROI100%には届かないが、的中時の配当は最高354.2倍（TEST全体）・
+#     最高250.5倍（穴指数上位20%）に達し、購入者へのアピュールとして
+#     ユーザー判断により採用。ROI改善ではなく「見せ場」が目的の商品。
+#
+# 買い目 = 三連複 軸2車+残り5車流し（5点・S7と同じ100円/点）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+SEVENSS_STAKE = 100  # 円/点（ペーパー・5点=500円/レース）
+
+SEVENSS_FEATURES = (
+    "rp_max", "rp_std", "rp_gap12",
+    "fr_max", "fr_std", "fr_gap12",
+    "tr_max", "tr_std", "tr_gap12",
+    "n_lines", "max_line_size", "n_solo", "line_entropy",
+)
+
+# TRAIN(2022-01-01〜2023-12-31・7車立て・n=22,953)のみで確定した凍結パラメータ。
+# TESTでの再計算・再学習は一切行わない（honest固定閾値）。
+SEVENSS_MU = {
+    "rp_max": 88.290582, "rp_std": 3.683336, "rp_gap12": 2.264474,
+    "fr_max": 35.481724, "fr_std": 11.360250, "fr_gap12": 13.195604,
+    "tr_max": 66.454028, "tr_std": 15.218289, "tr_gap12": 10.974465,
+    "n_lines": 3.454015, "max_line_size": 2.885941, "n_solo": 1.105607,
+    "line_entropy": 1.146982,
+}
+SEVENSS_SD = {
+    "rp_max": 14.343346, "rp_std": 2.951000, "rp_gap12": 2.233535,
+    "fr_max": 17.586289, "fr_std": 5.714892, "fr_gap12": 13.676320,
+    "tr_max": 14.768138, "tr_std": 5.438257, "tr_gap12": 9.756276,
+    "n_lines": 1.160679, "max_line_size": 0.749428, "n_solo": 1.871859,
+    "line_entropy": 0.283591,
+}
+SEVENSS_SIGN = {
+    "rp_max": 1.0, "rp_std": -1.0, "rp_gap12": -1.0,
+    "fr_max": -1.0, "fr_std": -1.0, "fr_gap12": -1.0,
+    "tr_max": -1.0, "tr_std": -1.0, "tr_gap12": -1.0,
+    "n_lines": -1.0, "max_line_size": -1.0, "n_solo": -1.0,
+    "line_entropy": 1.0,
+}
+# TRAIN上位20%点（この値以上を「穴指数」高＝波乱予兆レースとして採用）
+SEVENSS_SCORE_THRESHOLD = 4.796886
+
+
+def _sevenss_entropy(vals: list[float]) -> float:
+    total = sum(vals)
+    if total <= 0:
+        return 0.0
+    ent = 0.0
+    for v in vals:
+        s = max(v / total, 1e-9)
+        ent -= s * math.log(s)
+    return ent
+
+
+def _sevenss_pop_std(vals: list[float]) -> float:
+    """母集団標準偏差（ddof=0・exp_upset50系スクリプトのnp.std(default)と同一定義）。"""
+    n = len(vals)
+    if n == 0:
+        return 0.0
+    mean = sum(vals) / n
+    return math.sqrt(sum((v - mean) ** 2 for v in vals) / n)
+
+
+def sevenss_field_features(entries: list[dict]) -> dict[str, float] | None:
+    """entries（各要素: race_point/first_rate/third_rate/line_groupを持つdict）
+    から13特徴を計算する。値欠損時は None。
+    """
+    if any(e.get("race_point") is None or e.get("first_rate") is None
+           or e.get("third_rate") is None for e in entries):
+        return None
+    rps = sorted((float(e["race_point"]) for e in entries), reverse=True)
+    frs = sorted((float(e["first_rate"]) for e in entries), reverse=True)
+    trs = sorted((float(e["third_rate"]) for e in entries), reverse=True)
+    if len(rps) < 2 or len(frs) < 2 or len(trs) < 2:
+        return None
+
+    line_sizes: dict[int, int] = {}
+    for e in entries:
+        lg = e.get("line_group")
+        if lg is not None:
+            line_sizes[lg] = line_sizes.get(lg, 0) + 1
+    n_lines = float(entries[0].get("n_lines") or len(line_sizes) or 0)
+    max_line_size = float(max(line_sizes.values())) if line_sizes else 0.0
+    n_solo = float(sum(1 for v in line_sizes.values() if v == 1))
+    line_entropy = _sevenss_entropy(list(line_sizes.values())) if line_sizes else 0.0
+
+    return {
+        "rp_max": rps[0], "rp_std": _sevenss_pop_std(rps), "rp_gap12": rps[0] - rps[1],
+        "fr_max": frs[0], "fr_std": _sevenss_pop_std(frs), "fr_gap12": frs[0] - frs[1],
+        "tr_max": trs[0], "tr_std": _sevenss_pop_std(trs), "tr_gap12": trs[0] - trs[1],
+        "n_lines": n_lines, "max_line_size": max_line_size, "n_solo": n_solo,
+        "line_entropy": line_entropy,
+    }
+
+
+def sevenss_score(feat: dict[str, float]) -> float:
+    """穴指数（標準化合算スコア）。高いほど波乱（三連複50倍以上）寄り。"""
+    return sum(
+        SEVENSS_SIGN[f] * (feat[f] - SEVENSS_MU[f]) / SEVENSS_SD[f]
+        for f in SEVENSS_FEATURES
+    )
+
+
+def sevenss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
+    """7SSの軸2車を選定する。
+
+    軸1 = race_point(競走得点)単独top1。
+    軸2 = WT公式印(prediction_mark in (2,3,4)=◯△✕)のうち軸1以外で
+          third_rate(3着内率)最大の1頭。
+    候補なし（◯△✕が軸1以外に存在しない・マーク欠損）は None（選定不能）。
+
+    entries の各要素は frame_no/race_point/third_rate/prediction_mark を持つdict。
+    """
+    by_frame = {int(e["frame_no"]): e for e in entries}
+    if any(by_frame[f].get("race_point") is None for f in by_frame):
+        return None
+    axis1 = max(by_frame, key=lambda f: float(by_frame[f]["race_point"]))
+
+    mark_frames = [
+        f for f in by_frame
+        if by_frame[f].get("prediction_mark") in (2, 3, 4) and f != axis1
+        and by_frame[f].get("third_rate") is not None
+    ]
+    if not mark_frames:
+        return None
+    axis2 = max(mark_frames, key=lambda f: float(by_frame[f]["third_rate"]))
+    return axis1, axis2
