@@ -9,6 +9,9 @@ keirin ホスト側スクリプトをバックグラウンド起動する。
   POST /fetch-odds    : 発走前ガミ判定の即時実行 → scripts/notify_prerace_wt.py
   POST /submit-race   : 指定レース1件のみをピンポイントでnetkeirinへ入稿
                         → scripts/netkeirin_submit_wt.py --race-key（通常入稿と同一ルール）
+                        rank_key/axis1/axis2 も含む場合（推奨外レースの手動入稿・
+                        2026-07-31新設）は --manual-rank-key/--axis1/--axis2 を付与し
+                        候補JSON検索を経由しない手動入稿パスを起動する
 
 kiseki 側の呼び出し元:
   backend/src/api/keirin_router.py の /api/keirin/fetch-results, /fetch-odds, /submit-race
@@ -44,6 +47,8 @@ _running: dict[str, subprocess.Popen] = {}
 
 _RACE_KEY_RE = re.compile(r"^\d{8}_\d{2}_\d{2}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# scripts/netkeirin_submit_wt.py の MANUAL_ALLOWED_RANKS と同一（S1は全廃済みのため対象外）
+_MANUAL_ALLOWED_RANKS = ("7SS", "7S", "7A", "9SS", "9S", "9A")
 
 
 def _spawn(name: str, cmd: list[str], log_file: Path, extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
@@ -95,7 +100,12 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(200, {"ok": ok, "message": message})
 
     def _handle_submit_race(self) -> tuple[bool, str, int]:
-        """race_key/date/sessionを検証し、単一レースのみを対象にnetkeirin_submit_wt.pyを起動する。"""
+        """race_key/date/sessionを検証し、単一レースのみを対象にnetkeirin_submit_wt.pyを起動する。
+
+        rank_key/axis1/axis2（任意項目）が揃っている場合は、推奨外レースの手動入稿
+        （kiseki Webのランク選択ダイアログ由来・2026-07-31新設）として
+        --manual-rank-key/--axis1/--axis2 を付与する。
+        """
         length = int(self.headers.get("Content-Length", 0) or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -112,13 +122,29 @@ class Handler(BaseHTTPRequestHandler):
         if session not in ("morning", "evening"):
             return False, f"invalid session: {session}", 400
 
-        log.info("triggered /submit-race race_key=%s date=%s session=%s", race_key, date, session)
+        cmd = [
+            str(KEIRIN_HOME / ".venv" / "bin" / "python3"), "scripts/netkeirin_submit_wt.py",
+            date, session, "--race-key", race_key,
+        ]
+
+        rank_key = body.get("rank_key")
+        axis1 = body.get("axis1")
+        axis2 = body.get("axis2")
+        if rank_key is not None or axis1 is not None or axis2 is not None:
+            rank_key = str(rank_key)
+            if rank_key not in _MANUAL_ALLOWED_RANKS:
+                return False, f"invalid rank_key: {rank_key}", 400
+            try:
+                axis1_i, axis2_i = int(axis1), int(axis2)
+            except (TypeError, ValueError):
+                return False, f"invalid axis1/axis2: {axis1}/{axis2}", 400
+            cmd += ["--manual-rank-key", rank_key, "--axis1", str(axis1_i), "--axis2", str(axis2_i)]
+
+        log.info("triggered /submit-race race_key=%s date=%s session=%s rank_key=%s",
+                  race_key, date, session, rank_key)
         ok, message = _spawn(
             f"submit-race-{race_key}",
-            [
-                str(KEIRIN_HOME / ".venv" / "bin" / "python3"), "scripts/netkeirin_submit_wt.py",
-                date, session, "--race-key", race_key,
-            ],
+            cmd,
             LOG_DIR / "netkeirin_submit.log",
             extra_env={"PYTHONPATH": "."},
         )

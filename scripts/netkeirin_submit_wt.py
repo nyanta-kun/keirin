@@ -26,6 +26,13 @@
 （/keirin）のレース行アイコンからの手動入稿用。ON/OFF・テンプレート・ゲート・
 重複送信防止(already_submitted)は通常実行と完全に同一のルールを適用する）:
     python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning --race-key 20260728_04_07
+
+--manual-rank-key/--axis1/--axis2 を指定すると、候補JSON検索を一切経由せず
+指定した軸2車・ランクで直接入稿する（2026-07-31新設。推奨外レースをkiseki Web
+のダイアログでランク選択して手動入稿するための経路）。--race-keyと併用必須。
+対象ランクは7SS/7S/7A/9SS/9S/9Aのみ（S1は全廃済み・買い目構造が異なるため対象外）:
+    python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning --race-key 20260728_04_07 \
+        --manual-rank-key 7S --axis1 3 --axis2 5
 """
 from __future__ import annotations
 
@@ -362,6 +369,103 @@ def _process_rank(
     return n_submitted, failures
 
 
+# ---------------------------------------------------------------------------
+# 手動入稿（推奨外レース・kiseki Webのランク選択ダイアログ用）— 2026-07-31新設
+# ---------------------------------------------------------------------------
+
+MANUAL_ALLOWED_RANKS = ("7SS", "7S", "7A", "9SS", "9S", "9A")  # S1は全廃済みのため対象外
+
+
+def _resolve_race_info(race_key: str) -> tuple[str, int, int] | None:
+    """race_keyから (venue_name, race_no, n_entries) を候補JSON非依存で解決する。"""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT venue_id, race_no, n_entries FROM wt_races WHERE race_key = ?",
+            (race_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        vrow = conn.execute(
+            "SELECT name FROM venue_info WHERE venue_code = ?", (row["venue_id"],),
+        ).fetchone()
+        venue_name = vrow["name"] if vrow else str(row["venue_id"])
+    return venue_name, int(row["race_no"]), int(row["n_entries"])
+
+
+def _process_manual(
+    race_key: str, rank_key: str, axis1: int, axis2: int, target_date: str, session: str,
+    race_date, settings: dict[str, dict], dry_run: bool,
+) -> tuple[int, list[str]]:
+    """手動指定（推奨外レースへのランク選択入稿）。候補JSON検索を一切経由しない。
+
+    ON/OFF（_global含む）・重複送信防止(already_submitted)は通常経路と同じルールを
+    適用する。gate_filterはSS/S自動判定用のため参照しない（rank_key自体がユーザーの
+    明示選択のため）。
+    """
+    if rank_key not in MANUAL_ALLOWED_RANKS:
+        return 0, [f"{race_key}: 未対応ランク {rank_key}"]
+    if not _is_enabled(settings, rank_key):
+        return 0, []
+    if (race_key, rank_key) in _already_submitted([race_key]):
+        return 0, []
+
+    cfg = RANK_CONFIGS[rank_key]
+    info = _resolve_race_info(race_key)
+    if info is None:
+        return 0, [f"{race_key}: レース情報が見つかりません"]
+    venue_name, race_no, n_entries = info
+    if n_entries != cfg["n_cars"]:
+        return 0, [f"{race_key}: 車数不一致（{n_entries}車 / {rank_key}は{cfg['n_cars']}車想定）"]
+    if axis1 == axis2 or not (1 <= axis1 <= n_entries) or not (1 <= axis2 <= n_entries):
+        return 0, [f"{race_key}: 不正な軸指定 axis1={axis1} axis2={axis2}"]
+
+    partners = [c for c in range(1, n_entries + 1) if c not in (axis1, axis2)]
+    gate_label = cfg["gate_filter"]
+
+    setting = settings.get(rank_key)
+    title_template = (setting or {}).get("title_template") or _DEFAULT_TITLE_TEMPLATE
+    comment_template = (setting or {}).get("comment_template") or _DEFAULT_COMMENT_TEMPLATE
+
+    title = _apply_template(
+        title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
+        target_date=target_date, axis1=axis1, axis2=axis2,
+    )
+    comment = _apply_template(
+        comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
+        target_date=target_date, axis1=axis1, axis2=axis2,
+    )
+    entry_table = _build_entry_table(race_key, {axis1: "◎", axis2: "○"})
+    if entry_table:
+        comment = f"{comment}\n\n{entry_table}"
+
+    if dry_run:
+        print(
+            f"[dry-run][manual] {venue_name}{race_no}R ({rank_key}) "
+            f"軸={axis1}-{axis2} 相手={partners} 賭け金={cfg['stake_per_line']}円/点\n"
+            f"  タイトル: {title}\n"
+            f"  コメント:\n{comment}\n",
+            flush=True,
+        )
+        return 1, []
+
+    try:
+        ok, msg = NetkeirinClient().submit_pick(
+            race_date=race_date, venue_name=venue_name, race_no=race_no,
+            n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
+            axis1=axis1, axis2=axis2, partners=partners,
+            stake_per_line=cfg["stake_per_line"], title=title, comment=comment,
+        )
+    except Exception as e:
+        ok, msg = False, f"例外: {e}"
+
+    if ok:
+        _record_submission(race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2, msg)
+        print(f"[netkeirin_submit][manual] 入稿成功 {venue_name}{race_no}R ({rank_key}) → {msg}", flush=True)
+        return 1, []
+    print(f"[netkeirin_submit][manual] 入稿失敗 {venue_name}{race_no}R ({rank_key}): {msg}", flush=True)
+    return 0, [f"{venue_name}{race_no}R({rank_key}): {msg}"]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("target_date")
@@ -371,6 +475,12 @@ def main() -> None:
         "--race-key", default=None,
         help="指定時はこのレース(race_key)のみをピンポイントで対象にする（それ以外は通常と同一ルール）",
     )
+    parser.add_argument(
+        "--manual-rank-key", default=None, choices=MANUAL_ALLOWED_RANKS,
+        help="指定時は候補JSON検索を経由せず--axis1/--axis2で手動入稿する（--race-key必須）",
+    )
+    parser.add_argument("--axis1", type=int, default=None, help="--manual-rank-key指定時の軸1車番")
+    parser.add_argument("--axis2", type=int, default=None, help="--manual-rank-key指定時の軸2車番")
     args = parser.parse_args()
 
     target_date, session = args.target_date, args.session
@@ -379,6 +489,36 @@ def main() -> None:
     settings = _load_settings()
     if not _is_enabled(settings, "_global"):
         print(f"[netkeirin_submit] {target_date} {session}: 全体OFF（スキップ）", flush=True)
+        return
+
+    if args.manual_rank_key:
+        if not args.race_key or args.axis1 is None or args.axis2 is None:
+            print("[netkeirin_submit] --manual-rank-key には --race-key/--axis1/--axis2 が必須です", flush=True)
+            raise SystemExit(1)
+        n, failures = _process_manual(
+            args.race_key, args.manual_rank_key, args.axis1, args.axis2,
+            target_date, session, race_date, settings, args.dry_run,
+        )
+        if args.dry_run:
+            print(f"[dry-run][manual] {target_date} {session}: 完了（生成{n}件）", flush=True)
+            return
+        if n > 0:
+            try:
+                send(
+                    f"📮 **[netkeirin手動入稿] {target_date}（{SESSION_LABEL_JP[session]}）: "
+                    f"{args.manual_rank_key} 1件**\n確認: {RACE_AUTH_URL}\n内容を確認の上、公開してください。",
+                    channel="netkeirin",
+                )
+            except Exception as e:
+                print(f"[netkeirin_submit] Discord通知失敗: {e}", flush=True)
+        elif failures:
+            try:
+                send(f"⚠️ **[netkeirin手動入稿] {target_date}（{SESSION_LABEL_JP[session]}）: 失敗**\n"
+                     + " / ".join(failures), channel="netkeirin")
+            except Exception as e:
+                print(f"[netkeirin_submit] Discord通知失敗: {e}", flush=True)
+        print(f"[netkeirin_submit][manual] {target_date} {session}: 完了（成功{n}件・失敗{len(failures)}件）",
+              flush=True)
         return
 
     all_race_keys: set[str] = set()
