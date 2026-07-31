@@ -219,6 +219,88 @@ gate_labelでSS/Sに分割表示)・S9(NINE_S9・S7の9車版・独立ランク)
 gate_labelなし)の5内部rank・7表示ランク（旧S2/S3・6車三連単S1・A・SS+等は全廃、
 詳細は`prediction-factors.md`/`../CLAUDE.md`「現行ランク体系」節）。
 
+### モデル配布・鮮度監視（D-5/D-6, 2026-07-31追加）
+
+**D-5: 月次vintageモデルのVPS配布漏れ対策**
+
+従来、Mac crontabの`weekly_retrain_wt.sh`実行行の末尾に直接`rsync`コマンドが
+書かれており、転送対象ファイルを長いコマンドラインで明示列挙していた
+（`lgbm_wt.pkl`/`lgbm_wt_train_only.*`/`lgbm_wt_win.*`/`lgbm_wt_eval.*`/
+`lgbm_wt_win_eval.*`/`upset_cuts_wt.json`のみ）。`docs/vintage_model_policy.md`
+記載の月次vintageモデル（`lgbm_wt_eval_m????.pkl`/`lgbm_wt_win_m????.pkl`とその
+`.meta.json`、2026-07-30時点62本104MB）はこの列挙に含まれておらず、2026-07-30に
+一度きり手動rsyncで配布されたのみだった。`train_monthly_vintage_models.py
+--only-missing`で新しい月のモデルを追加作成しても、この構造のままではVPS側は
+今後も受け取れない。
+
+対策として `scripts/sync_models_to_vps.sh` を新設し、転送対象ファイルの列挙を
+crontab（変更漏れの温床）からスクリプト側に一本化した。月次vintageモデルは
+ファイル名パターン（`lgbm_wt_eval_m[0-9][0-9][0-9][0-9].pkl`等）で動的に検出する
+ため、新しい月のモデルが増えてもスクリプトの変更は不要。転送後に
+(1) `rsync --checksum --dry-run` によるチェックサム照合、
+(2) VPS側ファイル数照合、の2段階で到達を検証し、失敗時は
+`src/notify/discord.py::send(msg, channel="system")` で通知する。
+`--dry-run` オプションで実転送なしに対象ファイル一覧を確認できる。
+
+**crontabは本タスクでは変更していない**（既存のrsync直書き行がそのまま動作を
+継続している）。`weekly_retrain_wt.sh`実行後に本スクリプトへ切り替える場合は、
+以下の差分をPM/ユーザー判断で適用すること:
+
+```
+# 変更前（現行）:
+30 23 * * 0 /Users/ysuzuki/GitHub/keirin/scripts/weekly_retrain_wt.sh \
+  >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1 && \
+  rsync -av <個別ファイルを明示列挙...> sekito:~/keirin/data/models/ \
+  >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+
+# 変更後（提案）:
+30 23 * * 0 /Users/ysuzuki/GitHub/keirin/scripts/weekly_retrain_wt.sh \
+  >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1 && \
+  /Users/ysuzuki/GitHub/keirin/scripts/sync_models_to_vps.sh \
+  >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+```
+
+**D-6: 週次再学習がスリープでスキップされても検知できない問題への対策**
+
+2026-07-31実機確認で `pmset -g sched` はスケジュール済みwake/poweron 0件だった。
+日曜23:30にMacがスリープ/シャットダウンしていると週次再学習・モデル配布が
+丸ごとスキップされるが、`weekly_retrain_wt.sh`のAUCゲートは「今週実行されたか
+どうか」自体は検知できず、通知も発生しないため気付かれにくい。
+
+方向A（VPS側からの実行検知）として `scripts/check_model_freshness.py` を新設した。
+本番モデル4種（`lgbm_wt.pkl`/`lgbm_wt_eval.pkl`/`lgbm_wt_win.pkl`/
+`lgbm_wt_win_eval.pkl`。週次再学習で再生成されない`lgbm_wt_train_only.pkl`は
+対象外）のmtimeを見て、既定8日（週次周期7日+1日の実行猶予）を超えて
+更新が無ければDiscord（systemチャンネル）へ警告する。VPSはメモリ1.9GB・
+空き実測101MB程度と逼迫しているため、`os.stat`によるmtime比較のみで
+pandas/lightgbm等の重い依存はimportしない設計にしている。**VPS cronへの
+登録は本タスクでは行っていない**（登録すればVPS crontabの変更が必要なため、
+以下のコマンドを提示するに留める。実際の登録はユーザー判断で実施すること）:
+
+```
+0 9 * * * cd $KEIRIN_HOME && PYTHONPATH=. .venv/bin/python3 \
+  scripts/check_model_freshness.py >> $KEIRIN_HOME/data/logs/cron.log 2>&1
+```
+
+方向B（`pmset repeat wakeorpoweron`によるスリープ対策）は、2026-07-31時点で
+`pmset -g sched` が空である（＝現状このMacにはDBバックアップ用も含めて
+wake/poweronスケジュールが一切設定されていない）ことを確認した。`man pmset`
+によれば `pmset repeat` は**システム全体でwake系・sleep/shutdown系それぞれ
+1本ずつしかスケジュールを保持できない**仕様のため、「日曜23:25起床」と
+「毎日03:25起床（kiseki側DBバックアップ想定）」を別々の時刻・別々の曜日指定で
+共存させることはできない。両立させたい場合は**毎日同一時刻に統一したwake**
+（例: 毎日23:25に起床。当該日23:30の週次再学習と、翌日03:30のDBバックアップの
+両方を1回の起床でカバーできる）にする必要がある。加えて、本機は現在
+`pmset -g` で `SleepDisabled 1`（アイドルによる自動スリープが無効化された状態）
+であることを確認済みで、これが維持されている限りアイドルスリープ由来の
+スキップリスクは実質的に低い。ただし手動スリープ・蓋閉じ・再起動・停電等の
+リスクは残るため、方向Aの検知は方向Bの有無に関わらず有効である。
+`sudo`が必要なため、以下は実行コマンドの提示のみで実際の設定はユーザーが行うこと:
+
+```
+sudo pmset repeat wakeorpoweron MTWRFSU 23:25:00
+```
+
 ---
 
 ## 開発経緯（簡略）
