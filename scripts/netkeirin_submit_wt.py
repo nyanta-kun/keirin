@@ -55,7 +55,7 @@ from src.netkeirin_client import (
     RACE_AUTH_URL,
 )
 from src.notify.discord import send
-from src.strategy_wt import s7_gate_label
+from src.strategy_wt import rank_7s_gate_label
 
 SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
 
@@ -72,7 +72,7 @@ _DEFAULT_COMMENT_TEMPLATE = (
 )
 
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
-# サフィックス。gate_filter は None なら候補全件対象、'SS'/'S' なら s7_gate_label() で絞り込む
+# サフィックス。gate_filter は None なら候補全件対象、'SS'/'S' なら rank_7s_gate_label() で絞り込む
 # （7SS/7S・9SS/9S は同じ候補ファイルを wt_overlap_n で分岐させたもの）。
 # S1は2026-07-31にdf31431でユーザー判断により全廃済み（picks_history のS1行も削除済み）。
 # 本エントリは対応漏れで残存していた（レビューで検出）。MANUAL_ALLOWED_RANKS（下記）で
@@ -297,7 +297,7 @@ def _process_rank(
     for cand in raw:
         gate_label = None
         if cfg["gate_filter"] is not None:
-            gate_label = s7_gate_label(cand.get("wt_overlap_n"))
+            gate_label = rank_7s_gate_label(cand.get("wt_overlap_n"))
             if gate_label != cfg["gate_filter"]:
                 continue
         targets.append((cand, gate_label))
