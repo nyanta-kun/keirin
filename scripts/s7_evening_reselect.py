@@ -19,6 +19,15 @@ S7_DAILY_CAP（entropy昇順・信頼度の高い順）を再導入した。hone
 evening_picks_wt.sh から wave-picks-wt（夜の部）の直後・write_candidates_wt.py
 の前に呼ばれる。
 
+netkeirin入稿済み下書きの取り下げ漏れ対応（2026-07-31追加）:
+netkeirin_submit_wt.py は「同一(race_key, rank_key)への再送信は上書きされる
+だけなので朝夕で対象が重複しても無害」としているが、これは選出対象がずっと
+残り続けるケースの話であり、**トリムで選出から完全に外れた場合は例外**。
+未購入プレースホルダを削除する際、その race_key が既に netkeirin_submissions
+に入稿済み（rank_key: 7SS/7S）であれば、下書きが「幽霊ピック」として残るため
+Discordへ警告する（`netkeirin`チャンネル）。通知はベストエフォート
+（失敗してもトリム処理自体は継続する）。
+
 使い方:
     python3 scripts/s7_evening_reselect.py [YYYY-MM-DD]
 """
@@ -33,7 +42,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
+from src.netkeirin_client import RACE_AUTH_URL
+from src.notify.discord import send
 from src.strategy_wt import s7_evening_reselect
+
+# netkeirin_submit_wt.py の RANK_CONFIGS で file_key="s7" に紐づく表示ランク。
+# s7_gate_label() は現在 "S" のみ返す（"SS" は2026-07-31廃止）が、netkeirin側の
+# ランク定義自体は残っているため、取り下げ漏れ検知では両方を対象にしておく。
+_S7_NETKEIRIN_RANK_KEYS = ("7SS", "7S")
 
 
 def _load_raw(path: Path) -> list[dict]:
@@ -57,10 +73,66 @@ def _locked_keys(target_date: str) -> set[str]:
     return {r[0].split("#")[0] for r in rows}
 
 
+def _find_netkeirin_submitted(dropped_keys: set[str]) -> list[tuple[str, str]]:
+    """dropped_keys のうち netkeirin へ既に入稿済み（netkeirin_submissions に
+    存在）の (race_key, rank_key) 一覧を返す。DB接続失敗時は例外を送出する
+    （呼び出し側の _notify_netkeirin_orphans で握りつぶす）。
+    """
+    if not dropped_keys:
+        return []
+    keys = sorted(dropped_keys)
+    placeholders = ",".join("?" * len(keys))
+    rank_placeholders = ",".join("?" * len(_S7_NETKEIRIN_RANK_KEYS))
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT race_key, rank_key FROM netkeirin_submissions "
+            f"WHERE race_key IN ({placeholders}) AND rank_key IN ({rank_placeholders})",
+            (*keys, *_S7_NETKEIRIN_RANK_KEYS),
+        ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def _notify_netkeirin_orphans(target_date: str, dropped_keys: set[str]) -> None:
+    """netkeirin入稿済みのままトリムで選出から外れたレースをDiscordへ警告する。
+
+    付加機能のため、DB問い合わせ・Discord送信いずれの失敗もログに残すのみで
+    例外を外へ伝播させない（本体のトリム処理を止めないため）。
+    """
+    try:
+        submitted = _find_netkeirin_submitted(dropped_keys)
+    except Exception as e:
+        print(f"[s7_evening_reselect] netkeirin_submissions確認 失敗: {e}", flush=True)
+        return
+    if not submitted:
+        return
+
+    lines = "\n".join(
+        f"- {target_date} race_key={rk} rank={rank_key}"
+        for rk, rank_key in sorted(submitted)
+    )
+    msg = (
+        "⚠️ **[netkeirin取り下げ漏れ]** netkeirin に入稿済みの下書きが夕方のトリムで"
+        "選出から外れました。手動で削除してください。\n"
+        f"{lines}\n"
+        f"確認: {RACE_AUTH_URL}"
+    )
+    try:
+        send(msg, channel="netkeirin")
+    except Exception as e:
+        print(f"[s7_evening_reselect] netkeirin取り下げ漏れDiscord通知失敗: {e}", flush=True)
+
+
 def _delete_dropped_placeholders(target_date: str, dropped_keys: set[str]) -> None:
-    """トリムで外れた未購入プレースホルダ行（bet_amount=0）をDBから削除する。"""
+    """トリムで外れた未購入プレースホルダ行（bet_amount=0）をDBから削除する。
+
+    削除前に、対象レースが netkeirin へ既に入稿済みでないか確認し、入稿済みなら
+    Discordへ警告する（`_notify_netkeirin_orphans` 参照・失敗してもここでの
+    削除処理は継続する）。
+    """
     if not dropped_keys:
         return
+    _notify_netkeirin_orphans(target_date, dropped_keys)
+
     store_keys = [f"{rk}#7S7" for rk in dropped_keys]
     try:
         with get_connection() as conn:
