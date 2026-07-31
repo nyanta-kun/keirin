@@ -268,17 +268,15 @@ def _third_list(axis1: int, axis2: int, n_cars: int) -> str:
 
 
 def _write_paper_candidates(target_date: str) -> None:
-    """S1/S7/S9/7A/9A（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
+    """S7/S9/7A/9A（ペーパー検証ランク）の候補レースを picks_history に即時書き込む。
 
-    2026-07-16〜: 候補時点で {rk}#7S1 行（bet_amount=0・miwokuri=False・
-    pred_combo はプレースホルダ）を挿入し、当日中から推奨ページに候補として表示する。
-    2026-07-21〜: S7（{rk}#7S7）も同様に候補時点で書き込む。以前は発走15分前の
+    2026-07-21〜: S7（{rk}#7S7）を候補時点で書き込む。以前は発走15分前の
     買い判定が成立して初めて行が生成されるため、それ以前は他の推奨外レースと
     区別がつかず、また15分前判定がオッズ条件で見送りになった場合は行自体が
     存在せず _mark_paper_miwokuri() のUPDATEが対象0件で空振りしていた
     （候補だったのに「推奨外」と見分けがつかない・ユーザー指摘で発覚）。
     2026-07-28〜: S9（{rk}#9S9）・7A（{rk}#7A）・9A（{rk}#9A）も同様に候補時点で
-    書き込む。従来はS1/S7のみ候補時点表示で、S9/7A/9Aは発走15分前判定
+    書き込む。従来はS7のみ候補時点表示で、S9/7A/9Aは発走15分前判定
     （notify_prerace_wt）が成立するまでページに現れなかった（ユーザー指摘で発覚。
     軸2車・波乱度・ゲート判定はいずれもオッズ非依存でモデル計算のみから確定するため
     候補時点表示に技術的制約はない）。
@@ -297,6 +295,9 @@ def _write_paper_candidates(target_date: str) -> None:
     発生した（write_candidates_wt.py は候補JSONの中身をそのまま信用してINSERT OR
     REPLACEするため、ファイルさえ存在すれば何度でも復活してしまう）。再発防止のため
     ファイルの有無に関わらずU/Mの読み込み自体をコードレベルで無効化する。
+    S1（#7S1・SEVEN_S1）は 2026-07-31 に df31431 でユーザー判断により全廃されたが、
+    本関数の読み込みブロックが対応漏れで残存していた（レビューで検出）。U/Mの前例に
+    倣い、ファイルの有無に関わらずS1の読み込み自体をコードレベルで無効化する。
     """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
 
@@ -312,17 +313,8 @@ def _write_paper_candidates(target_date: str) -> None:
         return out
 
     rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder, gate_label)
-    # U(#7U)/M(#7M) は 2026-07-21 全廃のため読み込み自体を行わない（上記docstring参照）。
-    for c in _load((f"wave_picks_wt_{target_date}_s1_candidates.json",
-                    f"wave_picks_wt_{target_date}_night_s1_candidates.json")):
-        rk = c.get("race_key")
-        axis, p1, p2 = c.get("axis"), c.get("p1"), c.get("p2")
-        if not rk or axis is None or p1 is None or p2 is None:
-            continue
-        # S1は「流し」ではなく軸1着固定・p1/p2の2着3着入替2点（残り車への流しはない）。
-        # 表記: axis→p1=p2（U/Mの "=" 記法と統一・ユーザーフィードバック反映）
-        rows.append((f"{rk}#7S1", "SEVEN_S1", f"{axis}→{p1}={p2}", None))
-
+    # U(#7U)/M(#7M) は 2026-07-21 全廃・S1(#7S1) は 2026-07-31 全廃のため
+    # 読み込み自体を行わない（上記docstring参照）。
     for c in _load((f"wave_picks_wt_{target_date}_s7_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s7_candidates.json")):
         rk = c.get("race_key")
@@ -380,7 +372,7 @@ def _write_paper_candidates(target_date: str) -> None:
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S1/S7/S9/7A/9A) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(S7/S9/7A/9A) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")

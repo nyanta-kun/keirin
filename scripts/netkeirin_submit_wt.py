@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""全7予想ランク（S1/7SS/7S/7A/9SS/9S/9A）をnetkeirin「ウマい車券」へ下書き自動入稿する。
+"""全6予想ランク（7SS/7S/7A/9SS/9S/9A）をnetkeirin「ウマい車券」へ下書き自動入稿する。
 
 2026-07-23に7SS/7S専用スクリプトとして新設、2026-07-28に全ランク対応へ全面再構成。
 朝バッチ(daily_picks_wt.sh)・夕バッチ(evening_picks_wt.sh)それぞれの候補生成
@@ -74,8 +74,10 @@ _DEFAULT_COMMENT_TEMPLATE = (
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
 # サフィックス。gate_filter は None なら候補全件対象、'SS'/'S' なら s7_gate_label() で絞り込む
 # （7SS/7S・9SS/9S は同じ候補ファイルを wt_overlap_n で分岐させたもの）。
+# S1は2026-07-31にdf31431でユーザー判断により全廃済み（picks_history のS1行も削除済み）。
+# 本エントリは対応漏れで残存していた（レビューで検出）。MANUAL_ALLOWED_RANKS（下記）で
+# 既にS1を除外済みだったのに合わせ、自動バッチ経路のRANK_CONFIGS/RANK_ORDERからも除外する。
 RANK_CONFIGS: dict[str, dict[str, Any]] = {
-    "S1":  {"file_key": "s1",  "n_cars": 7, "bet_kind": BET_KIND_TRIFECTA_AXIS1, "stake_per_line": 5000, "gate_filter": None},
     "7SS": {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "SS"},
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
     "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": None},
@@ -83,7 +85,7 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
     "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
     "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
 }
-RANK_ORDER = ["S1", "7SS", "7S", "7A", "9SS", "9S", "9A"]
+RANK_ORDER = ["7SS", "7S", "7A", "9SS", "9S", "9A"]
 
 
 # ---------------------------------------------------------------------------

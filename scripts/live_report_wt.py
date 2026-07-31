@@ -1,16 +1,24 @@
 """live実測レポートCLI — picks_history(route='wt')の集計・ドリフト割引率・必要標本数。
 
 G02: 採否判断の唯一の裁定者（live実測）を見える化する。
-  1. ランク別成績: 7PLUS_R(表示SS) 別（S/S+は2026-07-15全廃・集計対象外）
+  1. ランク別成績: 7S/7A/9S/9A（現行4ランク）別
      n・的中率・投資額・払戻・ROI・bootstrap CI・最大払戻除去ROI
   2. タグ別成績: detail.json の fav_mismatch / upset_tier / top3_sum帯 を race_key で picks_history に突合
   3. 朝→確定ドリフト割引率: wt_odds_snapshot(morning/evening) vs wt_odds(確定) のオッズ帯別ドリフト率
   4. 必要標本数の推定: 現在の的中率・払戻分布を所与として ROI CI下限 >100% に必要な残R数
   5. --from/--to 期間指定、--format md でマークダウン出力
 
-ランク体系は notify_prerace_wt.py（2026-07-10〜）に準拠。内部 rank 列は 7PLUS_R
-のみが購入対象（見送り miwokuri=True・候補 7PLUS_CAND は集計から除外・notify_results_wt.py の
+ランク体系は notify_prerace_wt.py / notify_results_wt.py に準拠。内部 rank 列は
+SEVEN_S7(表示7S)・SEVEN_7A(表示7A)・NINE_S9(表示9S)・NINE_9A(表示9A) の4つが購入
+対象（見送り miwokuri=True・候補行は集計から除外・notify_results_wt.py の
 集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
+SEVEN_S1 は2026-07-31に全廃済み（picks_history からも削除済み）のため対象外。
+SEVEN_SS はユーザーの未本番投入の新戦略のため対象外。
+
+[2026-07-31 修正] RANKS/RANK_LABELS が2026-07-16に全廃されたランク 7PLUS_R
+（表示SS）のまま放置されていたため、`_load_picks()` の `rank IN ('7PLUS_R')` が
+常に0件を返し ROI 計算不能になっていた（レビューで検出・3週間以上未修正のまま
+放置されていた）。現行4ランクへ更新。
 
 注: DB 書込みなし・Discord通知なし・標準入出力のみ。
 """
@@ -30,10 +38,20 @@ _SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS))
 from roi_robustness_wt import roi_summary  # noqa: E402
 
-# ── ランク体系（2026-07-10〜・notify_prerace_wt.py と同一） ──────────────
-# 内部rank（DB格納値） → 表示ラベル。購入対象はこの3つのみ（見送り/候補は集計除外）。
-RANKS = ["7PLUS_R"]
-RANK_LABELS = {"7PLUS_R": "SS"}
+# ── ランク体系（2026-07-31〜・notify_results_wt.py の _query_stats を正本とする） ──
+# 内部rank（DB格納値） → 表示ラベル。購入対象はこの4つのみ（見送り/候補は集計除外）。
+# 正本: notify_results_wt.py::_query_stats（:301-315付近）の IN 句
+#   ('SEVEN_S1', 'SEVEN_S7', 'NINE_S9', 'SEVEN_7A', 'NINE_9A') のうち、
+#   SEVEN_S1（2026-07-31全廃・picks_historyから削除済み）を除外した4ランク。
+#   SEVEN_SS はユーザーの未本番投入の新戦略のためここでは含めない
+#   （_query_stats 自身の既知の漏れであり、正本として引き継ぐべきバグではない）。
+RANKS = ["SEVEN_S7", "SEVEN_7A", "NINE_S9", "NINE_9A"]
+RANK_LABELS = {
+    "SEVEN_S7": "7S",
+    "SEVEN_7A": "7A",
+    "NINE_S9": "9S",
+    "NINE_9A": "9A",
+}
 
 # ── picks_history 集計 ─────────────────────────────────────────────
 
@@ -41,8 +59,8 @@ RANK_LABELS = {"7PLUS_R": "SS"}
 def _load_picks(date_from: str | None, date_to: str | None) -> list[dict]:
     """picks_history から route='wt' の購入確定行（見送り・候補を除く）を取得。
 
-    購入対象ランクは 7PLUS_R(表示SS・三連複) のみ。
-    見送り(miwokuri=True)・候補(7PLUS_CAND)・bet_amount=0（プレースホルダー行）は集計対象外
+    購入対象ランクは RANKS（SEVEN_S7/SEVEN_7A/NINE_S9/NINE_9A の現行4ランク）のみ。
+    見送り(miwokuri=True)・候補行・bet_amount=0（プレースホルダー行）は集計対象外
     （notify_results_wt.py の _query_stats と同一条件）。
     """
     placeholders = ",".join("?" * len(RANKS))
@@ -131,7 +149,7 @@ def _top3_band(v) -> str | None:
 
 
 def _rank_section(picks: list[dict]) -> dict[str, dict]:
-    """ランク別 (7PLUS_R・表示SS) の roi_summary を返す。"""
+    """ランク別 (RANKS: 7S/7A/9S/9A) の roi_summary を返す。"""
     buckets: dict[str, tuple[list, list]] = {}
     for r in picks:
         rank = r["rank"]
@@ -150,7 +168,7 @@ def _rank_section(picks: list[dict]) -> dict[str, dict]:
 def _tag_section(picks: list[dict], tags: dict[str, dict]) -> dict:
     """タグ有無別の live ROI を計算する。
 
-    picks は _load_picks で購入確定ランク(7PLUS_R)のみに
+    picks は _load_picks で購入確定ランク(RANKS: 7S/7A/9S/9A)のみに
     絞り込み済みのため、ここでは追加のランク除外は不要（全件が対象）。
     """
     main_picks = picks
@@ -343,14 +361,14 @@ def _render_text(result: dict, date_from, date_to) -> str:
             f"[{s['ci_lo']:>7.1%},{s['ci_hi']:>7.1%}]{s['roi_ex_max']:>10.1%}"
             f"{inv:>12,}{ret:>12,}"
         )
-    # 合計 (SS/S/S+ 全ランク)
+    # 合計 (7S/7A/9S/9A 全ランク)
     main_s = result.get("main_total")
     if main_s:
         inv_m = result["rank_raw"].get("_main_inv", 0)
         ret_m = result["rank_raw"].get("_main_pay", 0)
         lines.append("  " + "-" * 82)
         lines.append(
-            f"  {'SS+S+S+':<7}{main_s['n']:>5}{main_s['hit_rate']:>8.1%}{main_s['roi']:>7.1%} "
+            f"  {'合計':<7}{main_s['n']:>5}{main_s['hit_rate']:>8.1%}{main_s['roi']:>7.1%} "
             f"[{main_s['ci_lo']:>7.1%},{main_s['ci_hi']:>7.1%}]{main_s['roi_ex_max']:>10.1%}"
             f"{inv_m:>12,}{ret_m:>12,}"
         )
@@ -442,7 +460,7 @@ def _render_md(result: dict, date_from, date_to) -> str:
         inv_m = result["rank_raw"].get("_main_inv", 0)
         ret_m = result["rank_raw"].get("_main_pay", 0)
         ci = f"[{main_s['ci_lo']:.1%},{main_s['ci_hi']:.1%}]"
-        lines.append(f"| **SS+S+S+** | **{main_s['n']}** | **{main_s['hit_rate']:.1%}** | **{main_s['roi']:.1%}** | {ci} | **{main_s['roi_ex_max']:.1%}** | **{inv_m:,}** | **{ret_m:,}** |")
+        lines.append(f"| **合計** | **{main_s['n']}** | **{main_s['hit_rate']:.1%}** | **{main_s['roi']:.1%}** | {ci} | **{main_s['roi_ex_max']:.1%}** | **{inv_m:,}** | **{ret_m:,}** |")
     lines.append("\n※ N<50 の層は標本不足で暫定。")
 
     # 2. タグ別
@@ -511,7 +529,7 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
     picks = _load_picks(date_from, date_to)
     tags = _load_tags(date_from, date_to)
 
-    # ランク別（7PLUS_R のみ・_load_picks で購入確定行に絞り込み済み）
+    # ランク別（RANKS: 7S/7A/9S/9A のみ・_load_picks で購入確定行に絞り込み済み）
     rank_summaries = _rank_section(picks)
     rank_raw: dict[str, dict] = {}
     for rank in RANKS:
@@ -521,7 +539,7 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
             "total_pay": sum(p["payout"] for p in ps),
         }
 
-    # SS+S+S+ 合計（全購入ランク合算）
+    # 合計（全購入ランク合算: 7S+7A+9S+9A）
     main_picks = picks
     main_pays = [p["payout"] for p in main_picks]
     main_bets = [p["bet_amount"] for p in main_picks]
@@ -538,7 +556,7 @@ def build_report(date_from: str | None = None, date_to: str | None = None) -> di
     # 必要標本数
     required: dict[str, dict] = {}
     if main_picks:
-        required["SS+S+S+合算"] = _required_n_section(main_pays, main_bets)
+        required["全ランク合算"] = _required_n_section(main_pays, main_bets)
     # fav_mismatch タグ別
     fm_picks = [p for p in main_picks
                 if tags.get(p["race_key"].split("#", 1)[0], {}).get("fav_mismatch") is True]
