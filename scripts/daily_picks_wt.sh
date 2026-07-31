@@ -112,10 +112,8 @@ echo "[$(date '+%H:%M:%S')] 予想生成（winticket・7+車専用 gami≥5倍+g
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 予想生成: 対象レース無し or 失敗（継続）"
 
-echo "[$(date '+%H:%M:%S')] 予想をDiscordへ通知..."
-.venv/bin/python3 scripts/notify_picks.py "$TODAY" wave_picks_wt \
-  2>&1 | tee -a "$LOG_DIR/notify_wt_${TODAY}.log" \
-  || echo "[$(date '+%H:%M:%S')] 予想通知に失敗（継続）"
+# 「朝夕の推奨」Discord通知（notify_picks.py）は2026-07-31にユーザー要望により廃止。
+# 発走15分前の個別通知（notify_prerace_wt.py）のみ残す。
 
 # 候補レース（gap12条件のみ・gamiフィルタなし）を picks_history に即時書き込み
 # → 同日中から推奨ページに候補レースを表示するため

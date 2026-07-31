@@ -51,6 +51,7 @@ keirin/
 │   ├── intraday_results_wt.sh         # ★本番日中（cron 0,10-23時）当日結果逐次収集・通知なし
 │   ├── weekly_retrain_wt.sh           # ★本番週次（cron 日23:30）
 │   ├── notify_picks.py                # wave-picks 通知 + PDF生成 → Discord
+│   │                                   # （「朝夕の推奨」は2026-07-31廃止。日次/夕方cronからの呼び出しなし）
 │   ├── notify_results_wt.py           # wt前日結果採点 + picks_history(route='wt') → Discord
 │   ├── snapshot_morning_odds_wt.py    # 朝オッズ退避(wt_odds_snapshot) / --report ドリフト計測
 │   ├── snapshot_intraday_odds_wt.py   # 日中オッズスナップショット（money-flow素材・G03）
@@ -198,10 +199,11 @@ AM 8:00 （daily_picks_wt.sh）
   ⑦ wave-picks-wt --date $(today) \
        --min-gap12 0.07 --include-7plus --start-to-hour 19
                                                   # 予想生成（lgbm_wt 48特徴・S1/S7/S9/7A/9A候補・7車+9車専用）
-  ⑧ notify_picks.py $(today) wave_picks_wt       # 予想 + PDF → Discord
-  ⑨ write_candidates_wt.py $(today)              # 候補レース(S1/S7/S9/7A/9A)をpicks_historyへ即時書き込み
+  ⑧ write_candidates_wt.py $(today)              # 候補レース(S1/S7/S9/7A/9A)をpicks_historyへ即時書き込み
                                                   # （推奨ページ表示用。2026-07-28にS9/7A/9Aも対応）
-  ⑩ migrate_sqlite_to_pg.py                      # VPS PostgreSQL同期（KEIRIN_DB_URL設定時）
+  ⑨ migrate_sqlite_to_pg.py                      # VPS PostgreSQL同期（KEIRIN_DB_URL設定時）
+（旧⑧ notify_picks.py「朝夕の推奨」Discord通知は2026-07-31にユーザー要望により廃止。
+  発走15分前の個別通知（notify_prerace_wt.py）のみ残る）
 夕方（16:00, evening_picks_wt.sh）: 夜レース分の候補生成 → s7_evening_reselect.py が朝夕のS7生候補を
   統合（2026-07-26にentropyゲート方式へ変更・件数capは日次12件の安全網としてのみentropy昇順トリム）。
 日中毎分（8-23時, notify_prerace_wt.py）: 発走15分前の最終オッズで候補を買い/見送り判定・Discord通知・picks_history記録。

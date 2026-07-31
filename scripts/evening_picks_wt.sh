@@ -36,11 +36,8 @@ echo "[$(date '+%H:%M:%S')] 夜レース(19時〜)の推奨を生成..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜の部: 対象レース無し or 失敗（継続）"
 
-# 3. 夜の部のみDiscordへ通知（Xポスト省略・日中の重複通知なし・指数PDFは更新版）
-echo "[$(date '+%H:%M:%S')] 夜の部をDiscordへ通知..."
-.venv/bin/python3 scripts/notify_picks.py "$TODAY" wave_picks_wt night \
-  2>&1 | tee -a "$LOG_DIR/notify_wt_${TODAY}.log" \
-  || echo "[$(date '+%H:%M:%S')] 夜の部通知に失敗（継続）"
+# 3. 「朝夕の推奨」Discord通知（notify_picks.py）は2026-07-31にユーザー要望により廃止。
+# 発走15分前の個別通知（notify_prerace_wt.py）のみ残す。
 
 # 2b. S7（Sランク）朝夜統合再選出（2026-07-22新設計）: 朝夜の生候補プールを合算し
 #     axis_sumランキングを組み直す。既に買い判定済み(ロック済み)のレースは変更しない。
