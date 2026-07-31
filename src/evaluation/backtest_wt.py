@@ -23,6 +23,18 @@ keirin-station 版 (backtest.py) と買い目戦略・combo生成関数を共有
   ② ≤6車フィルタは出走表基準で適用する（完走者基準にすると7車立てが33%混入）
   ③ 欠車処理: 軸(p1/p2)欠車=レース無効 / 相手欠車=その目のみ除外
      （notify_results_wt._void_by_dns と同一ルール。src/evaluation/void_rules.py に共通化）
+
+## ③の判定基準の是正（2026-07-31・PMタスク B-4）
+doc18時点の③実装は「欠車」の判定に `finish_order >= 1`（完走者基準）を使っていたが、
+これは本番 notify_results_wt._void_by_dns の基準（オッズ盤面(trio)掲載車）と異なる。
+発走後の落車・失格・棄権（DNF, finish_order=0）は発走前に確定した最終オッズ盤面には
+残ったままであり、本番はこれを「購入成立のまま外れ計上（没収）」する。完走者基準の
+ままだと DNF を欠車と誤認して返還（損失不計上）扱いにしてしまい、honest ROI を実際の
+精算より高く見せる方向のバイアスが生じていた。
+`_load_board_frames_wt()`（notify_results_wt._board_frames と同一構築方法）で盤面
+掲載車集合を構築し、`_compute_accum_wt` / `run_tiered_backtest_wt` /
+`run_value_backtest_wt` の3箇所でこれを優先使用するよう修正。該当レースの盤面データが
+存在しない場合のみ完走者基準へフォールバックする（本番と同一の安全策）。
 """
 import re
 import pandas as pd
@@ -101,6 +113,51 @@ def _load_payouts_wt(race_keys: list[str]) -> dict[str, dict]:
                 payout = round(odds_value * 100) // 10 * 10
                 payout_map.setdefault(race_key, {})[(market, key)] = payout
     return payout_map
+
+
+def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
+    """wt_odds(trio) から {race_key: 盤面掲載車番の集合} を構築する。
+
+    【2026-07-31 是正・PMタスク B-4】notify_results_wt._board_frames と同一の
+    構築方法（trio 組合せに現れる車番の和集合）をバッチ化したもの。
+
+    従来この用途には `finish_order >= 1`（完走者基準）が使われていたが、これは
+    誤り: 発走後の落車・失格（DNF, finish_order=0）は発走前に確定した最終
+    オッズ盤面には残ったままであり、本番 notify_results_wt はこれを「購入成立
+    のまま外れ計上（没収）」する。完走者基準だと DNF を欠車（返還）と誤認し、
+    本番より損失を過小計上してしまう（src/evaluation/void_rules.py 冒頭参照）。
+
+    odds_value が NULL の行も combination には含める（notify_results_wt と
+    同一挙動。オッズ未確定でも盤面に車番として存在していれば購入可能だった
+    ことに変わりないため）。
+
+    戻り値に race_key が存在しない、または空集合の場合は「盤面データなし」を
+    意味する。呼び出し側は完走者基準（finish_order >= 1）へのフォールバックを
+    行うこと（本番 notify_results_wt と同一の安全策。誤って全レース返還=
+    ゼロ計上にしないため）。
+    """
+    board_map: dict[str, set[int]] = {}
+    if not race_keys:
+        return board_map
+
+    CHUNK = 900
+    with get_connection() as conn:
+        for i in range(0, len(race_keys), CHUNK):
+            chunk = race_keys[i:i + CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT race_key, combination FROM wt_odds "
+                f"WHERE bet_type='trio' AND race_key IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for race_key, comb in rows:
+                s = board_map.setdefault(race_key, set())
+                for part in re.split(r"[-=]", str(comb)):
+                    try:
+                        s.add(int(part))
+                    except ValueError:
+                        pass
+    return board_map
 
 
 # ---------------------------------------------------------------------------
@@ -190,14 +247,27 @@ def _combo_cars(combo) -> frozenset:
 
 
 def _compute_accum_wt(df: pd.DataFrame, strategies: list[BetStrategy],
-                      payout_map: dict) -> dict[str, dict]:
+                      payout_map: dict,
+                      board_map: dict[str, set[int]] | None = None) -> dict[str, dict]:
     """戦略別に賭け・的中・払戻を集計する。
 
     【doc18 バイアス①③修正】
     - ランキング（grp.sort_values("pred_prob")）は全エントリー（欠車含む）で行う（①）。
-    - 欠車（finish_order=0）の車を含むコンボはスキップ（購入不可として不計上）（③）。
-    - 欠車によって全コンボがスキップされた場合はそのレースを bets/hits ともに不計上。
+    - 盤面（購入可能だった車）に含まれない車を含むコンボはスキップ（購入不可として不計上）（③）。
+    - 盤面掲載車が0台等で全コンボがスキップされた場合はそのレースを bets/hits ともに不計上。
+
+    【2026-07-31 是正・PMタスク B-4】③の判定基準を「完走者(finish_order>=1)」から
+    「オッズ盤面掲載車」へ修正。従来は発走後の落車・失格（DNF, finish_order=0）を
+    欠車と誤認し、本番 notify_results_wt が没収計上するケースを返還扱いにして
+    しまっていた（honest ROI を実際より高く見せる方向のバイアス）。
+    board_map（`_load_board_frames_wt` で構築、wt_odds trio 由来）を優先し、
+    該当レースの盤面データが無い場合のみ完走者基準へフォールバックする
+    （本番 notify_results_wt._void_by_dns 呼び出し前のフォールバックと同一の
+    安全策。テストなど board_map を渡さない呼び出しはこのフォールバックのみで
+    動作する）。
     """
+    if board_map is None:
+        board_map = {}
     accum = {s.name: {"bets": 0, "returns": 0, "hits": 0} for s in strategies}
 
     for race_key, grp in df.groupby("race_key"):
@@ -215,16 +285,19 @@ def _compute_accum_wt(df: pd.DataFrame, strategies: list[BetStrategy],
         )
         race_payouts = payout_map.get(race_key, {})
 
-        # 出走した車番（欠車=finish_order=0 は含まない）
-        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
+        # オッズ盤面掲載車（＝購入可能だった車）。盤面データが無いレースのみ
+        # 完走者基準（finish_order>=1）にフォールバックする。
+        board = board_map.get(race_key)
+        if not board:
+            board = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
 
         for s in strategies:
             combos = s.generate(ranked)
             if not combos:
                 continue
 
-            # バイアス③修正: DNS車を含むコンボはスキップ（購入不可）
-            valid_combos = [c for c in combos if _combo_cars(c).issubset(runners)]
+            # バイアス③修正: 盤面掲載外の車を含むコンボはスキップ（購入不可）
+            valid_combos = [c for c in combos if _combo_cars(c).issubset(board)]
             if not valid_combos:
                 continue
 
@@ -306,7 +379,8 @@ def run_backtest_wt(model, df: pd.DataFrame,
         )
 
     payout_map = _load_payouts_wt(df["race_key"].unique().tolist())
-    accum = _compute_accum_wt(df, strategies, payout_map)
+    board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
+    accum = _compute_accum_wt(df, strategies, payout_map, board_map)
     return _accum_to_df(accum, strategies, df["race_key"].nunique())
 
 
@@ -342,6 +416,12 @@ def run_tiered_backtest_wt(model, df: pd.DataFrame,
     - 出走表基準フィルタを pred_prob 付与より前に適用（バイアス②修正）
     - ランキングは全エントリー（欠車含む）で行う（バイアス①修正）
     - 軸(pivot1/pivot2)欠車 → レース不計上。相手欠車 → その目のみ除外（バイアス③修正）
+
+    【2026-07-31 是正・PMタスク B-4】③の「欠車」判定基準を完走者(finish_order>=1)
+    から本番と同一の「オッズ盤面掲載車」へ修正（詳細: void_rules.py 冒頭・
+    _load_board_frames_wt docstring）。完走者基準のままだと発走後DNF
+    （finish_order=0）を欠車と誤認しレース返還にしてしまい、本番
+    notify_results_wt の没収計上より honest ROI を高く見せていた。
     """
     # ② バイアス修正: 出走表基準フィルタを pred_prob 付与より前に適用
     df = _filter_by_n_riders(df, max_riders)
@@ -350,6 +430,7 @@ def run_tiered_backtest_wt(model, df: pd.DataFrame,
         return pd.DataFrame()
 
     payout_map = _load_payouts_wt(df["race_key"].unique().tolist())
+    board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
     tiers = {t: {"races": 0, "bets": 0, "returns": 0, "hits": 0}
              for t in ("SS", "S", "A")}
 
@@ -381,9 +462,13 @@ def run_tiered_backtest_wt(model, df: pd.DataFrame,
         )
         race_payouts = payout_map.get(race_key, {})
 
-        # ③ バイアス修正: 欠車処理（void_by_dns と同一ルール）
-        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
-        skip_race, valid_thirds = void_by_dns(pivot1, pivot2, thirds, runners)
+        # ③ バイアス修正: 欠車処理（void_by_dns と同一ルール）。
+        # board = オッズ盤面掲載車（購入可能だった車）。盤面データが無い
+        # レースのみ完走者基準へフォールバック（2026-07-31 是正）。
+        board = board_map.get(race_key)
+        if not board:
+            board = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
+        skip_race, valid_thirds = void_by_dns(pivot1, pivot2, thirds, board)
         if skip_race:
             continue
 
@@ -476,7 +561,11 @@ def run_value_backtest_wt(model, df: pd.DataFrame,
     【doc18 本番忠実セマンティクス】
     - 出走表基準フィルタを pred_prob 付与より前に適用（バイアス②修正）
     - ランキングは全エントリー（欠車含む）で行う（バイアス①修正）
-    - 欠車がコンボに含まれる目はスキップ（バイアス③修正）
+    - 盤面掲載外の車がコンボに含まれる目はスキップ（バイアス③修正）
+
+    【2026-07-31 是正・PMタスク B-4】③の判定基準を完走者(finish_order>=1)から
+    オッズ盤面掲載車へ修正（DNF誤返還バグの是正。詳細は void_rules.py・
+    _load_board_frames_wt docstring参照）。
 
     ev_min:       購入する最低EV（1.0=損益分岐、市場と互角。>1.0でモデル優位分のみ）
     max_per_race: 1レースあたり最大購入点数
@@ -491,6 +580,7 @@ def run_value_backtest_wt(model, df: pd.DataFrame,
                 "hit_rate": 0.0, "n_bet_races": 0, "avg_ev": 0.0, "avg_payout": 0.0}
 
     payout_map = _load_payouts_wt(df["race_key"].unique().tolist())
+    board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
     races = bets = returns = hits = n_bet_races = 0
     ev_sum = 0.0
     hit_payouts = []
@@ -508,8 +598,12 @@ def run_value_backtest_wt(model, df: pd.DataFrame,
             if ratio >= max_ratio:
                 continue
 
-        # ③ バイアス修正: 欠車セットを構築し combo から除外
-        runners = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
+        # ③ バイアス修正: 盤面掲載車（購入可能だった車）の集合を構築し combo から除外。
+        # 盤面データが無いレースのみ完走者基準へフォールバック（2026-07-31 是正・
+        # DNFを欠車と誤認していたバグの修正。詳細は void_rules.py 参照）。
+        board = board_map.get(race_key)
+        if not board:
+            board = set(grp[grp["finish_order"] >= 1]["frame_no"].astype(int).tolist())
 
         frame_probs = dict(zip(grp["frame_no"].astype(int), grp["pred_prob"]))
         combo_probs = _trio_combo_probs(frame_probs)
@@ -517,11 +611,11 @@ def run_value_backtest_wt(model, df: pd.DataFrame,
             continue
 
         race_payouts = payout_map.get(race_key, {})
-        # 各組合せの EV を計算（オッズが存在するもの・欠車含む組合せはスキップ）
+        # 各組合せの EV を計算（オッズが存在するもの・盤面掲載外の車を含む組合せはスキップ）
         candidates = []
         for combo, p in combo_probs.items():
-            # 欠車がコンボに含まれる場合はスキップ（実際には購入できない）
-            if not combo.issubset(runners):
+            # 盤面掲載外の車がコンボに含まれる場合はスキップ（実際には購入できない）
+            if not combo.issubset(board):
                 continue
             odds = race_payouts.get(("trio", combo))
             if not odds:

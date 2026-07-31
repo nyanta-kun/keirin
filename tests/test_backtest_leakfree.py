@@ -4,6 +4,12 @@
   ① 全エントリーでランキング（欠車を含む全エントリーで pred_prob を計算してランクする）
   ② 出走表基準の≤6車フィルタ（完走者ではなくエントリー数で判定）
   ③ void 採点（軸欠車→レース不計上 / 相手欠車→その目のみ除外）
+  ④ 【2026-07-31 是正・PMタスク B-4】③の「欠車」判定基準はオッズ盤面(trio)掲載車
+     （board）であって完走者(finish_order>=1)ではないことの回帰テスト。
+     発走後の落車・失格（DNF, finish_order=0）は発走前確定の盤面には残ったまま
+     （購入成立）なので、本番はこれを外れ計上（没収）する。完走者基準のままだと
+     DNF を欠車と誤認して返還扱いにしてしまい、本番より honest ROI を高く見せる
+     方向のバイアスが生じていた（詳細: src/evaluation/void_rules.py 冒頭）。
 """
 import types
 import numpy as np
@@ -70,51 +76,68 @@ def _multi_race_df(races: list[dict]) -> pd.DataFrame:
 
 # ---------------------------------------------------------------------------
 # void_rules.void_by_dns のユニットテスト
+#
+# 【2026-07-31 是正】引数名を runners → board に変更（PMタスク B-4）。
+# void_by_dns 自体のロジックは元々「渡された集合に含まれるか否か」だけを見る
+# 汎用実装で変わっていないが、本番・呼び出し側の正しい基準は「完走者
+# (finish_order>=1)」ではなく「オッズ盤面(trio)掲載車」である
+# （src/evaluation/void_rules.py 冒頭 docstring 参照）。ここでは純粋関数としての
+# 境界値（軸/相手/全相手が集合に無い場合の挙動）を検証するのみで、集合の中身が
+# 「完走者」でも「盤面掲載車」でも結果は同じ（＝この関数自体は是正不要）。
 # ---------------------------------------------------------------------------
 
 class TestVoidByDns:
     def test_axis_p1_dns_returns_void(self):
-        runners = {2, 3, 4, 5}          # 1号車が欠車
-        skip, valid = void_by_dns(1, 2, [3, 4, 5], runners)
+        board = {2, 3, 4, 5}          # 1号車が盤面に無い（欠車）
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
         assert skip is True
         assert valid == []
 
     def test_axis_p2_dns_returns_void(self):
-        runners = {1, 3, 4, 5}          # 2号車が欠車
-        skip, valid = void_by_dns(1, 2, [3, 4, 5], runners)
+        board = {1, 3, 4, 5}          # 2号車が盤面に無い（欠車）
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
         assert skip is True
         assert valid == []
 
     def test_third_dns_excludes_only_that_third(self):
-        runners = {1, 2, 4, 5}          # 3号車が欠車
-        skip, valid = void_by_dns(1, 2, [3, 4, 5], runners)
+        board = {1, 2, 4, 5}          # 3号車が盤面に無い（欠車）
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
         assert skip is False
         assert 3 not in valid
         assert 4 in valid
         assert 5 in valid
 
     def test_all_thirds_dns_returns_void(self):
-        runners = {1, 2}                 # thirds が全員欠車
-        skip, valid = void_by_dns(1, 2, [3, 4, 5], runners)
+        board = {1, 2}                 # thirds が全員盤面に無い（欠車）
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
         assert skip is True
         assert valid == []
 
     def test_no_dns(self):
-        runners = {1, 2, 3, 4, 5}
-        skip, valid = void_by_dns(1, 2, [3, 4, 5], runners)
+        board = {1, 2, 3, 4, 5}
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
         assert skip is False
         assert valid == [3, 4, 5]
 
     def test_wide_p2_dns_returns_void(self):
         """ワイドは p1/p2 を両方軸扱い（is_wide=True）。"""
-        runners = {1, 3, 4}             # p2=2 が欠車
-        skip, valid = void_by_dns(1, 2, [], runners, is_wide=True)
+        board = {1, 3, 4}             # p2=2 が盤面に無い（欠車）
+        skip, valid = void_by_dns(1, 2, [], board, is_wide=True)
         assert skip is True
 
     def test_wide_no_dns(self):
-        runners = {1, 2, 3, 4}
-        skip, valid = void_by_dns(1, 2, [], runners, is_wide=True)
+        board = {1, 2, 3, 4}
+        skip, valid = void_by_dns(1, 2, [], board, is_wide=True)
         assert skip is False
+
+    def test_dnf_on_board_is_not_dns(self):
+        """DNF(発走後の落車・失格)は発走前確定の盤面には残ったまま。
+        board にさえ含まれていれば finish_order の値に関わらず void_by_dns は
+        「購入可能だった」と判定する（この関数はfinish_orderを一切見ない）。"""
+        board = {1, 2, 3, 4, 5}  # 3号車はDNFだが盤面には残っている想定
+        skip, valid = void_by_dns(1, 2, [3, 4, 5], board)
+        assert skip is False
+        assert valid == [3, 4, 5]   # DNFの3号車も購入対象のまま（＝外れ計上され得る）
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +247,14 @@ def _make_strategy(name: str, bet_type: str, combos_fn) -> BetStrategy:
 
 
 class TestComputeAccumVoid:
+    """board_map を渡さない（＝盤面データなしの安全策フォールバック）呼び出しの
+    テスト。フォールバックは完走者基準(finish_order>=1)のままなので、ここでの
+    「欠車」は実質フォールバック時の擬似欠車（本来は「盤面データが無いのでとりあえず
+    完走者を購入可能扱いする」安全策の挙動）を検証している。
+    finish_order=0 が「盤面掲載車(board)ありのDNF」として扱われるケースは
+    TestComputeAccumBoardVsCompleter（本ファイル下部）を参照
+    （2026-07-31 是正・PMタスク B-4で追加）。"""
+
     def _base_race_df(self, race_key: str, finish_orders: list[int],
                        probs: list[float]) -> pd.DataFrame:
         """6車レースの合成 DataFrame。frame_no = 1..6。"""
@@ -298,6 +329,94 @@ class TestComputeAccumVoid:
 
 
 # ---------------------------------------------------------------------------
+# ④ board_map 経由の欠車判定: DNF vs 事前欠車の回帰テスト
+# 【2026-07-31 是正・PMタスク B-4】
+#
+# 本番 notify_results_wt._void_by_dns は「オッズ盤面(trio)掲載車」を欠車判定の
+# 基準にしている。発走後の落車・失格（DNF, finish_order=0）は発走前確定の盤面
+# には残ったまま（＝購入成立）なので外れ計上（没収）されるが、事前に確定した
+# 欠車（取消・除外）は盤面にも一切登場しないため返還される。
+# 修正前の _compute_accum_wt は常に完走者基準(finish_order>=1)で欠車判定して
+# いたため、DNF を事前欠車と取り違えて誤って返還（bets不計上）していた。
+# ここでは board_map を明示的に注入し、この2ケースを区別できることを検証する。
+# ---------------------------------------------------------------------------
+
+class TestComputeAccumBoardVsCompleter:
+    def _base_race_df(self, race_key: str, finish_orders: list[int],
+                       probs: list[float]) -> pd.DataFrame:
+        """6車レースの合成 DataFrame。frame_no = 1..6。"""
+        from src.preprocessing.feature_wt import FEATURE_COLS_WT
+        rows = []
+        for i in range(6):
+            row = {col: 0.0 for col in FEATURE_COLS_WT}
+            row["race_key"] = race_key
+            row["frame_no"] = i + 1
+            row["finish_order"] = finish_orders[i]
+            row["pred_prob"] = probs[i]
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_dnf_on_board_is_still_counted_as_bet(self):
+        """ranked[0]=frame1 が DNF(finish_order=0) でも、オッズ盤面には
+        frame1 が掲載されたまま（＝購入成立）なので bets は計上される。
+
+        完走者基準のフォールバック（board_map なし）だと同じデータで bets=0
+        になる（test_axis_dns_race_not_counted 参照）。ここでは board_map を
+        渡すことでその誤判定が解消されることを示す。"""
+        df = self._base_race_df(
+            "R1",
+            finish_orders=[0, 1, 2, 3, 4, 5],  # frame1 が DNF（欠車ではない）
+            probs=[0.9, 0.7, 0.5, 0.3, 0.2, 0.1],
+        )
+
+        def _trio_combos(ranked): return [
+            frozenset([ranked[0], ranked[1], ranked[2]]),
+            frozenset([ranked[0], ranked[1], ranked[3]]),
+            frozenset([ranked[0], ranked[1], ranked[4]]),
+        ]
+        s = _make_strategy("trio3", "trifecta_box", _trio_combos)
+        # 盤面には frame1(DNF)含む全6車が掲載されていた（＝購入できた）
+        board_map = {"R1": {1, 2, 3, 4, 5, 6}}
+        accum = _compute_accum_wt(df, [s], {}, board_map)
+        assert accum["trio3"]["bets"] == 300  # 3点とも購入成立（外れ計上）
+
+    def test_true_prerace_scratch_not_on_board_still_voids(self):
+        """事前欠車（オッズ盤面に一切登場しない）は board_map ありでも従来通り
+        除外される（本番と同一の挙動。退行させないための対照テスト）。"""
+        df = self._base_race_df(
+            "R1",
+            finish_orders=[1, 2, 3, 4, 5, 6],
+            probs=[0.9, 0.7, 0.5, 0.3, 0.2, 0.1],
+        )
+
+        def _trio_combos(ranked): return [
+            frozenset([ranked[0], ranked[1], ranked[2]]),
+        ]
+        s = _make_strategy("trio1", "trifecta_box", _trio_combos)
+        # frame1 は事前欠車のためオッズ盤面に一切登場しない
+        board_map = {"R1": {2, 3, 4, 5, 6}}
+        accum = _compute_accum_wt(df, [s], {}, board_map)
+        assert accum["trio1"]["bets"] == 0
+
+    def test_board_map_missing_race_falls_back_to_completer_basis(self):
+        """board_map に該当レースのキーが無い（＝盤面データ取得不可）場合のみ、
+        完走者基準へフォールバックする（本番 notify_results_wt と同一の安全策）。"""
+        df = self._base_race_df(
+            "R1",
+            finish_orders=[0, 1, 2, 3, 4, 5],  # frame1 DNF
+            probs=[0.9, 0.7, 0.5, 0.3, 0.2, 0.1],
+        )
+
+        def _trio_combos(ranked): return [
+            frozenset([ranked[0], ranked[1], ranked[2]]),
+        ]
+        s = _make_strategy("trio1", "trifecta_box", _trio_combos)
+        # board_map は与えるが対象レースのキーがない → フォールバック発動
+        accum = _compute_accum_wt(df, [s], {}, board_map={"OTHER_RACE": {1, 2, 3}})
+        assert accum["trio1"]["bets"] == 0  # 完走者基準では frame1(DNF)が除外される
+
+
+# ---------------------------------------------------------------------------
 # run_tiered_backtest_wt の統合テスト（合成データ）
 # ---------------------------------------------------------------------------
 
@@ -365,6 +484,86 @@ class TestRunTieredBacktestLeakfree:
         # 少なくとも 7車立て分の bets が混入していないことを確認
         # (7車盤面でオッズなしので直接確認はしないが、エラーなく完了すること)
         assert isinstance(result, pd.DataFrame)
+
+
+# ---------------------------------------------------------------------------
+# run_tiered_backtest_wt レベルの統合回帰テスト: DNF vs 事前欠車
+# 【2026-07-31 是正・PMタスク B-4】
+#
+# _load_board_frames_wt は実DBの wt_odds(trio) を参照するため、本テストでは
+# 実在しない合成 race_key に対して monkeypatch で盤面データを注入し、
+# 「軸がDNFでも盤面に残っていればレースは無効化されない」ことと
+# 「軸が真の事前欠車（盤面に一切登場しない）ならレースは無効化される」ことを
+# 対比させて検証する。
+# ---------------------------------------------------------------------------
+
+class TestTieredBacktestBoardVsCompleter:
+    def _make_dnf_axis_df(self, race_key: str, finish_orders: list[int]) -> pd.DataFrame:
+        from src.preprocessing.feature_wt import FEATURE_COLS_WT
+        rows = []
+        for i in range(6):
+            row = {col: 0.0 for col in FEATURE_COLS_WT}
+            row["race_key"] = race_key
+            row["frame_no"] = i + 1
+            row["finish_order"] = finish_orders[i]
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_dnf_axis_not_voided_when_board_has_full_field(self, monkeypatch):
+        """軸(pivot1)=frame1 が DNF(finish_order=0) でも、盤面に frame1 が
+        掲載されたまま（＝購入成立）なら「合計」対象R数に計上される。
+
+        完走者基準の旧実装ではこの frame1 が誤って欠車扱いされ、レースが
+        まるごと不計上になっていた（下の対照テスト参照）。"""
+        # frame1 DNF・残り5車で1〜5着（frame2が1着...frame6が5着）
+        df = self._make_dnf_axis_df("R_DNF_BOARD", finish_orders=[0, 1, 2, 3, 4, 5])
+        # frame1(0.6)・frame2(0.4) が axis候補 → gap12=0.2 (>=0.15)、
+        # ratio=0.6/(3/6)=1.2 (<1.3) → tier SS
+        probs = [0.6, 0.4, 0.3, 0.2, 0.1, 0.05]
+        model = _fake_model(probs)
+
+        # 盤面には frame1(DNF)を含む全6車が掲載されていた、という状況を再現
+        monkeypatch.setattr(
+            "src.evaluation.backtest_wt._load_board_frames_wt",
+            lambda race_keys: {"R_DNF_BOARD": {1, 2, 3, 4, 5, 6}},
+        )
+        result = run_tiered_backtest_wt(model, df, max_riders=6)
+        total_row = result[result["層"] == "合計"].iloc[0]
+        # 軸(frame1)がDNFでも盤面に残っている限りレースは無効化されず計上される
+        assert total_row["対象R数"] >= 1
+        assert total_row["投資(円)"] > 0
+
+    def test_dnf_axis_voided_by_old_completer_basis_fallback(self, monkeypatch):
+        """対照実験: board_map が空（＝盤面データなしの安全策フォールバック＝
+        旧・完走者基準相当）だと、同じデータで frame1(DNF) が欠車と誤認され
+        レースが不計上になる（是正前の挙動そのもの）。"""
+        df = self._make_dnf_axis_df("R_DNF_NOBOARD", finish_orders=[0, 1, 2, 3, 4, 5])
+        probs = [0.6, 0.4, 0.3, 0.2, 0.1, 0.05]
+        model = _fake_model(probs)
+
+        monkeypatch.setattr(
+            "src.evaluation.backtest_wt._load_board_frames_wt",
+            lambda race_keys: {},   # 盤面データなし → 完走者基準へフォールバック
+        )
+        result = run_tiered_backtest_wt(model, df, max_riders=6)
+        total_row = result[result["層"] == "合計"].iloc[0]
+        assert total_row["対象R数"] == 0   # frame1(DNF)が欠車扱いされ無効化
+
+    def test_true_prerace_scratch_axis_still_voided(self, monkeypatch):
+        """軸(frame1)が真の事前欠車（オッズ盤面に一切登場しない）の場合は、
+        board_map ありでも従来通りレース無効化される（本番と同一・退行なし）。"""
+        df = self._make_dnf_axis_df("R_SCRATCH", finish_orders=[0, 1, 2, 3, 4, 5])
+        probs = [0.6, 0.4, 0.3, 0.2, 0.1, 0.05]
+        model = _fake_model(probs)
+
+        # frame1 は事前欠車のため盤面に一切登場しない
+        monkeypatch.setattr(
+            "src.evaluation.backtest_wt._load_board_frames_wt",
+            lambda race_keys: {"R_SCRATCH": {2, 3, 4, 5, 6}},
+        )
+        result = run_tiered_backtest_wt(model, df, max_riders=6)
+        total_row = result[result["層"] == "合計"].iloc[0]
+        assert total_row["対象R数"] == 0
 
 
 # ---------------------------------------------------------------------------
