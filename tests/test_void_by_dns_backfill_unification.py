@@ -2,7 +2,12 @@
 是正・PMタスク C-2b）の回帰テスト。
 
 対象: scripts/backfill_7s_rank_wt.py / backfill_9s_rank_wt.py /
-      backfill_7a_rank_wt.py / backfill_9a_rank_wt.py / backfill_um_rank_wt.py
+      backfill_7a_rank_wt.py / backfill_9a_rank_wt.py
+
+（backfill_um_rank_wt.py は 2026-08-01 に削除済み。S2(7PLUS_U)/S3(7PLUS_M) 全廃
+コミット 5d8b258 で `M_LEG_MIN_ODDS` 等の定数が src/strategy_wt.py から消えて
+以降 import 不能のまま放置されており、対象ランク自体が既に無いため復旧せず
+スクリプトごと削除した。本ファイルの UM 用テスト・stub もあわせて撤去済み。）
 
 検証する性質:
   1. board（欠車判定用の盤面掲載車集合）が本番 notify_results_wt._board_frames
@@ -240,7 +245,6 @@ _MODULES_WITH_BOARD_LOADER = [
     "backfill_9s_rank_wt",
     "backfill_7a_rank_wt",
     "backfill_9a_rank_wt",
-    "backfill_um_rank_wt",
 ]
 
 
@@ -252,7 +256,6 @@ def test_load_board_frames_wt_matches_board_frames_semantics(monkeypatch, modnam
     （フィルタ不可能）。本テストは同一のクエリ形状（SELECT race_key, combination
     FROM wt_odds WHERE bet_type='trio' ...）で応答することを保証する。
     """
-    _ensure_strategy_wt_um_stub(monkeypatch)
     module = __import__(modname)
 
     db = FakeDB()
@@ -270,29 +273,6 @@ def test_load_board_frames_wt_matches_board_frames_semantics(monkeypatch, modnam
     # race_keys=[] は空dictを返す（クエリを発行しない）
     assert module._load_board_frames_wt([]) == {}
 
-
-def _ensure_strategy_wt_um_stub(monkeypatch):
-    """backfill_um_rank_wt.py が import する src.strategy_wt の定数/関数
-    （M_LEG_MIN_ODDS 等）が、S2/S3全廃に伴い strategy_wt.py から既に削除されて
-    おり、モジュールとして import できない状態であることが判明した
-    （2026-07-31 調査・本タスクとは無関係の既存バグ。詳細はテストの docstring
-    下部コメント・最終報告を参照）。テストのためだけに欠落属性を注入する
-    （strategy_wt.py 自体は変更しない・モジュールオブジェクトへの一時的な
-    monkeypatch のみ）。
-    """
-    import src.strategy_wt as strategy_wt
-    stub_attrs = {
-        "U_ENTROPY_MIN": 4.5,
-        "U_MTO_MIN": 4.5,
-        "U_LEG_MIN_ODDS": 1.0,
-        "U_STAKE": 100,
-        "M_LEG_MIN_ODDS": 20.0,
-        "M_STAKE": 100,
-        "m_axis_gate": lambda gap12, win_rank, ratio: (True, "TEST"),
-    }
-    for name, val in stub_attrs.items():
-        if not hasattr(strategy_wt, name):
-            monkeypatch.setattr(strategy_wt, name, val, raising=False)
 
 
 # ===========================================================================
@@ -556,147 +536,3 @@ def test_rank_9a_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert r["n_combos"] == 6
     assert r["bet_amount"] == 600
     assert "9" not in r["pred_combo"]
-
-
-# ===========================================================================
-# UM (S2/S3): board loader + 明示的 void_by_dns 呼び出しの確認
-#
-# 注意（重要な既存バグの発見）: scripts/backfill_um_rank_wt.py は
-# `from src.strategy_wt import (M_LEG_MIN_ODDS, M_STAKE, U_ENTROPY_MIN,
-# U_LEG_MIN_ODDS, U_MTO_MIN, U_STAKE, m_axis_gate)` としているが、これらの
-# 名前は現在の src/strategy_wt.py（コミット済みHEAD時点も含む）に一切存在
-# しない。S2/S3全廃コミット(5d8b258)でこれらの定義が削除された後、本スクリプト
-# の import 文が追随しておらず、素の `import backfill_um_rank_wt` は
-# ImportError になる（本タスクの変更に起因せず、着手前から存在した状態。
-# strategy_wt.py の編集は本タスクで禁止されているため修正しない）。
-# 以下のテストは、この既存バグの影響を受けずに「本タスクで実装した
-# board構築＋void_by_dns統合」を検証するため、テストプロセス内でのみ
-# src.strategy_wt モジュールへ欠落属性を一時注入する
-# （_ensure_strategy_wt_um_stub。ファイルは変更しない）。
-# ===========================================================================
-
-def _make_um_field_df(race_key: str) -> pd.DataFrame:
-    """backfill_um_rank_wt 用の7車フィールド（line_group/line_size/line_pos/
-    style 列を含む）。
-
-    frame1 は pred_prob 最上位だが line_size!=1 かつ line_pos が(1,2)以外
-    なので U の「穴(dark)」候補から除外される（judge_u相当ロジックの
-    ls==1 or lp∈(1,2) 条件を満たさない）。
-    frame2（pred_prob2位・lg=5・lp=1）が dark 候補。frame3（同じlg=5・
-    style=逃）が「同ラインの逃」として mate に選ばれる。frame3自身は
-    lp=3 のため dark 候補からは除外され、frame2 とのペアが一意に定まる。
-    """
-    rows = []
-    specs = [
-        # fno, pred_prob(top3), pred_win, lg, ls, lp, style
-        (1, 0.30, 0.30, 9, 2, 3, "先行"),   # dark候補から除外（ls!=1・lp not in(1,2)）
-        (2, 0.25, 0.10, 5, 2, 1, "先行"),   # dark候補: lg=5, lp=1
-        (3, 0.20, 0.05, 5, 2, 3, "逃"),     # frame2と同じlg=5・style=逃 → mate
-        (4, 0.10, 0.20, 3, 1, 1, "先行"),
-        (5, 0.08, 0.15, 4, 1, 1, "先行"),
-        (6, 0.04, 0.12, 6, 1, 1, "先行"),
-        (7, 0.03, 0.08, 7, 1, 1, "先行"),
-    ]
-    for fno, p3, pw, lg, ls, lp, style in specs:
-        rows.append({
-            "race_key": race_key, "frame_no": fno,
-            "_stub_top3": p3, "_stub_win": pw,
-            "line_group": lg, "line_size": ls, "line_pos": lp, "style": style,
-        })
-    return pd.DataFrame(rows)
-
-
-class TestUmBuildRowsVoidUnification:
-    """backfill_um_rank_wt.build_rows() の欠車判定シナリオ（S2/U 経路）。"""
-
-    def _patch(self, monkeypatch, db: FakeDB):
-        _ensure_strategy_wt_um_stub(monkeypatch)
-        import backfill_um_rank_wt as mod
-        monkeypatch.setattr(mod, "get_connection", lambda: FakeConn(db))
-        monkeypatch.setattr(mod, "prepare_X", _identity_prepare_x)
-        monkeypatch.setattr(mod, "load_raw_data_wt", lambda **kw: object())
-        import src.evaluation.backtest_wt as backtest_wt
-        monkeypatch.setattr(backtest_wt, "get_connection", lambda: FakeConn(db))
-
-        def _load_model(name):
-            if "win" in name:
-                raise FileNotFoundError(name)  # win_model無し→gap12単独ゲートにフォールバック
-            return StubModel("_stub_top3")
-
-        monkeypatch.setattr(mod, "load_model", _load_model)
-        return mod
-
-    def _base_db(self, rk: str) -> FakeDB:
-        db = FakeDB()
-        db.add_race(rk, 7, "2024-01-01")
-        # WT◎=frame4（m1候補のWT不一致判定用。frame1がpred_prob最上位=m1想定なので
-        # frame1と不一致にするためWT◎はframe4にする）。
-        # finish_order は実際の着順（1着=frame1, 2着=frame4, 3着=frame5）を与える
-        # （fins に3件以上の finish_order>=1 が無いと build_rows が早期 continue する）。
-        db.add_entry(rk, 1, 1, None)
-        db.add_entry(rk, 4, 2, 1)
-        db.add_entry(rk, 5, 3, None)
-        for fno in (2, 3, 6, 7):
-            db.add_entry(rk, fno, 0, None)
-        return db
-
-    def test_board_loader_matches_board_frames(self, monkeypatch):
-        db = FakeDB()
-        db.add_trio("RX", "1-2-3", odds_value=None)
-        db.add_trio("RX", "1-2-4", odds_value=999999)  # 異常値でも board には載る
-        import backfill_um_rank_wt as mod
-        monkeypatch.setattr(mod, "get_connection", lambda: FakeConn(db))
-        assert mod._load_board_frames_wt(["RX"]) == {"RX": {1, 2, 3, 4}}
-
-    def test_one_third_missing_from_board_reduces_points_without_voiding_race(self, monkeypatch):
-        """穴(dark)=frame2, 相方(mate)=frame3（同ラインlg=5・style=逃）が
-        軸ペア。相手候補{1,4,5,6,7}のうちframe7を盤面から欠落させる。
-
-        dark(2)/mate(3)を含むコンボにはあえて高いオッズ(=弱い市場評価)を
-        与え、2/3を含まないコンボには低いオッズ(=強い市場評価)を与える
-        ことで、市場評価順位ゲート(4<=mkt_rank(dark)<=7)を満たすよう
-        frame2の市場順位を意図的に下位へ追いやっている。
-        """
-        rk = "UM_B"
-        db = self._base_db(rk)
-        mod = self._patch(monkeypatch, db)
-        # entropy/mto ゲートを事実上無効化するため、テスト側の閾値を大きく緩和。
-        # `from src.strategy_wt import U_ENTROPY_MIN` により backfill_um_rank_wt
-        # モジュール自身の名前空間に束縛済みのため、strategy_wt 側ではなく
-        # モジュール自身の属性を monkeypatch する必要がある。
-        monkeypatch.setattr(mod, "U_ENTROPY_MIN", -1.0, raising=False)
-        monkeypatch.setattr(mod, "U_MTO_MIN", -1.0, raising=False)
-
-        for x in (1, 4, 5, 6):  # frame7 を除外（盤面から欠落）
-            db.add_trio(rk, f"2-3-{x}", odds_value=50.0)
-        for combo in ("1-4-5", "1-4-6", "1-5-6", "4-5-6"):
-            db.add_trio(rk, combo, odds_value=2.0)
-
-        monkeypatch.setattr(mod, "build_features_wt", lambda _raw: _make_um_field_df(rk))
-        rows = mod.build_rows("lgbm_wt_eval", "2024-01-01", "2024-01-31", win_model_name="lgbm_wt_win")
-
-        u_rows = [r for r in rows if r["rank"] == "7PLUS_U"]
-        assert len(u_rows) == 1, f"U判定行が想定通り1件生成されていない: {rows}"
-        r = u_rows[0]
-        assert r["n_combos"] == 4
-        assert r["bet_amount"] == 400
-        thirds_str = r["pred_combo"].split("-", 2)[-1]
-        assert "7" not in thirds_str.split(",")
-        for x in ("1", "4", "5", "6"):
-            assert x in thirds_str.split(",")
-
-    def test_axis_missing_from_board_yields_no_u_row(self, monkeypatch):
-        """軸(dark=frame2)が盤面から完全に欠落していれば、U行は生成されない。"""
-        rk = "UM_C"
-        db = self._base_db(rk)
-        mod = self._patch(monkeypatch, db)
-        monkeypatch.setattr(mod, "U_ENTROPY_MIN", -1.0, raising=False)
-        monkeypatch.setattr(mod, "U_MTO_MIN", -1.0, raising=False)
-
-        # frame2(dark)・frame3(mate) を一切含まないコンボのみを登録する
-        for combo in ("1-4-5", "1-4-6", "1-4-7", "1-5-6", "1-5-7", "1-6-7", "4-5-6"):
-            db.add_trio(rk, combo, odds_value=10.0)
-
-        monkeypatch.setattr(mod, "build_features_wt", lambda _raw: _make_um_field_df(rk))
-        rows = mod.build_rows("lgbm_wt_eval", "2024-01-01", "2024-01-31", win_model_name="lgbm_wt_win")
-        assert [r for r in rows if r["rank"] == "7PLUS_U"] == []

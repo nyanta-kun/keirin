@@ -27,7 +27,7 @@ from src.strategy_wt import (
 )
 from src.wt_vintage_config import monthly_windows
 
-from scripts.backfill_s7_rank_wt import _load_trio_boards
+from scripts.backfill_7s_rank_wt import _load_trio_boards
 
 N_CAR = 7
 STAKE_PER_POINT = 2000.0  # 本番と同一（5点×2,000円=10,000円）

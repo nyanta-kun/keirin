@@ -6,8 +6,8 @@ honest全期間ROIを、月次凍結vintageモデルで検証する（2026-07-30
 [[keirin_staking_allocation_optimization_2026_07_30]]で「配分最適化（EV<1.0の
 点を除外）はレース選択と組み合わせるとROI+10pt」を発見したが、その検証では
 **軸選定に自前の S_jointpair 方式（pi×pj×lift 最大ペア）を使い、レース選択にも
-自前の top3_sum_top2 指標を使った**。これは本番の `s7_select_axis()`
-（win_probs∩top3_probs重なり方式）や `s7_daily_select()` の既存ゲート
+自前の top3_sum_top2 指標を使った**。これは本番の `rank_7s_select_axis()`
+（win_probs∩top3_probs重なり方式）や `rank_7s_daily_select()` の既存ゲート
 （axis_sum<=1.3・entropy<=1.8329・wt_overlap等）とは異なる。
 
 さらに本番の `S7_AXIS_SUM_MAX=1.3` は「axis_sum**高い**レース（三連複が
@@ -49,12 +49,12 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    S7_STAKE, s7_evening_reselect, s7_field_entropy, s7_select_axis,
-    s7_wt_mark3_overlap_n, s7_wt_overlap_n,
+    RANK_7S_STAKE, rank_7s_evening_reselect, rank_7s_field_entropy,
+    rank_7s_select_axis, rank_7s_wt_mark3_overlap_n, rank_7s_wt_overlap_n,
 )
 from src.wt_vintage_config import monthly_windows
 
-from scripts.backfill_s7_rank_wt import _load_trio_boards
+from scripts.backfill_7s_rank_wt import _load_trio_boards
 
 TOTAL_STAKE_PER_RACE = 500.0   # 5点×100円=500円（本番と同一の総投資額）
 
@@ -158,11 +158,11 @@ def build_candidates_with_lineinfo(model_name, date_from, date_to, win_model_nam
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
         bf = {int(r.frame_no): {"p": float(r.pred_prob), "line_group": r.line_group,
                                 "line_pos": r.line_pos} for r in g.itertuples(index=False)}
-        sel = s7_select_axis(win_probs, top3_probs)
+        sel = rank_7s_select_axis(win_probs, top3_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
-        entropy = s7_field_entropy(top3_probs)
+        entropy = rank_7s_field_entropy(top3_probs)
         if axis1 not in board or axis2 not in board:
             continue
         others = sorted(board - {axis1, axis2})
@@ -175,8 +175,8 @@ def build_candidates_with_lineinfo(model_name, date_from, date_to, win_model_nam
         wt_honmei = next((fno for fno, v in mk.items() if v == 1), None)
         wt_taikou = next((fno for fno, v in mk.items() if v == 2), None)
         wt_ana = next((fno for fno, v in mk.items() if v == 3), None)
-        wt_overlap_n = s7_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
-        wt_mark3_overlap_n = s7_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
+        wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
+        wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
@@ -188,7 +188,7 @@ def build_candidates_with_lineinfo(model_name, date_from, date_to, win_model_nam
 
 
 def select_and_eval(candidates_by_day, pm, lifts, ev_hit_log=None):
-    """s7_evening_reselect() で本番と同一の選出をし、uniform/ev_threshold双方のROIを返す。
+    """rank_7s_evening_reselect() で本番と同一の選出をし、uniform/ev_threshold双方のROIを返す。
 
     ev_hit_log: Noneでなければ、ev_threshold_filterで的中した各点の
       (race_key, race_date, stake, odds, payout) をappendして頑健性検証に使う。
@@ -198,7 +198,7 @@ def select_and_eval(candidates_by_day, pm, lifts, ev_hit_log=None):
     n_selected = n_ev_bet_races = 0
 
     for _d, day_cands in candidates_by_day.items():
-        for c_ in s7_evening_reselect(day_cands, [], set()):
+        for c_ in rank_7s_evening_reselect(day_cands, [], set()):
             n_selected += 1
             axis1, axis2 = c_["axis1"], c_["axis2"]
             trio = c_["trio"]
@@ -215,10 +215,10 @@ def select_and_eval(candidates_by_day, pm, lifts, ev_hit_log=None):
             # ---- uniform（現行本番ロジック）----
             hit = actual_top3 in {k for _x, k, _o in combos}
             trio_pay = pm.get(rk, {}).get(("trio", actual_top3), 0)
-            uni_bet += len(combos) * S7_STAKE
+            uni_bet += len(combos) * RANK_7S_STAKE
             uni_hit += int(hit)
             if hit:
-                uni_ret += trio_pay * S7_STAKE // 100
+                uni_ret += trio_pay * RANK_7S_STAKE // 100
 
             # ---- ev_threshold_filter（追加提案）----
             probs = race_our_probs(c_["bf"], lifts)

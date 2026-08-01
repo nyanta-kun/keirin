@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.strategy_wt import S7_DAILY_CAP, S7_STAKE
+from src.strategy_wt import RANK_7S_DAILY_CAP, RANK_7S_STAKE
 from src.wt_vintage_config import monthly_windows
 
 from scripts.exp_s7_ev_threshold_staking_validation import build_candidates_with_lineinfo
@@ -50,7 +50,7 @@ REGIMES = [
 ]
 
 
-def select(candidates, pred, daily_cap=S7_DAILY_CAP):
+def select(candidates, pred, daily_cap=RANK_7S_DAILY_CAP):
     pool = [c for c in candidates if pred(c)]
     pool.sort(key=lambda c: c.get("entropy", 9))
     from collections import defaultdict
@@ -78,10 +78,10 @@ def score(selected, pm):
         actual_top3 = c_["actual_top3"]
         is_hit = actual_top3 in combos
         trio_pay = pm.get(rk, {}).get(("trio", actual_top3), 0)
-        bet += len(combos) * S7_STAKE
+        bet += len(combos) * RANK_7S_STAKE
         if is_hit:
             hit += 1
-            ret += trio_pay * S7_STAKE // 100
+            ret += trio_pay * RANK_7S_STAKE // 100
             payouts.append(trio_pay)
     n = len(selected)
     return {"n": n, "bet": bet, "ret": ret, "hit": hit,
