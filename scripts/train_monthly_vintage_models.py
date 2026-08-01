@@ -116,6 +116,13 @@ def main():
 
     print(f"\n完了: ok={ok} skipped={skipped} failed={failed} / 合計{len(windows)}ヶ月")
 
+    # 2026-08-01 F-4対応: 従来は failed>0 でも常に exit 0 していたため、
+    # このスクリプトを呼び出す自動化ラッパー（scripts/ensure_monthly_vintage.sh）が
+    # 学習失敗を検知できず、不完全な状態のままVPS配布(sync_models_to_vps.sh)へ
+    # 進んでしまう恐れがあった。failed>0 の場合は非ゼロで終了する。
+    if failed:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

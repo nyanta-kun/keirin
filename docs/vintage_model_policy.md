@@ -66,10 +66,13 @@ TAIL_FROMと実際の`lgbm_wt_eval`のtest_from（週次で「実行日-90日」
 .venv/bin/python scripts/train_monthly_vintage_models.py --only-missing
 ```
 
-**運用上の注意（今後のタスク）**: 新しい月が始まるたびに、その月用の
-vintageモデルを作成する必要がある。現時点ではこれを自動化するcronは
-未整備。`--only-missing`オプションを月初に実行するcronジョブ（例:
-毎月1日 09:00）を別途追加することを推奨する。
+**月初の自動生成（2026-08-01・F-4対応で整備済み）**: 新しい月が始まるたびに、
+その月用のvintageモデルを作成する必要がある。`scripts/ensure_monthly_vintage.sh`
+が「`train_monthly_vintage_models.py --only-missing`で不足月を学習 →
+`sync_models_to_vps.sh`でVPSへ配布」を1コマンドで行う（マニフェスト更新は
+`save_model()`内で学習と同時に自動的に行われるため別手順は不要）。crontab自体の
+変更はPM/ユーザー確認の上で別途行う（下記「未整備」節参照。本スクリプトの新設
+自体はcrontabを変更していない）。
 
 ## 書き込み保護
 
@@ -94,6 +97,9 @@ PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py
 
 # 直近月（今月）のみの日次軽量再構築
 PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py --tail-only
+
+# モデル不足の月を除外して続行する（2026-08-01追加・F-4対応）
+PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py --skip-missing-models
 ```
 
 （2026-07-31のランク全面改名（commit `f31f84b`）で`rebuild_s7_walkforward_pg.py`
@@ -101,8 +107,12 @@ PYTHONPATH=. .venv/bin/python scripts/rebuild_7s_walkforward_pg.py --tail-only
 も`rebuild_7a/9s/9a_walkforward_pg.py`へ改名済み。`rebuild_s1_walkforward_pg.py`
 はS1が改名対象外のため変更なし。）
 
-S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-only`のみ）
-に統一されている。
+S7/S9/7A/9Aは同一のインターフェース（`--dry-run`/`--tail-only`/
+`--skip-missing-models`）に統一されている（`--skip-missing-models`は
+2026-08-01追加・下記「月初の実害・再発防止」参照）。`rebuild_s1_walkforward_pg.py`
+はS1全廃（2026-07-31）に伴い過去分析用の手動実行専用として残置されており、
+本改修の対象外（S1はpicks_historyへの自動再生成を行わない運用のため、
+月初のモデル不足でも実害が生じない）。
 
 ## 運用状況（2026-07-30時点）
 
@@ -137,11 +147,53 @@ S1/S7/S9/7A/9A全てが同一のインターフェース（`--dry-run`/`--tail-o
 再開する場合、新設計では月次モデルが必要になるが**既に配布済みなので動作するはず**。
 ただし再開前に `--tail-only` の動作確認を推奨。
 
-### 未整備（今後のタスク）
-- **新しい月が始まったときの月次モデル自動作成cronが未整備**。
-  `train_monthly_vintage_models.py --only-missing` を月初（例: 毎月1日 09:00）に
-  実行するcronを追加することを推奨。これがないと翌月のレースをスコアするモデルが
-  存在せず rebuild/backfill が失敗する。
+### 月初の実害・再発防止（2026-08-01・F-4対応）
+
+上記「未整備」の懸念は2026-08-01に日付が月替わりした直後に実際に発生した。
+`scripts/rebuild_7s_walkforward_pg.py` が
+`FileNotFoundError: data/models/lgbm_wt_eval_m2608.pkl` で失敗し、
+全期間・全窓を計算し終えた最後の窓（当月分）でようやく不足が判明する設計だった
+ため、**それまでの計算（実測約40分規模）が丸ごと失われた**（picks_historyへの
+書き込みは全窓計算完了後にまとめて行う設計だったため、途中で例外が出ると何も
+書き込まれずプロセスが落ちる）。
+
+以下2点を整備して再発を防止した:
+
+1. **月初の自動モデル生成**: `scripts/ensure_monthly_vintage.sh`を新設。
+   `train_monthly_vintage_models.py --only-missing`で不足月のみ学習し、
+   成功後に`sync_models_to_vps.sh`でVPSへ配布する。多重起動防止（mkdirロック）・
+   `KEIRIN_DB_URL`未設定チェック・失敗時のDiscord通知（`system`チャンネル）を
+   備える。**crontabへの組み込みはPM/ユーザー確認の上で別途実施すること**
+   （本スクリプトの新設自体はcrontabを変更していない）。推奨エントリ:
+   ```
+   5 0 1 * * /Users/ysuzuki/GitHub/keirin/scripts/ensure_monthly_vintage.sh \
+     >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+   ```
+   （月初00:05実行。週次retrain(日曜23:30)と重ならず、`reconcile_walkforward_tail.sh`
+   の00:50 VPS cron（現在PAUSED）や08:00の`daily_picks_wt.sh`より確実に前に完了させる
+   狙い。`train_monthly_vintage_models.py`は学習失敗時に非ゼロ終了するよう
+   2026-08-01に修正済み——従来は`failed`件数を集計しても常にexit 0していたため、
+   自動化ラッパーが学習失敗を検知できずVPS配布まで進んでしまう不備があった。）
+
+2. **rebuild系4本（7s/7a/9s/9a）の防御を強化**（`src/wt_rebuild_common.py`新設）:
+   - **事前チェック**: build_rows(重い計算)を始める前に全窓のモデル存在を検証する。
+     不足があれば`--skip-missing-models`未指定時は計算を一切開始せず即座に
+     SystemExit(1)で終了する（今回のような「40分計算後に失敗して結果を失う」を
+     構造的に防止）。
+   - **`--skip-missing-models`オプション**: 指定時は不足窓を除外し、
+     モデルが揃っている窓のみで処理を継続する。除外した窓・続行の両方を
+     Discordの`system`チャンネルへ通知する。
+   - **wipe/insertの単一トランザクション化**: 従来は`wipe_rows_pg()`/
+     `insert_rows_pg()`が別々の接続・別トランザクションで実行されており、
+     wipe成功後にinsertが失敗するとpicks_historyが空のまま残るリスクがあった
+     （2026-08-01実際に発生・バックアップから復旧）。`rebuild_pg_atomic()`は
+     窓ごとのwipe+insertを単一の`with get_connection()`ブロック内で実行し、
+     `src/database.py::get_connection()`のコンテキストマネージャが持つ
+     「正常終了時に一括commit・例外時に自動rollback」という性質を利用して
+     アトミック性を確保する。
+   - **0件安全策**: 挿入対象行が0件の窓はwipe自体をスキップする
+     （置き換えデータが無いのに削除だけ行う事故を防止）。全窓が0件の場合は
+     `get_connection()`自体を呼ばずDBに一切触れない。いずれもDiscordへ警告する。
 
 ### 汚染済み四半期モデルの削除（2026-07-31実施）
 

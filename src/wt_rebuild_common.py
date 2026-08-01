@@ -1,0 +1,186 @@
+"""rebuild_{7s,7a,9s,9a}_walkforward_pg.py 共通のガード処理（2026-08-01・F-4対応）。
+
+## 背景
+
+2026-08-01、日付が月初(8/1)に変わった直後 `scripts/rebuild_7s_walkforward_pg.py`
+が `FileNotFoundError: data/models/lgbm_wt_eval_m2608.pkl` で失敗した。
+`src/wt_vintage_config.py::monthly_windows()` は `date.today()` 基準で当月の窓を
+生成するが、その月の凍結vintageモデル（`lgbm_wt_eval_mYYMM`/`lgbm_wt_win_mYYMM`）
+は自動生成されないため、月が替わった瞬間に「まだ存在しないモデル」が要求され
+落ちる。
+
+`rebuild_*_walkforward_pg.py` は全期間・全窓を計算してから最後に一括で
+wipe(DELETE)→insertする設計のため、最後の窓（最新月）で例外が発生すると、
+それ以前の全期間の計算（実測約40分規模）が丸ごと失われていた
+（計算結果がどこにもpersistされないまま例外でプロセスが落ちるため）。
+
+加えて、wipeとinsertが別々の接続・別トランザクションで実行されていたため、
+wipe成功後にinsertが失敗すると picks_history が空のまま残るリスクもあった
+（2026-08-01実害・バックアップから復旧）。
+
+## 本モジュールの役割
+
+4本のrebuild_*_walkforward_pg.pyから共通importする（`src/wt_vintage_config.py`
+と同じ「単一の正本」方針・将来どれか1つだけ改修されて食い違うリスクを避ける）。
+
+1. `split_by_model_availability()`: 重い計算（build_rows）を始める前に、
+   全窓のvintageモデルpklが存在するかを検証する。不足があれば
+   呼び出し側は計算を一切開始せず即座に終了できる。
+2. `notify_discord_warning()`: モデル不足・0件wipeスキップ等の異常を
+   Discord `system` チャンネルへ通知する（`src/notify/discord.py::send` は
+   channel引数必須のため明示指定）。
+3. `rebuild_pg_atomic()`: wipe(DELETE)→insertを単一トランザクションに
+   まとめて実行する。`src/database.py::get_connection()` の
+   コンテキストマネージャは正常終了時に一括commit・例外発生時に自動rollback
+   する設計のため、この関数内で個別に `conn.commit()` を呼ばない限り
+   wipeとinsertはアトミックになる。挿入対象行が0件の窓はwipe自体をスキップし、
+   置き換えデータが無いのに削除だけ行って picks_history を空にする事故を防ぐ。
+"""
+from __future__ import annotations
+
+from src.database import get_connection
+from src.models.trainer import MODEL_DIR
+from src.notify.discord import send as _discord_send
+
+# (date_from, date_to, eval_model_name, win_model_name)
+Window = tuple[str, str, str, str]
+# (window, 不足モデル名のリスト)
+MissingWindow = tuple[Window, list[str]]
+
+
+def split_by_model_availability(
+    windows: list[Window],
+) -> tuple[list[Window], list[MissingWindow]]:
+    """各窓のeval/winモデルpklが存在するか事前チェックする。
+
+    build_rows()（学習済みモデルの読み込み + 全レース分の推論・選出ロジック
+    実行）は窓によっては数十分かかりうるため、これを始める前に軽量な
+    ファイル存在チェックだけで不足を検出できるようにする。
+
+    Returns:
+        (available, missing)
+        available: 両モデルpklが揃っている窓のリスト（元の順序を維持）。
+        missing:   [(window, [不足モデル名, ...]), ...]（元の順序を維持）。
+    """
+    available: list[Window] = []
+    missing: list[MissingWindow] = []
+    for window in windows:
+        _, _, eval_model, win_model = window
+        missing_names = [
+            name for name in (eval_model, win_model)
+            if not (MODEL_DIR / f"{name}.pkl").exists()
+        ]
+        if missing_names:
+            missing.append((window, missing_names))
+        else:
+            available.append(window)
+    return available, missing
+
+
+def format_missing_report(rank_label: str, missing: list[MissingWindow]) -> str:
+    """不足モデルのレポート文字列を組み立てる（ログ出力・Discord通知の両方で使う）。"""
+    lines = [f"[{rank_label}] vintageモデル不足: {len(missing)}窓"]
+    for (date_from, date_to, eval_model, win_model), names in missing:
+        lines.append(f"  {date_from}〜{date_to} (eval={eval_model} win={win_model}): 不足={names}")
+    return "\n".join(lines)
+
+
+def notify_discord_warning(content: str) -> None:
+    """Discord `system` チャンネルへ警告を送信する。失敗してもrebuild自体は止めない
+    （通知経路の不調でバックフィル処理そのものを巻き込まないため）。
+    """
+    try:
+        ok = _discord_send(content, channel="system")
+        if not ok:
+            print(f"[wt_rebuild_common] Discord通知に失敗しました。内容: {content}")
+    except Exception as exc:  # noqa: BLE001 - 通知失敗はrebuild続行を妨げない
+        print(f"[wt_rebuild_common] Discord通知で例外が発生しました: {exc}\n内容: {content}")
+
+
+_INSERT_SQL = (
+    "INSERT OR REPLACE INTO picks_history "
+    "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
+    " trio_payout,bet_amount,route,miwokuri,gate_label) "
+    "VALUES (:race_date,:race_key,:rank,:pred_combo,:n_combos,:hit,"
+    " :payout,:trio_payout,:bet_amount,'wt',:miwokuri,:gate_label)"
+)
+
+
+def rebuild_pg_atomic(
+    rank_label: str,
+    delete_cond_sql: str,
+    per_window_rows: list[tuple[str, str, list[dict]]],
+    dry_run: bool,
+) -> None:
+    """wipe(DELETE)→insertを単一トランザクションにまとめて実行する。
+
+    Args:
+        rank_label: ログ/Discord通知のプレフィックス（例: "RANK_7S"）。
+        delete_cond_sql: DELETE/SELECT COUNT の WHERE 句。
+            `race_date BETWEEN ? AND ?` を含み、rank/race_key条件は
+            呼び出し側で埋め込み済みの完全な文字列を渡す
+            （例: "rank='RANK_7S' AND race_key LIKE '%#7S' AND
+            race_date BETWEEN ? AND ?"）。
+        per_window_rows: [(date_from, date_to, rows), ...]。
+            rows が空の窓は個別にwipeをスキップする（警告ログのみ・
+            置き換えデータが無いのに既存行を消してしまう事故を防ぐ）。
+        dry_run: True の場合、実際のDELETE/INSERTは行わず件数のみ表示する。
+
+    全窓が0件（＝挿入対象が1件も無い）場合は `get_connection()` 自体を
+    呼ばずに即座にreturnする（DBへ一切触れない・安全側）。この状態は
+    通常発生しないはずなので Discord へも警告する。
+
+    途中で例外が発生した場合、`get_connection()` のコンテキストマネージャが
+    自動的に `rollback()` するため、既に実行済みのDELETE/INSERTを含め
+    このトランザクション内の全変更が取り消される
+    （wipeだけが確定してinsertが失われる事故の防止）。
+    """
+    total_rows = sum(len(rows) for _, _, rows in per_window_rows)
+    if total_rows == 0:
+        msg = (
+            f"[{rank_label}] 挿入対象の行が0件のため、wipe(DELETE)を一切実行せず"
+            f"終了します（安全側・picks_historyが空のまま残る事故を防止）。"
+        )
+        print(msg)
+        notify_discord_warning(f"⚠️ **{msg}**")
+        return
+
+    if dry_run:
+        with get_connection() as conn:
+            for date_from, date_to, rows in per_window_rows:
+                if not rows:
+                    print(f"[{rank_label}] {date_from}〜{date_to}: 0件のためwipe対象外（dry-run）")
+                    continue
+                n = conn.execute(
+                    f"SELECT COUNT(*) FROM picks_history WHERE {delete_cond_sql}",
+                    (date_from, date_to),
+                ).fetchone()[0]
+                print(f"[{rank_label}] dry-run: {date_from}〜{date_to} 既存{n}件 → "
+                      f"削除予定・挿入予定{len(rows)}件")
+        print(f"[{rank_label}] DRY RUN（書き込みなし・合計挿入予定{total_rows}件）")
+        return
+
+    with get_connection() as conn:
+        n_windows_written = 0
+        for date_from, date_to, rows in per_window_rows:
+            if not rows:
+                print(f"[{rank_label}] {date_from}〜{date_to}: 0件のためwipeスキップ（警告）")
+                continue
+            n_existing = conn.execute(
+                f"SELECT COUNT(*) FROM picks_history WHERE {delete_cond_sql}",
+                (date_from, date_to),
+            ).fetchone()[0]
+            print(f"[{rank_label}] {date_from}〜{date_to}: 既存{n_existing}件 → 削除")
+            conn.execute(
+                f"DELETE FROM picks_history WHERE {delete_cond_sql}",
+                (date_from, date_to),
+            )
+            rows_ins = [{**r, "miwokuri": False} for r in rows]
+            conn.executemany(_INSERT_SQL, rows_ins)
+            print(f"[{rank_label}] {date_from}〜{date_to}: {len(rows)}件 挿入（未コミット）")
+            n_windows_written += 1
+        # ここでは commit() を呼ばない。get_connection() の
+        # コンテキストマネージャが `with` ブロック正常終了時に一括commitし、
+        # 例外発生時は自動rollbackする（src/database.py参照）。
+    print(f"[{rank_label}] 合計{total_rows}件（{n_windows_written}窓）書き込み完了"
+          f"（VPS PG・単一トランザクション）")
