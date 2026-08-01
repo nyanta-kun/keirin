@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""全6予想ランク（7SS/7S/7A/9SS/9S/9A）をnetkeirin「ウマい車券」へ下書き自動入稿する。
+"""予想ランク（7S/7A/9S/9A）をnetkeirin「ウマい車券」へ下書き自動入稿する。
 
-2026-07-23に7SS/7S専用スクリプトとして新設、2026-07-28に全ランク対応へ全面再構成。
-朝バッチ(daily_picks_wt.sh)・夕バッチ(evening_picks_wt.sh)それぞれの候補生成
-直後に呼ばれる。ランクごとの候補ファイル（候補生成時点で既にゲート適用済み）から
-未入稿のレースのみ netkeirin へ下書き保存する。同一(race_key, rank_key)への
-再送信は上書きされるだけなので、朝夕で対象が重複しても無害。
+2026-07-23に旧7SS/7S専用スクリプトとして新設、2026-07-28に全ランク対応へ全面再構成、
+2026-08-01に旧7SS/旧9SS（gate_label='SS' 分岐・e994758で廃止済み）を削除して
+現行4ランクへ整理（詳細は RANK_CONFIGS のコメント）。
+朝バッチ(daily_picks_wt.sh)の候補生成直後に呼ばれる（2026-08-01の8:00一本化で
+夕バッチはcronから撤去済み）。ランクごとの候補ファイル（候補生成時点で既にゲート
+適用済み）から未入稿のレースのみ netkeirin へ下書き保存する。同一(race_key,
+rank_key)への再送信は上書きされるだけなので、対象が重複しても無害。
 
 各ランクのON/OFF・タイトル/コメントのテンプレートは kiseki 側の入稿設定画面
 （/keirin/settings）で編集された keirin.netkeirin_settings を読む。OFFのランクは
@@ -30,7 +32,7 @@
 --manual-rank-key/--axis1/--axis2 を指定すると、候補JSON検索を一切経由せず
 指定した軸2車・ランクで直接入稿する（2026-07-31新設。推奨外レースをkiseki Web
 のダイアログでランク選択して手動入稿するための経路）。--race-keyと併用必須。
-対象ランクは7SS/7S/7A/9SS/9S/9Aのみ（S1は全廃済み・買い目構造が異なるため対象外）:
+対象ランクは7S/7A/9S/9Aのみ（S1・旧7SS・旧9SSはいずれも全廃済みのため対象外）:
     python3 scripts/netkeirin_submit_wt.py YYYY-MM-DD morning --race-key 20260728_04_07 \
         --manual-rank-key 7S --axis1 3 --axis2 5
 """
@@ -72,20 +74,30 @@ _DEFAULT_COMMENT_TEMPLATE = (
 )
 
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
-# サフィックス。gate_filter は None なら候補全件対象、'SS'/'S' なら rank_7s_gate_label() で絞り込む
-# （7SS/7S・9SS/9S は同じ候補ファイルを wt_overlap_n で分岐させたもの）。
+# サフィックス。gate_filter は None なら候補全件対象、'S' なら rank_7s_gate_label() で絞り込む。
 # S1は2026-07-31にdf31431でユーザー判断により全廃済み（picks_history のS1行も削除済み）。
-# 本エントリは対応漏れで残存していた（レビューで検出）。MANUAL_ALLOWED_RANKS（下記）で
-# 既にS1を除外済みだったのに合わせ、自動バッチ経路のRANK_CONFIGS/RANK_ORDERからも除外する。
+#
+# 【2026-08-01】旧7SS/旧9SS のエントリを削除した。これらは
+# `{"file_key": "s7", "gate_filter": "SS"}` /`{"file_key": "s9", "gate_filter": "SS"}`＝
+# 「S7(S9)の候補ファイルを読み rank_7s_gate_label()=='SS' で絞る」定義であり、
+# 2026-07-31 の commit e994758 で gate_label が "S" のみを返すようになった時点から
+# **どのレースにもマッチしない死んだ条件**になっていた。
+# `_is_enabled()` は fail-open（keirin.netkeirin_settings に行が無いと常時ON扱い）
+# のため、gate_filter の扱いを将来変えた際に誤入稿の入口になりうる点も踏まえ、
+# 条件を直すのではなくエントリごと削除する（ユーザー判断）。
+#
+# 注意（命名衝突）: 同日に新設された **新7SS（内部rank `RANK_7SS`・波乱軸選出/
+# 穴レース検知）は全くの別ランク**で、ここで削除した旧7SSとは無関係。新7SSは
+# モデル非依存で発走15分前に wt_races/wt_entries から直接算出する設計のため
+# 朝の候補JSON（file_key 方式）が存在せず、本スクリプトの現行構造では入稿できない。
+# 入稿対象に加えるには 7SS 専用の候補供給経路を別途用意する必要がある（未実装）。
 RANK_CONFIGS: dict[str, dict[str, Any]] = {
-    "7SS": {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "SS"},
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
     "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": None},
-    "9SS": {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "SS"},
     "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
     "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
 }
-RANK_ORDER = ["7SS", "7S", "7A", "9SS", "9S", "9A"]
+RANK_ORDER = ["7S", "7A", "9S", "9A"]
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +387,9 @@ def _process_rank(
 # 手動入稿（推奨外レース・kiseki Webのランク選択ダイアログ用）— 2026-07-31新設
 # ---------------------------------------------------------------------------
 
-MANUAL_ALLOWED_RANKS = ("7SS", "7S", "7A", "9SS", "9S", "9A")  # S1は全廃済みのため対象外
+# S1は全廃済み、旧7SS/旧9SSは2026-08-01に削除済み（RANK_CONFIGS のコメント参照）
+# のためいずれも対象外。kiseki 側 _MANUAL_RANK_KEYS も ("7S","7A","9S","9A") で一致。
+MANUAL_ALLOWED_RANKS = ("7S", "7A", "9S", "9A")
 
 
 def _resolve_race_info(race_key: str) -> tuple[str, int, int] | None:
