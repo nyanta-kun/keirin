@@ -1266,7 +1266,8 @@ def wave_picks_wt(target_date, output_path, model_name,
     from src.strategy_wt import (
         line_score_features, race_signals,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
-        rank_7s_wt_overlap_n, rank_7a_daily_select, rank_9s_daily_select, rank_9a_daily_select, ss_policy,
+        rank_7s_wt_overlap_n, rank_7a_daily_select, rank_7ss_build_candidate,
+        rank_9s_daily_select, rank_9a_daily_select, ss_policy,
     )
     from pathlib import Path
 
@@ -1953,10 +1954,80 @@ def wave_picks_wt(target_date, output_path, model_name,
         click.echo(f"[保存先] {rank_9a_path}  (9A候補 {len(rank_9a_candidates)}件/{rank_9s_raw_n}件中"
                    f"・境界ランク/ペーパー検証)")
 
+    # ── 7SS候補（波乱軸選出・穴レース検知・2026-07-31導入 / 朝算出化 2026-08-01）──
+    # 7SSはモデル予測を一切使わず wt_entries の公表値のみで判定する独立戦略のため、
+    # 当初は発走15分前に notify_prerace_wt.py がDBから直接算出していた。
+    # 2026-08-01、他ランクと同じく朝に候補JSONを書き出す方式へ統一した（ユーザー判断）。
+    #
+    # 朝算出に切り替えられる根拠: 入力（race_point / first_rate / third_rate /
+    # line_group / n_lines / prediction_mark）は全て 8:00 バッチの collect-wt が
+    # 取得済みで、直近5日の実測では7車レースの全件でWT印・ライン情報が揃っていた。
+    # 判定ロジックは strategy_wt.rank_7ss_build_candidate() を発走前判定と共用する
+    # （単一正本。同関数の docstring 参照）。
+    #
+    # ⚠️ 既知のリスク（ユーザー判断のうえ許容）: 13特徴のうち4つ（n_lines /
+    # max_line_size / n_solo / line_entropy）はライン構成由来で、標準化パラメータ
+    # SEVENSS_MU/SD/SIGN と閾値は「確定後の値」でTRAIN凍結されている。朝の時点で
+    # ラインが未公開（n_lines=0）だとスコアが系統的にズレる。7SSの設計検証では
+    # ライン構成4特徴は単独では無相関（r=-0.014〜+0.001）と分かっており影響は
+    # 軽微と見込むが、ex_spurt_pct と同型の train/serve skew である点は留意。
+    # ライン未公開の広範な遅延は scripts/check_line_readiness.py が朝バッチ内で検知する。
+    #
+    # モデル非依存のため include_7plus / lgbm_wt_win の有無に関わらず生成する。
+    rank_7ss_candidates: list[dict] = []
+    with get_connection() as conn_7ss:
+        _rows_7ss = conn_7ss.execute(
+            "SELECT r.race_key, r.race_no, r.start_at, v.name AS venue_name "
+            "FROM wt_races r LEFT JOIN venue_info v ON v.venue_code = r.venue_id "
+            "WHERE r.race_date = ? AND r.n_entries = 7 AND r.cancel = 0",
+            (target_date,),
+        ).fetchall()
+        _races_7ss = {r["race_key"]: dict(r) for r in _rows_7ss}
+        _entries_7ss: dict[str, list[dict]] = {}
+        _keys_7ss = list(_races_7ss)
+        for _i in range(0, len(_keys_7ss), 900):
+            _chunk = _keys_7ss[_i:_i + 900]
+            _q = ("SELECT race_key, frame_no, race_point, line_group, line_size, n_lines, "
+                  "first_rate, third_rate, prediction_mark FROM wt_entries "
+                  "WHERE race_key IN (%s)" % ",".join("?" * len(_chunk)))
+            for _e in conn_7ss.execute(_q, _chunk):
+                _entries_7ss.setdefault(_e["race_key"], []).append(dict(_e))
+
+    for _rk, _ri in _races_7ss.items():
+        # 他ランクと同じ時刻窓フィルタを適用する（8:00一本化後は無指定＝全レース対象）。
+        # hour の取り出しは _hour_of() と同じ意味論（"HH:MM" の先頭・不明は None）に揃える。
+        _start_7ss = _fmt_start(_ri.get("start_at"))
+        try:
+            _hh_7ss = int(str(_start_7ss).split(":")[0])
+        except (ValueError, IndexError):
+            _hh_7ss = None
+        if _hour_skip(_hh_7ss):
+            continue
+        _cand = rank_7ss_build_candidate(_entries_7ss.get(_rk, []))
+        if _cand is None:
+            continue
+        rank_7ss_candidates.append({
+            "race_key":   _rk,
+            "venue_name": _ri.get("venue_name") or "?",
+            "race_no":    int(_ri["race_no"]) if _ri.get("race_no") is not None else None,
+            "start_time": _start_7ss,
+            **_cand,
+        })
+    rank_7ss_candidates.sort(key=lambda c: -c["score"])
+
+    rank_7ss_suffix = "_night_7ss_candidates.json" if out_stem.endswith("_night") else "_7ss_candidates.json"
+    rank_7ss_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7ss_suffix}"
+    with open(rank_7ss_path, "w", encoding="utf-8") as f:
+        json.dump(rank_7ss_candidates, f, ensure_ascii=False, indent=2)
+    click.echo(f"[保存先] {rank_7ss_path}  (7SS候補 {len(rank_7ss_candidates)}件/{len(_races_7ss)}レース中"
+               f"・波乱軸選出/ペーパー検証)")
+
     # ── A候補（◎一致×波乱×別L先頭・二連単）・旧S1候補（6車三連単）は 2026-07-17 全廃 ──
     # 正規プロトコル（学習〜2025-03／検証2025-04〜2026-03の1年／テスト2026-04〜）の
     # 再検証で両者とも検証ROI100%超なし → 候補生成を停止（src/strategy_wt.py 参照）。
-    # 現行のペーパーランクは S2(7PLUS_U)・S3(7PLUS_M)・S1(SEVEN_S1) の3つ。
+    # 現行のペーパーランクは RANK_7S / RANK_7A / RANK_9S / RANK_9A / RANK_7SS の5つ
+    # （単一正本は strategy_wt.CURRENT_PAPER_RANKS。旧コメントはS1/S2/S3を現行と
+    #   記載したままだったため2026-08-01に是正）。
 
 
 @cli.command("backtest-wt")

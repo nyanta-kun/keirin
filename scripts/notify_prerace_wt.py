@@ -40,8 +40,7 @@ from src.notify.discord import send
 from src.strategy_wt import (
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_SCORE_THRESHOLD, RANK_7SS_STAKE,
-    line_score_features, rank_7s_gate_label, rank_7ss_field_features, rank_7ss_score,
-    rank_7ss_select_axis, ss_policy,
+    line_score_features, rank_7s_gate_label, ss_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -920,56 +919,32 @@ def _process_rank_7s_candidates(today: str, now_unix: int, notified: set[str]) -
 
 
 # ── 7SS候補（波乱軸選出・穴レース検知・ペーパー・2026-07-31導入） ──────────
-# S7/S9とは独立の戦略。モデル予測に依存せず wt_entries の公表値のみで判定
-# するため、朝の候補生成(wave-picks-wt)を経由せず、この発走前チェック時に
-# 当日の対象レースを直接DBから読み直して算出する（S1/S7/S9/7A/9Aのように
-# JSON候補ファイルを読む方式ではない）。
+# S7/S9とは独立の戦略。モデル予測に依存せず wt_entries の公表値のみで判定する。
+# 導入当初はモデル非依存であることを活かし、朝の候補生成(wave-picks-wt)を経由せず
+# この発走前チェック時に当日の対象レースを直接DBから読み直して算出していたが、
+# 2026-08-01に他ランクと同じ候補JSON方式へ統一した（ユーザー判断。netkeirin入稿
+# 経路に乗せられるようにするため）。判定ロジックの単一正本は
+# strategy_wt.rank_7ss_build_candidate()。
 
-def _load_rank_7ss_today_races(today: str) -> list[dict]:
-    """当日の7車立て・非中止レース一覧を wt_races から直接取得する（venue_info.name結合）。"""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT r.race_key, r.start_at, r.venue_id, r.cup_id, r.day_index, r.n_entries, "
-            "r.race_date, r.race_no, v.name AS venue_name FROM wt_races r "
-            "LEFT JOIN venue_info v ON v.venue_code = r.venue_id "
-            "WHERE r.race_date = ? AND r.n_entries = 7 AND r.cancel = 0",
-            (today,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+def _load_rank_7ss_candidates(today: str) -> list[dict]:
+    """当日の7SS候補 JSON（昼 + 夜）を読み込む。
 
-
-def _load_rank_7ss_entries(race_keys: list[str]) -> dict[str, list[dict]]:
-    by_race: dict[str, list[dict]] = {}
-    if not race_keys:
-        return by_race
-    with get_connection() as conn:
-        placeholders = ",".join("?" * len(race_keys))
-        rows = conn.execute(
-            f"SELECT race_key, frame_no, race_point, line_group, line_size, n_lines, "
-            f"       first_rate, third_rate, prediction_mark "
-            f"FROM wt_entries WHERE race_key IN ({placeholders})",
-            race_keys,
-        ).fetchall()
-    for r in rows:
-        by_race.setdefault(r["race_key"], []).append(dict(r))
-    return by_race
-
-
-def _build_rank_7ss_candidate(entries: list[dict]) -> dict | None:
-    """entries(7件)から穴指数・軸1/軸2を算出する。閾値未満・判定不能はNone。"""
-    if len(entries) != 7:
-        return None
-    axis = rank_7ss_select_axis(entries)
-    if axis is None:
-        return None
-    feat = rank_7ss_field_features(entries)
-    if feat is None:
-        return None
-    score = rank_7ss_score(feat)
-    if score < RANK_7SS_SCORE_THRESHOLD:
-        return None
-    axis1, axis2 = axis
-    return {"axis1": axis1, "axis2": axis2, "score": score}
+    2026-08-01: 7SSは当初、発走15分前に wt_races/wt_entries から直接算出していたが
+    （モデル非依存のため可能だった）、他ランクと同じく朝の候補JSONを読む方式へ
+    統一した（ユーザー判断）。生成側は src/cli/main.py::wave-picks-wt、
+    判定ロジックの単一正本は strategy_wt.rank_7ss_build_candidate()。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_7ss_candidates.json",
+                  f"wave_picks_wt_{today}_night_7ss_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("7SS候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return out
 
 
 def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
@@ -1046,45 +1021,42 @@ def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
 
 
 def _process_rank_7ss_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
-    """7SS候補の発走前算出・判定・記録・通知メッセージ生成。
+    """7SS候補の発走前判定・記録・通知メッセージ生成。
 
-    S7等と異なり朝の候補JSONを使わず、当日の全7車立てレースをこの場で
-    直接読み直して穴指数・軸を算出する（モデル非依存のため可能）。
+    2026-08-01: 朝の候補JSON（wave-picks-wt が生成）を読む方式へ統一した。
+    それ以前はこの場で wt_races/wt_entries から穴指数・軸を直接算出していた
+    （モデル非依存のため可能だった）が、他ランクと構造を揃え netkeirin 入稿
+    経路にも乗せられるようにするためユーザー判断で朝算出へ移行した。
 
     returns (messages, newly_done)
     """
-    races = _load_rank_7ss_today_races(today)
-    if not races:
+    cands = _load_rank_7ss_candidates(today)
+    if not cands:
         return [], set()
 
-    in_window: list[dict] = []
-    for ri in races:
-        rk = ri["race_key"]
-        if f"{rk}#7SS" in notified:
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if c.get("race_key")])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#7SS" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
             continue
         notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
         if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
-            in_window.append(ri)
+            in_window.append((cand, ri))
     if not in_window:
         return [], set()
-
-    entries_by_race = _load_rank_7ss_entries([ri["race_key"] for ri in in_window])
 
     scraper = WinticketScraper(request_interval=1.0)
     messages: list[tuple[str, str]] = []
     newly_done: set[str] = set()
-    for ri in in_window:
-        rk = ri["race_key"]
+    for cand, ri in in_window:
+        rk = cand["race_key"]
         ss_key = f"{rk}#7SS"
-        entries = entries_by_race.get(rk)
-        if not entries:
-            newly_done.add(ss_key)
-            continue
-        cand = _build_rank_7ss_candidate(entries)
-        if cand is None:
-            # 穴指数が閾値未満・軸選定不能＝この戦略の対象外（見送り記録もしない）
-            newly_done.add(ss_key)
-            continue
 
         try:
             odds_data = scraper.fetch_odds(

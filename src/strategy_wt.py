@@ -964,6 +964,40 @@ def rank_7ss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
     return axis1, axis2
 
 
+def rank_7ss_build_candidate(entries: list[dict]) -> dict | None:
+    """entries(7件)から7SSの穴指数・軸1/軸2を算出する。対象外はNone。
+
+    entries: wt_entries の1レース分（race_point/first_rate/third_rate/
+      line_group/n_lines/prediction_mark/frame_no を持つ dict のリスト）。
+
+    None を返す条件（いずれもこの戦略の対象外＝見送り記録もしない）:
+      - 7車立てでない
+      - 軸選定不能（race_point欠損・WT印(2/3/4)を持つ軸1以外の車が居ない等）
+      - 13特徴のいずれかが欠損
+      - 穴指数が RANK_7SS_SCORE_THRESHOLD 未満
+
+    【単一正本】2026-08-01: 朝の候補生成（src/cli/main.py::wave-picks-wt）と
+    発走前判定（scripts/notify_prerace_wt.py）の双方から呼ばれる。7SSは
+    モデル非依存なので当初は発走15分前にDBから直接算出する設計だったが、
+    他ランクと同じく朝に候補JSONを書き出す方式へ統一した（ユーザー判断）。
+    同じ判定ロジックが2箇所に複製されると内容が食い違う典型的な事故に
+    なるため、必ず本関数を経由すること。
+    """
+    if len(entries) != 7:
+        return None
+    axis = rank_7ss_select_axis(entries)
+    if axis is None:
+        return None
+    feat = rank_7ss_field_features(entries)
+    if feat is None:
+        return None
+    score = rank_7ss_score(feat)
+    if score < RANK_7SS_SCORE_THRESHOLD:
+        return None
+    axis1, axis2 = axis
+    return {"axis1": axis1, "axis2": axis2, "score": score}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 集計対象ランクの単一正本（2026-07-31 新設・是正タスク B-6 + C-1）
 #
