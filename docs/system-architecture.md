@@ -184,7 +184,7 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 
 ---
 
-## 毎朝の自動実行フロー（本番稼働中・2026-07-23現在／2026-08-01に8:00単一バッチへ一本化・スクリプト側は実装済みだがcrontab未反映）
+## 毎朝の自動実行フロー（本番稼働中・2026-08-01に8:00単一バッチへ一本化・crontab反映済み）
 
 **VPS（`/home/ysuzuki/keirin`）が自前でcronを実行**（Mac側はweekly_retrain_wt.shのみ）。
 
@@ -194,8 +194,9 @@ winticket.jp (PRELOADED_STATE JSON / SSR)
 収集・厳選できるため）。`evening_picks_wt.sh` は **cronから撤去**し手動/アドホック
 実行専用として残置（下記参照）。
 
-本番日次は `scripts/daily_picks_wt.sh`（cron 8:00・単一バッチ・**crontab自体は
-PM/ユーザー確認後に手動反映**）:
+本番日次は `scripts/daily_picks_wt.sh`（cron 8:00・単一バッチ）。VPS crontab の
+`0 16 * * * evening_picks_wt.sh` 行は **2026-08-01 に撤去済み**（撤去前の内容は
+VPS 上の `~/crontab_backup_20260801.txt` に保全）:
 ```
 AM 8:00 （daily_picks_wt.sh・単一バッチ）
   ① collect-wt --date $(yesterday) --full-scan   # 前日結果 再収集
@@ -361,4 +362,4 @@ sudo pmset repeat wakeorpoweron MTWRFSU 23:25:00
 | **2026-06-10** | 欠車無効化（`notify_results_wt._void_by_dns`）・結果バックフィル実装。会場取得漏れバグ修正（ks references → wt_races）。`linePrediction=null` クラッシュ修正。 |
 | **2026-06-12** | バックテスト3バイアス発見（`docs/analysis/18`）。夕方cron 16:00登録完了。各種検証スクリプト追加（gap13打ち切り・B閾値緩和全滅・条件先行新方式なし・高配当10点リーク無し不通過・コメント特徴無情報・Web予想監査不通過）。 |
 | **2026-06-13** | G01〜G07完了（`backtest_wt.py`リーク無し化・live実測レポート・日中オッズスナップショット・money-flow検証ハーネス・気象データ収集・風特徴検証・高配当融合ゲート）。 |
-| **2026-08-01** | ライン情報(winticket linePrediction)充足度チェック `scripts/check_line_readiness.py` 新設。**当初は「7:00(日中)+8:00(夜)」の2バッチ体制で検討したが、PM実測（直近92日で1日の最初の発走が全日08:30・8:00より前に発走する日は0日）を踏まえたユーザー判断により、8:00の単一バッチへ一本化**（`daily_picks_wt.sh`の`wave-picks-wt`から`--start-to-hour`指定を撤去し当日全レースを対象化。`evening_picks_wt.sh`はcronから撤去し手動/アドホック実行専用に）。ライン欠損リトライ（対象レースの30%超でライン未公開なら5分待機して再収集、最大3回・解消せずともexitせず続行）は単一バッチにも維持し、時刻指定なし（当日全レース）で判定する。S7の日次件数上限(`RANK_7S_DAILY_CAP=12`、`rank_7s_daily_select()`自体では未適用の安全網)を適用する`reselect_7s_evening.py`の呼び出しを`evening_picks_wt.sh`から`daily_picks_wt.sh`へ移設（night_raw相当が空でも日次トリムとして機能）。netkeirin入稿は`session="morning"`の1回に統合（`_load_candidates()`がsession="morning"時に読む非"_night_"ファイルに当日全レース分が書かれるため重複・欠落なし）。**crontab自体の反映はPM/ユーザー確認後の別作業**（本コミット時点ではスクリプト実装のみ）。 |
+| **2026-08-01** | ライン情報(winticket linePrediction)充足度チェック `scripts/check_line_readiness.py` 新設。**当初は「7:00(日中)+8:00(夜)」の2バッチ体制で検討したが、PM実測（直近92日で1日の最初の発走が全日08:30・8:00より前に発走する日は0日）を踏まえたユーザー判断により、8:00の単一バッチへ一本化**（`daily_picks_wt.sh`の`wave-picks-wt`から`--start-to-hour`指定を撤去し当日全レースを対象化。`evening_picks_wt.sh`はcronから撤去し手動/アドホック実行専用に）。ライン欠損リトライ（対象レースの30%超でライン未公開なら5分待機して再収集、最大3回・解消せずともexitせず続行）は単一バッチにも維持し、時刻指定なし（当日全レース）で判定する。S7の日次件数上限(`RANK_7S_DAILY_CAP=12`、`rank_7s_daily_select()`自体では未適用の安全網)を適用する`reselect_7s_evening.py`の呼び出しを`evening_picks_wt.sh`から`daily_picks_wt.sh`へ移設（night_raw相当が空でも日次トリムとして機能）。netkeirin入稿は`session="morning"`の1回に統合（`_load_candidates()`がsession="morning"時に読む非"_night_"ファイルに当日全レース分が書かれるため重複・欠落なし）。VPS crontab の `0 16 * * * evening_picks_wt.sh` 行の撤去も**同日ユーザー承認のうえ反映済み**（撤去前の内容は VPS 上の `~/crontab_backup_20260801.txt`）。 |
