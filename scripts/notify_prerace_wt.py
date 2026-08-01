@@ -704,6 +704,31 @@ def judge_rank_7s(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     return "buy", detail
 
 
+def _exclude_overlapping_races(
+    loser_cands: list[dict], winner_cands: list[dict], *, loser: str, winner: str,
+) -> list[dict]:
+    """`loser_cands` から `winner_cands` と race_key が重複するものを除外する。
+
+    S/A 系ランク（7S vs 7A・9S vs 9A）は選出条件が定義上排他だが、候補JSONが
+    昼/夜の2ファイルに分かれるため判定の転びで両方に載りうる。詳細と優先順位の
+    根拠は `_load_rank_7a_candidates()` の docstring を参照。
+    """
+    winner_keys = {c.get("race_key") for c in winner_cands if c.get("race_key")}
+    if not winner_keys:
+        return loser_cands
+    kept, dropped = [], []
+    for c in loser_cands:
+        if c.get("race_key") in winner_keys:
+            dropped.append(c.get("race_key"))
+        else:
+            kept.append(c)
+    if dropped:
+        logger.warning(
+            "%s候補のうち%d件が%sと重複したため除外（%s優先）: %s",
+            loser, len(dropped), winner, winner, ", ".join(sorted(set(dropped))))
+    return kept
+
+
 def _load_rank_7s_candidates(today: str) -> list[dict]:
     """当日のS7候補 JSON（昼 + 夜）を読み込む。"""
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
@@ -1349,7 +1374,31 @@ def _process_rank_9s_candidates(today: str, now_unix: int, notified: set[str]) -
 # （軸2車+残り流し）のため judge_rank_7s()/judge_rank_9s() をそのまま再利用する。
 
 def _load_rank_7a_candidates(today: str) -> list[dict]:
-    """当日の7A候補 JSON（昼 + 夜）を読み込む。"""
+    """当日の7A候補 JSON（昼 + 夜）を読み込む。7Sと重複するレースは除外する。
+
+    7Sと7Aは `rank_7s_daily_select()`（2ゲート不合格0個）と
+    `rank_7a_daily_select()`（ちょうど1個）で**定義上排他**だが、生成が
+    昼バッチ・夜バッチの2回に分かれていた時期には同一レースが両方に載りえた:
+    朝は1ゲート不合格で7A→夕方の再収集でライン情報が更新され entropy/axis_sum が
+    変化して0個不合格＝7S、という具合に判定が転ぶと、`_s7a_candidates.json`（昼）と
+    `_night_s7_candidates.json`（夜）の双方に同じレースが載り、本ローダは
+    昼+夜を無条件に連結するため両方が判定・記録されて `#7A` と `#7S` の
+    2行が picks_history に書かれてしまう（1レースに1,000円投資として二重計上。
+    軸が変わらなければ買い目まで完全同一になる）。
+
+    実測: 2026-07-28〜31 に6レースで発生（うち3件は買い目も完全一致）。7Aの導入が
+    2026-07-27なので、発生しうる全期間で6件＝取りこぼしなく検出できている。
+
+    2026-08-01 の8:00単一バッチ一本化（commit adec6aa）で夜バッチは cron から
+    外れたため通常運用では再発しないが、`evening_picks_wt.sh` は手動/アドホック
+    実行用に残置されており実行されれば夜ファイルが生成される。cron 構成に
+    依存しない構造的なガードとしてここで排他を保証する。
+
+    どちらを優先するか: **7S**。7Sは2ゲートとも合格＝7A（1つ不合格の「惜しい
+    レース」）より厳しい条件を満たしており、実測でも単独時 ROI 80.6% / 的中率
+    42.0% と 7A（78.0% / 45.0%）以上。判定が転んだ場合は新しい情報（夕方の
+    ライン確定後）に基づく方を採るのが筋でもある。
+    """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
     for fname in (f"wave_picks_wt_{today}_s7a_candidates.json",
@@ -1360,7 +1409,8 @@ def _load_rank_7a_candidates(today: str) -> list[dict]:
                 out += json.loads(p.read_text(encoding="utf-8"))
             except Exception as e:
                 logger.warning("7A候補 JSON 読み込み失敗 %s: %s", p.name, e)
-    return out
+    return _exclude_overlapping_races(
+        out, _load_rank_7s_candidates(today), loser="7A", winner="7S")
 
 
 def _insert_rank_7a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
@@ -1506,7 +1556,15 @@ def _process_rank_7a_candidates(today: str, now_unix: int, notified: set[str]) -
 
 
 def _load_rank_9a_candidates(today: str) -> list[dict]:
-    """当日の9A候補 JSON（昼 + 夜）を読み込む。"""
+    """当日の9A候補 JSON（昼 + 夜）を読み込む。9Sと重複するレースは除外する。
+
+    9S/9A は 7S/7A と同一構造（`rank_9s_daily_select()`＝不合格0個 /
+    `rank_9a_daily_select()`＝ちょうど1個で定義上排他）のため同型の重複が
+    起こりうる。実測では9S/9Aの重複は0件だったが、これは9Sが極めて希少
+    （全期間100件・ゼロの月も多い）で母数が小さいためであり、構造としては
+    7S/7Aと同じ穴が空いている。予防的に同じガードを掛ける。
+    根拠と優先順位は `_load_rank_7a_candidates()` の docstring を参照。
+    """
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     out: list[dict] = []
     for fname in (f"wave_picks_wt_{today}_s9a_candidates.json",
@@ -1517,7 +1575,8 @@ def _load_rank_9a_candidates(today: str) -> list[dict]:
                 out += json.loads(p.read_text(encoding="utf-8"))
             except Exception as e:
                 logger.warning("9A候補 JSON 読み込み失敗 %s: %s", p.name, e)
-    return out
+    return _exclude_overlapping_races(
+        out, _load_rank_9s_candidates(today), loser="9A", winner="9S")
 
 
 def _insert_rank_9a_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
