@@ -1,6 +1,20 @@
 #!/bin/bash
 # 毎日8:00実行（winticketルート）: 前日成績通知 → 当日データ収集 → 予想生成・通知
-# ※7:00から8:00に変更(2026-06-09): 朝7時は想定オッズが揃わずガミ判定の精度が落ちるため。
+# ※2026-08-01: 「7:00(日中)+16:00(夜)」の2段階生成を廃止し、8:00の単一バッチへ
+# 一本化（ユーザー判断）。PM実測（直近92日・2026-05-01〜07-31）で「1日の最初の
+# 発走は全92日とも08:30（最早・中央値・最遅すべて08:30）・8:00より前に発走する
+# 日は0日」と判明したため、8:00の1回で当日全レース（1日平均7車64.8R+9車5.9R）を
+# 収集・厳選できると判断した。
+# ⚠️ 過去の経緯（2026-06-09 commit 4b8ddd2）: 「朝7時はオッズが揃わずガミ3段階
+# 判定の精度が落ちる(夜レースで9999.9倍等)」という理由で7:00→8:00へ変更した実績が
+# ある。本ファイルは8:00運用を維持しているため、この懸念は再燃しない
+# （2026-08-01時点で一度検討された「7:00化」は撤回済み）。
+# ライン情報不足時のリトライは check_line_readiness.py 参照（後段のrace_point
+# 健全性チェックと同じ「5分待機→再収集」パターンを流用）。
+# ※2026-08-01: evening_picks_wt.sh(夕方バッチ)はcronから撤去し本スクリプトへ
+# 一本化。夜レース分もここで生成するため --start-to-hour 指定は行わない
+# （全レース対象）。S7の日次件数上限(RANK_7S_DAILY_CAP)適用のため
+# reselect_7s_evening.py を本スクリプト末尾から呼ぶ（詳細は同ステップのコメント参照）。
 # 2026-06-08 ks→wt 完全移行。ksスクレイピングは廃止。
 set -e
 set -o pipefail   # L-5: | tee が python の終了コードをマスクしないように
@@ -134,6 +148,36 @@ send('⚠️ **[$TODAY] race_point(競走得点)異常のため本日の指数�
   exit 0
 fi
 
+# --- ライン情報充足チェック（2026-08-01導入）---
+# winticketのライン予想(linePrediction)がまだ公開されていないレースが多い場合に
+# 備えたリトライ。8:00一本化により日中/夜の時刻分割が無くなったため、
+# --start-from-hour / --start-to-hour は指定せず当日の全レースを対象に判定する
+# （引数自体は将来また分割運用に戻す可能性を考慮しcheck_line_readiness.py側には
+# 残してある）。
+# race_point健全性チェックとは別懸念（データ欠損 vs 異常値）のため独立したループ
+# とする。最大3回試行しても解消しない場合はDiscordへ警告するのみで処理は継続し、
+# 取得できた範囲のレースで推奨を生成する（race_point異常時と異なりexitしない）。
+LINE_READY=0
+for attempt in 1 2 3; do
+  if .venv/bin/python3 scripts/check_line_readiness.py --date "$TODAY" \
+      2>&1 | tee -a "$LOG_DIR/line_readiness_${TODAY}.log"; then
+    LINE_READY=1
+    break
+  fi
+  echo "[$(date '+%H:%M:%S')] ライン情報不足検知（試行${attempt}/3）。5分待機して再収集..."
+  sleep 300
+  .venv/bin/python3 -m src.cli.main collect-wt --date "$TODAY" --full-scan \
+    2>&1 | tee -a "$LOG_DIR/collect_wt_${TODAY}_line_retry${attempt}.log"
+done
+
+if [[ "$LINE_READY" != "1" ]]; then
+  echo "[$(date '+%H:%M:%S')] ライン情報不足が解消せず。取得できた範囲で推奨生成を継続します。"
+  .venv/bin/python3 -c "
+from src.notify.discord import send
+send('⚠️ **[$TODAY] ライン情報(winticket linePrediction)不足が3回の再収集(5分間隔)後も解消しませんでした。** 取得できた範囲のレースで推奨は生成します。手動確認を推奨します。', channel='system')
+" 2>&1 | tee -a "$LOG_DIR/line_readiness_${TODAY}.log" || true
+fi
+
 # --- 朝オッズ前向き計測: 収集直後の wt_odds(=朝オッズ) を退避 ---
 # 翌日の前日再収集で wt_odds が最終オッズに上書きされる前に保全する。
 # 失敗しても日次処理は止めない（計測は補助目的）。
@@ -145,18 +189,38 @@ echo "[$(date '+%H:%M:%S')] 朝オッズをスナップショット退避..."
 echo "[$(date '+%H:%M:%S')] 予想生成（winticket・7+車専用 gami≥5倍+gap12≥0.07）..."
 # 7+車専用モード: gami≥5.0倍(三連複最安目) + gap12≥0.07 のレースのみ推奨
 # Sランク: gap12≥0.10(HOLD~143%) / Aランク: gap12[0.07,0.10)(HOLD~138%)
-# --start-to-hour 19:  朝は〜19時発走のレースのみ推奨（夜レースはeveningで再生成）。
+# 2026-08-01: 8:00一本化により --start-to-hour 指定を撤去。当日の全レース
+# （夜レース含む）を対象に生成する（旧evening_picks_wt.shの役割を統合）。
 # wave-picks-wt は対象レース0件でも継続（静かな日は正常終了）。
 .venv/bin/python3 -m src.cli.main wave-picks-wt --date "$TODAY" \
-  --min-gap12 0.07 --include-7plus --start-to-hour 19 \
+  --min-gap12 0.07 --include-7plus \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 予想生成: 対象レース無し or 失敗（継続）"
 
 # 「朝夕の推奨」Discord通知（notify_picks.py）は2026-07-31にユーザー要望により廃止。
 # 発走15分前の個別通知（notify_prerace_wt.py）のみ残す。
 
+# --- S7（Sランク）日次件数上限（RANK_7S_DAILY_CAP）適用（2026-08-01: 8:00一本化に伴い移設）---
+# rank_7s_daily_select()（src/strategy_wt.py）自体は日次上限を適用しない設計
+# （「朝夕どちらか一方のバッチだけでは日次合計が分からないため」— 元々2バッチ
+# 構成を前提にしたコメントがコード内に残っている）。RANK_7S_DAILY_CAP=12は
+# reselect_7s_evening.py が呼ぶ rank_7s_evening_reselect() の中でのみ適用される。
+# 8:00一本化で朝夕2バッチが無くなった後も、この安全網（entropyゲート通過が
+# 異常発生した日に日次12件へトリムする仕組み）を掛け続けるため、旧
+# evening_picks_wt.sh が担っていたこの呼び出しを本スクリプトへ移設する
+# （reselect_7s_evening.py 自体は無編集。night_raw用ファイルが存在しない/空の
+# ため day_raw のみでの日次トリムとして機能する＝1バッチでも安全網は有効）。
+# 7A/S9/9A/S1等の他ランクにはそもそも同種の日次合計マージ処理が無い
+# （各々 rank_*_daily_select() を1回呼ぶだけで完結する設計のため、8:00一本化で
+# 対応不要）。
+echo "[$(date '+%H:%M:%S')] S7（Sランク）日次件数上限を適用..."
+.venv/bin/python3 scripts/reselect_7s_evening.py "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] S7日次上限適用に失敗（継続）"
+
 # 候補レース（gap12条件のみ・gamiフィルタなし）を picks_history に即時書き込み
 # → 同日中から推奨ページに候補レースを表示するため
+# （reselect_7s_evening.py の後に実行＝S7はトリム後の最終候補で書き込まれる）
 echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
 .venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" \
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
@@ -164,11 +228,16 @@ echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
 
 # --- 2b. netkeirin（ウマい車券）へ全7ランク(S1/7SS/7S/7A/9SS/9S/9A)候補を下書き自動入稿
 #     （2026-07-23新設・2026-07-28全ランク対応。ランクごとのON/OFFは
-#     keirin.netkeirin_settings＝kiseki側 /keirin/settings で管理）---
-echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（朝）..."
+#     keirin.netkeirin_settings＝kiseki側 /keirin/settings で管理）
+#     2026-08-01: 8:00一本化によりsession="morning"の1回で当日全レース分
+#     （旧・夜レース分含む）を入稿する（`_load_candidates()`はsession="morning"
+#     時は非"_night_"サフィックスの候補ファイルを読む実装のため、当日の
+#     全候補が単一ファイルに書かれる本構成と整合する）。session="evening"の
+#     呼び出しは行わない（evening_picks_wt.shがcronから外れたため）。---
+echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿..."
 .venv/bin/python3 scripts/netkeirin_submit_wt.py "$TODAY" morning \
   2>&1 | tee -a "$LOG_DIR/netkeirin_${TODAY}.log" \
-  || echo "[$(date '+%H:%M:%S')] netkeirin入稿(朝)に失敗（継続）"
+  || echo "[$(date '+%H:%M:%S')] netkeirin入稿に失敗（継続）"
 
 # --- 3. VPS PostgreSQL 同期（wt_entries/picks_history 等を反映）---
 # wave-picks-wt で race_point(AI確率) が更新された wt_entries と

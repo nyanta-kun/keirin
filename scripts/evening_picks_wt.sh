@@ -1,9 +1,22 @@
 #!/bin/bash
-# 夕方再生成（2段階生成の第2段・cron 16:00想定）
-# 朝(daily_picks_wt.sh)は --start-to-hour 19 で昼〜夕レースのみ推奨する。
+# 夕方再生成（旧2段階生成の第2段）
+# ⚠️【2026-08-01】ユーザー判断により「7:00(日中)+16:00(夜)」の2段階生成は廃止し、
+# 8:00の単一バッチ（daily_picks_wt.sh）へ一本化された。根拠: 直近92日
+# （2026-05-01〜07-31）で1日の最初の発走が全日08:30（8:00より前に発走する日は
+# 0日）と判明し、8:00の1回で当日全レースを収集・厳選できるため。
+# **本スクリプトは crontab から削除され、通常運用では実行されない。**
+# 手動・アドホック実行専用として残置する（例: 朝バッチの後にwinticket側の
+# ライン公開が想定より遅れ夜レース分だけ再生成したい場合等）。手動実行時は
+# daily_picks_wt.sh が完了済みであることを確認してから実行すること
+# （reselect_7s_evening.py が朝の生候補ファイルを読むため、朝処理の完了前に
+# 実行すると不完全なファイルを読む恐れがある。かつてのcron 2段階運用で
+# 想定していた「8時間の時間差」による安全マージンは無くなっている）。
+# 以下、旧cron運用時のコメントを残す（手動実行時の参考用）:
+# 朝(daily_picks_wt.sh)は元々 --start-to-hour 19 で昼〜夕レースのみ推奨していた
+# （8:00一本化に伴い撤去済み・現在は当日全レースを朝バッチ側で生成する）。
 # 夜レース(19時〜)はwtのライン構成が朝未公開→精度低下するため(docs B検証)、
-# ラインが公開される午後に当日を再収集し、全レース(夜含む)で推奨を再生成・上書きして
-# Discordへ「確定版」を再通知する。翌朝 notify_results_wt は最終(この夕方版)ファイルを採点。
+# ラインが公開されたタイミングで当日を再収集し、全レース(夜含む)で推奨を再生成・
+# 上書きしてDiscordへ「確定版」を再通知する、という設計だった。
 # ※ksは合算バックテストで wt単独 に劣後と判明→稼働再開しない(wt単独・docs 2026-06-10)。
 set -e
 set -o pipefail
@@ -52,12 +65,45 @@ raise SystemExit(0 if ok else 1)
   exit 1
 fi
 
+# 2026-08-01: 8:00一本化に伴い、朝バッチ(daily_picks_wt.lock)のロック解放を待つ
+# ガードを本セッションで一時追加したが、cronからの自動連続起動が無くなった
+# （本スクリプトは手動実行専用になった）ため撤去した。手動実行する場合は
+# daily_picks_wt.sh の完了を目視確認してから実行すること（ヘッダコメント参照）。
+
 echo "[$(date '+%H:%M:%S')] === winticket 夕方再生成 $TODAY ==="
 
 # 1. 当日再収集（全会場フルスキャン＝午後に公開された夜レースのライン/オッズを取得）
 echo "[$(date '+%H:%M:%S')] 当日($TODAY) 再収集（全会場・夜ライン取得）..."
 .venv/bin/python3 -m src.cli.main collect-wt --date "$TODAY" --full-scan \
   2>&1 | tee -a "$LOG_DIR/collect_wt_${TODAY}.log"
+
+# --- ライン情報充足チェック（2026-08-01導入・本スクリプトが手動実行された場合用）---
+# 夜レース(19時〜)のライン予想(linePrediction)がまだ公開されていないレースが
+# 多い場合に備えたリトライ。対象は夜レースのみ（--start-from-hour 19。
+# 8:00一本化後の通常運用では日中/夜とも daily_picks_wt.sh 側（時刻指定なし＝
+# 全レース対象）で判定するため、本チェックは本スクリプトを手動実行した場合のみ
+# 意味を持つ）。最大3回試行しても解消しない場合はDiscordへ警告するのみで
+# 処理は継続し、取得できた範囲のレースで推奨を生成する（exitしない）。
+LINE_READY=0
+for attempt in 1 2 3; do
+  if .venv/bin/python3 scripts/check_line_readiness.py --date "$TODAY" --start-from-hour 19 \
+      2>&1 | tee -a "$LOG_DIR/line_readiness_${TODAY}.log"; then
+    LINE_READY=1
+    break
+  fi
+  echo "[$(date '+%H:%M:%S')] ライン情報不足検知（試行${attempt}/3）。5分待機して再収集..."
+  sleep 300
+  .venv/bin/python3 -m src.cli.main collect-wt --date "$TODAY" --full-scan \
+    2>&1 | tee -a "$LOG_DIR/collect_wt_${TODAY}_line_retry${attempt}.log"
+done
+
+if [[ "$LINE_READY" != "1" ]]; then
+  echo "[$(date '+%H:%M:%S')] ライン情報不足が解消せず。取得できた範囲で推奨生成を継続します。"
+  .venv/bin/python3 -c "
+from src.notify.discord import send
+send('⚠️ **[$TODAY] 夕方の部: ライン情報(winticket linePrediction)不足が3回の再収集(5分間隔)後も解消しませんでした。** 取得できた範囲のレースで推奨は生成します。手動確認を推奨します。', channel='system')
+" 2>&1 | tee -a "$LOG_DIR/line_readiness_${TODAY}.log" || true
+fi
 
 # 1b. 夕方オッズを退避（夜レースは朝オッズ未確定→夕方が実質「生成時オッズ」。
 #     ワイド監視で夜レースの朝相当(夕方)→確定ドリフトを見るための基準。snapshot_type='evening'）
