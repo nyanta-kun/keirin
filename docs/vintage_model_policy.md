@@ -70,9 +70,10 @@ TAIL_FROMと実際の`lgbm_wt_eval`のtest_from（週次で「実行日-90日」
 その月用のvintageモデルを作成する必要がある。`scripts/ensure_monthly_vintage.sh`
 が「`train_monthly_vintage_models.py --only-missing`で不足月を学習 →
 `sync_models_to_vps.sh`でVPSへ配布」を1コマンドで行う（マニフェスト更新は
-`save_model()`内で学習と同時に自動的に行われるため別手順は不要）。crontab自体の
-変更はPM/ユーザー確認の上で別途行う（下記「未整備」節参照。本スクリプトの新設
-自体はcrontabを変更していない）。
+`save_model()`内で学習と同時に自動的に行われるため別手順は不要）。**Mac crontab
+への登録（`5 0 1 * *` = 毎月1日 00:05）も 2026-08-01 にユーザー承認のうえ完了した**
+（あわせて週次行末尾の rsync 直書きを `sync_models_to_vps.sh` へ差し替え済み。
+反映前の crontab は Mac 上の `~/crontab_mac_backup_20260801.txt` に保全）。
 
 ## 書き込み保護
 
@@ -163,8 +164,8 @@ S7/S9/7A/9Aは同一のインターフェース（`--dry-run`/`--tail-only`/
    `train_monthly_vintage_models.py --only-missing`で不足月のみ学習し、
    成功後に`sync_models_to_vps.sh`でVPSへ配布する。多重起動防止（mkdirロック）・
    `KEIRIN_DB_URL`未設定チェック・失敗時のDiscord通知（`system`チャンネル）を
-   備える。**crontabへの組み込みはPM/ユーザー確認の上で別途実施すること**
-   （本スクリプトの新設自体はcrontabを変更していない）。推奨エントリ:
+   備える。**Mac crontab への組み込みは 2026-08-01 にユーザー承認のうえ完了済み**
+   （下記エントリをそのまま登録した）:
    ```
    5 0 1 * * /Users/ysuzuki/GitHub/keirin/scripts/ensure_monthly_vintage.sh \
      >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1

@@ -286,23 +286,37 @@ crontab（変更漏れの温床）からスクリプト側に一本化した。�
 `src/notify/discord.py::send(msg, channel="system")` で通知する。
 `--dry-run` オプションで実転送なしに対象ファイル一覧を確認できる。
 
-**crontabは本タスクでは変更していない**（既存のrsync直書き行がそのまま動作を
-継続している）。`weekly_retrain_wt.sh`実行後に本スクリプトへ切り替える場合は、
-以下の差分をPM/ユーザー判断で適用すること:
+**Mac crontab への反映は 2026-08-01 に完了した**（ユーザー承認のうえ実施。
+反映前の内容は Mac 上の `~/crontab_mac_backup_20260801.txt` に保全）。
+適用した差分:
 
 ```
-# 変更前（現行）:
+# 変更前（〜2026-08-01）:
 30 23 * * 0 /Users/ysuzuki/GitHub/keirin/scripts/weekly_retrain_wt.sh \
   >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1 && \
   rsync -av <個別ファイルを明示列挙...> sekito:~/keirin/data/models/ \
   >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
 
-# 変更後（提案）:
+# 変更後（現行・2026-08-01〜）:
 30 23 * * 0 /Users/ysuzuki/GitHub/keirin/scripts/weekly_retrain_wt.sh \
   >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1 && \
   /Users/ysuzuki/GitHub/keirin/scripts/sync_models_to_vps.sh \
   >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
 ```
+
+あわせて `scripts/ensure_monthly_vintage.sh`（不足月の学習 + VPS配布）を月初に
+実行する行も Mac crontab へ追加した（同スクリプトのヘッダが推奨していたエントリ。
+`5 0 1 * *` = 毎月1日 00:05。週次retrain の日曜23:30 と重ならず、
+`reconcile_walkforward_tail.sh`(00:50・現在PAUSED) より前）:
+
+```
+5 0 1 * * /Users/ysuzuki/GitHub/keirin/scripts/ensure_monthly_vintage.sh \
+  >> /Users/ysuzuki/GitHub/keirin/data/logs/cron.log 2>&1
+```
+
+これにより、月次vintageモデルが「学習はされるが配布されない」「月が替わった
+瞬間に当月モデルが無くて rebuild が落ちる」という 2026-08-01 に実害化した
+2つの穴が恒久的に塞がる。
 
 **D-6: 週次再学習がスリープでスキップされても検知できない問題への対策**
 
