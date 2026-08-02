@@ -76,9 +76,12 @@ docs/bet-structure-guide.md            # 買い目戦略（旧体系の歴史的
 > 1月以外すべて70%以下で控除率75%を下回り続け、有効な推奨として成立していなかった
 > ため。候補生成・ライブ判定・採点・Discord通知・Web表示・DB実績（16,298行）を
 > すべて停止／削除した（退避: Mac側 `data/backup/picks_history_rank_7ss_before_abolition_20260802.csv`）。
-> 判定ロジック（`rank_7ss_*` / `backfill_7ss_rank_wt.py` / `exp_7ss_*.py`）は
-> 将来の再設定に備えて残置してある。再開手順はメモリ
-> `keirin_7ss_abolition_2026_08_02` 参照。
+> 判定ロジック（`src/strategy_wt.py` の `RANK_7SS_*` 定数・`rank_7ss_*` 関数群、
+> `scripts/backfill_7ss_rank_wt.py`、`tests/test_7ss_void_by_dns_unification.py`）は
+> 将来の再設定に備えて残置してある。一方、再定義案を探索した `exp_7ss_*.py` 6本は
+> git 未追跡のままだったため 2026-08-02 にユーザー判断で削除した（＝復元不可。
+> 三連単への再定義・朝ゲート化・配分・閾値スイープ等を再検討する場合は書き直しになる）。
+> 再開手順はメモリ `keirin_7ss_abolition_2026_08_02` 参照。
 > **以降の本節の記述で 7SS/9SS に触れている箇所は、いずれも廃止前の履歴として読むこと。**
 
 ### ランク名体系化（2026-07-31・commit `f31f84b`）— 内部rank名・suffixの正本
