@@ -340,7 +340,7 @@ def save_to_db(
     ]
     for rank_key, rd in result.get("by_rank", {}).items():
         # suffix 規約: {model}#{label}（label は単一正本 CURRENT_PAPER_RANKS の表示
-        # ラベル。例 lgbm_wt#7S / lgbm_wt#7A / lgbm_wt#9S / lgbm_wt#9A / lgbm_wt#7SS。
+        # ラベル。例 lgbm_wt#7S / lgbm_wt#7A / lgbm_wt#9S / lgbm_wt#9A。
         # 2026-07-31以前は f"{model_name}#7{rank_key}" と "7" を固定で挟んでいたが、
         # 9車ランク(9S/9A)が "#79S" のように誤命名される不具合があったため修正）
         rank_model = f"{model_name}#{rank_key}"
@@ -448,6 +448,11 @@ def main() -> None:
             # 2026-07-31: S1(SEVEN_S1)全廃（是正タスクB-6/C-1でPAPER_RANKSから除外）。
             # 旧"#7S1"行は再生成されなくなるため明示的に削除する。
             conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7S1'")
+            # 2026-08-02: RANK_7SS（波乱軸選出・穴レース検知）全廃。
+            # live実績 n=16,298・ROI73.5% と控除率75%を下回り続けたため
+            # CURRENT_PAPER_RANKS から除外した。"#7SS" 行は再生成されなくなるので
+            # 明示的に削除し、ランク別サマリーから消す。
+            conn.execute("DELETE FROM model_evaluation WHERE model_name LIKE '%#7SS'")
             conn.execute("DELETE FROM model_evaluation WHERE period_type = 'VAL'")
         save_to_db("lgbm_wt", "HOLD", PAPER_HOLD[0], PAPER_HOLD[1], pooled)
     else:

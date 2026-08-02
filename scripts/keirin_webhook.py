@@ -47,8 +47,12 @@ _running: dict[str, subprocess.Popen] = {}
 
 _RACE_KEY_RE = re.compile(r"^\d{8}_\d{2}_\d{2}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-# scripts/netkeirin_submit_wt.py の MANUAL_ALLOWED_RANKS と同一（S1は全廃済みのため対象外）
-_MANUAL_ALLOWED_RANKS = ("7SS", "7S", "7A", "9SS", "9S", "9A")
+# scripts/netkeirin_submit_wt.py の MANUAL_ALLOWED_RANKS と同一
+# （S1・旧7SS/旧9SS は全廃済み。波乱軸選出の RANK_7SS も 2026-08-02 に全廃した
+#   ため対象外。2026-08-02 時点で submit 側は既に ("7S","7A","9S","9A") だったが
+#   こちらだけ旧値が残っており、_is_enabled() が fail-open のため webhook 経由の
+#   手動入稿では廃止済みランクが通る状態になっていた＝同時に是正）
+_MANUAL_ALLOWED_RANKS = ("7S", "7A", "9S", "9A")
 
 
 def _spawn(name: str, cmd: list[str], log_file: Path, extra_env: dict[str, str] | None = None) -> tuple[bool, str]:

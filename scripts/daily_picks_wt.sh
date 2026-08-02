@@ -226,7 +226,7 @@ echo "[$(date '+%H:%M:%S')] 候補レースを picks_history に書き込み..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 候補書き込みに失敗（継続）"
 
-# --- 2b. netkeirin（ウマい車券）へ全7ランク(S1/7SS/7S/7A/9SS/9S/9A)候補を下書き自動入稿
+# --- 2b. netkeirin（ウマい車券）へ現行4ランク(7S/7A/9S/9A)候補を下書き自動入稿
 #     （2026-07-23新設・2026-07-28全ランク対応。ランクごとのON/OFFは
 #     keirin.netkeirin_settings＝kiseki側 /keirin/settings で管理）
 #     2026-08-01: 8:00一本化によりsession="morning"の1回で当日全レース分

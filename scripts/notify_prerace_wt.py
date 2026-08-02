@@ -2245,14 +2245,13 @@ def main():
     except Exception as e:
         logger.exception("S7候補処理失敗（SS/U/M/S1通知には影響しない）: %s", e)
 
-    # ── 7SS候補（波乱軸選出・穴レース検知・ペーパー）処理 ────────────────────
-    # 2026-07-31導入。モデル非依存の独立戦略・S7等との重複排除はない。
-    try:
-        rank_7ss_messages, rank_7ss_done = _process_rank_7ss_candidates(today, now_unix, notified)
-        messages += rank_7ss_messages
-        newly_done |= rank_7ss_done
-    except Exception as e:
-        logger.exception("7SS候補処理失敗（他ランク通知には影響しない）: %s", e)
+    # ── 7SS候補（波乱軸選出・穴レース検知）は 2026-08-02 に全廃 ──────────────
+    # live実績 n=16,298・ROI73.5% と控除率75%を下回り続けたためユーザー判断で停止。
+    # 候補生成（src/cli/main.py）も同時に止めているので候補JSONは生成されないが、
+    # S1全廃時の教訓（CLAUDE.md: 候補生成/ライブ判定/欠損自動補完の3経路すべてを
+    # 止める）に従い、ここの呼び出しもコードレベルで停止する
+    # （残置ファイルが手元に残っていても picks_history へ書き戻らないようにする）。
+    # 再設定する場合は _process_rank_7ss_candidates() の呼び出しを復活させる。
 
     # ── S9候補（S7の9車立て版・独立ランク・ペーパー）処理 ────────────────────
     # 2026-07-26導入。S7等との重複排除はない（独立戦略・車数も異なる）。

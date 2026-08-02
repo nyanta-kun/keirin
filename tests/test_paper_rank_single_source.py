@@ -37,11 +37,12 @@ import save_model_eval as sme
 import live_report_wt as lr
 
 
-# 現行5ランク（2026-07-31時点・picks_history実データで件数・期間・ROIを確認済み）。
-CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A", "RANK_7SS"}
+# 現行4ランク（2026-08-02時点。RANK_7SS は同日に全廃し ABOLISHED へ移動）。
+CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
+    "RANK_7SS",
     "SEVEN_S1", "SIX_S1", "7PLUS_U", "7PLUS_M", "7PLUS_R", "7PLUS_ST", "7PLUS_STP",
 }
 
@@ -93,10 +94,14 @@ def test_rank_7s_is_the_only_header_total_member():
     assert header_members == {"RANK_7S"}
 
 
-def test_seven_ss_excluded_from_live_report_only():
-    """in_live_report=FalseはRANK_7SSのみ（他4ランクは全てTrue）。"""
+def test_all_current_ranks_in_live_report():
+    """現行4ランクは全て in_live_report=True。
+
+    唯一Falseだった RANK_7SS は 2026-08-02 に全廃し CURRENT から除外したため、
+    除外対象は空集合になる。
+    """
     excluded = {spec.rank for spec in sw.CURRENT_PAPER_RANKS if not spec.in_live_report}
-    assert excluded == {"RANK_7SS"}
+    assert excluded == set()
 
 
 # ── 2. notify_results_wt.py::_query_stats（B-6の中心） ──────────────────
@@ -138,8 +143,8 @@ class _FakeConn:
         return _FakeCursor(sql, params, self._row)
 
 
-def test_query_stats_sql_contains_all_five_current_ranks(monkeypatch):
-    """_query_stats が実際に発行するSQLのIN句に現行5ランク全てが入ること。
+def test_query_stats_sql_contains_all_current_ranks(monkeypatch):
+    """_query_stats が実際に発行するSQLのIN句に現行ランク全てが入ること。
 
     2026-07-31以前は独自ハードコードのIN句にRANK_7SSが漏れており、
     picks_historyの16,273行が月次/年次サマリーに一切反映されなかった
@@ -164,8 +169,8 @@ def test_query_stats_sql_contains_all_five_current_ranks(monkeypatch):
     assert params == ("2026-07%",)
 
 
-def test_query_stats_result_reflects_seven_ss_rows(monkeypatch):
-    """_query_stats がRANK_7SS分の行を実際に合算できること（機能面の確認）。"""
+def test_query_stats_result_reflects_all_rank_rows(monkeypatch):
+    """_query_stats が現行ランク分の行を実際に合算できること（機能面の確認）。"""
     fake = _FakeConn(row=_FakeRow(races=16273, hits=4000, returns_=8_000_000, bets=8_136_500))
     monkeypatch.setattr(nr, "get_connection", lambda: fake)
 
@@ -191,14 +196,18 @@ def test_paper_suffixes_include_legacy_hash_suffix_ranks():
     サフィックスも安全網として残っていること（誤って巻き込み削除しないため）。
     """
     legacy_suffixed = {spec.suffix for spec in sw.ABOLISHED_PAPER_RANKS if spec.suffix}
-    assert legacy_suffixed == {"#7S1", "#6S1"}
+    assert legacy_suffixed == {"#7SS", "#7S1", "#6S1"}
     for suffix in legacy_suffixed:
         assert suffix in nr._PAPER_SUFFIXES
 
 
 def test_paper_suffixes_has_no_unexpected_extra_entries():
-    """_PAPER_SUFFIXES が「現行5+ legacy2」の7件ちょうどであること。"""
-    expected = {spec.suffix for spec in sw.CURRENT_PAPER_RANKS} | {"#7S1", "#6S1"}
+    """_PAPER_SUFFIXES が「現行4 + legacy3」の7件ちょうどであること。
+
+    2026-08-02 の RANK_7SS 全廃で現行5→4・legacy2→3 に移り変わったが、
+    合計7件（#7SS は保護目的で legacy 側に残る）であることは変わらない。
+    """
+    expected = {spec.suffix for spec in sw.CURRENT_PAPER_RANKS} | {"#7SS", "#7S1", "#6S1"}
     assert set(nr._PAPER_SUFFIXES) == expected
     assert len(nr._PAPER_SUFFIXES) == 7
 
@@ -310,15 +319,21 @@ def test_all_four_locations_agree_on_current_rank_universe():
     assert live_report_ranks.isdisjoint(abolished)
 
 
-def test_regression_seven_ss_present_everywhere_it_should_be():
-    """本タスクの直接の契機（RANK_7SSがpicks_historyに16,273行あるのに
-    _query_statsのIN句から漏れていた）が解消されていることの単体確認。
+def test_regression_seven_ss_absent_everywhere():
+    """RANK_7SS 全廃（2026-08-02）が全参照先へ波及していることの単体確認。
+
+    live実績 n=16,298・ROI73.5% と控除率75%を下回り続けたため全廃した。
+    S1 全廃時と同じく「単一正本から消せば4つの参照先すべてから消える」
+    構造になっていることを担保する（旧S3/S1全廃時に取りこぼした経路が
+    翌日以降ランクを復活させた事故の再発防止）。
     """
-    assert "RANK_7SS" in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
-    assert "'RANK_7SS'" in nr._QUERY_STATS_RANKS_SQL
+    assert "RANK_7SS" not in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
+    assert "RANK_7SS" in {spec.rank for spec in sw.ABOLISHED_PAPER_RANKS}
+    assert "'RANK_7SS'" not in nr._QUERY_STATS_RANKS_SQL
+    # "#7SS" は _PAPER_SUFFIXES には残る（廃止済みsuffixは「巻き込み削除の
+    # 保護対象」として意図的に含める設計。#7S1/#6S1 と同じ扱い）
     assert "#7SS" in nr._PAPER_SUFFIXES
-    assert ("7SS", "RANK_7SS", "#7SS") in sme.PAPER_RANKS
-    # live_report_wt は意図的に対象外（本文の判断・報告の通り）
+    assert not any(r[1] == "RANK_7SS" for r in sme.PAPER_RANKS)
     assert "RANK_7SS" not in lr.RANKS
 
 

@@ -1,0 +1,2 @@
+id,model_name,period_from,period_to,period_type,n_picks,n_hits,total_bet,total_payout,roi,evaluated_at
+102,lgbm_wt#7SS,2026-04-13,2026-06-30,HOLD,7,5,3500,28730,8.209,2026-07-23 12:54:49.270813+09:00

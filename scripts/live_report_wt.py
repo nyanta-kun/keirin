@@ -13,11 +13,9 @@ RANK_7S(表示7S)・RANK_7A(表示7A)・RANK_9S(表示9S)・RANK_9A(表示9A) �
 対象（見送り miwokuri=True・候補行は集計から除外・notify_results_wt.py の
 集計条件 `rank IN (...) AND NOT COALESCE(miwokuri,FALSE) AND bet_amount>0` と統一）。
 SEVEN_S1 は2026-07-31に全廃済み（picks_history からも削除済み）のため対象外。
-RANK_7SS（波乱軸選出・穴レース検知）はモデル非依存の別戦略で、本ツールが対象とする
-「モデル系ペーパーランクのlive実測」とは性質が異なる（見せ場・穴レース検知が目的で
-ROI改善は非目標）ため、単一正本側の設計として意図的に対象外にしている
-（src/strategy_wt.PaperRankSpec.in_live_report=False。notify_results_wt.py::
-_query_stats・save_model_eval.py::PAPER_RANKS には含める）。
+RANK_7SS（波乱軸選出・穴レース検知）は 2026-08-02 に全廃した（live実績
+n=16,298・ROI73.5% と控除率75%を下回り続けたため）。単一正本
+CURRENT_PAPER_RANKS から除外済みなので本ツールの RANKS にも自動的に現れない。
 
 [2026-07-31 修正] RANKS/RANK_LABELS が2026-07-16に全廃されたランク 7PLUS_R
 （表示SS）のまま放置されていたため、`_load_picks()` の `rank IN ('7PLUS_R')` が

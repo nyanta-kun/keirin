@@ -138,7 +138,7 @@ echo "[$(date '+%H:%M:%S')] S7（Sランク）朝夜統合再選出..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜候補書き込みに失敗（継続）"
 
-# 3b. netkeirin（ウマい車券）へ全7ランク(S1/7SS/7S/7A/9SS/9S/9A)候補を下書き自動入稿
+# 3b. netkeirin（ウマい車券）へ現行4ランク(7S/7A/9S/9A)候補を下書き自動入稿
 #     （2026-07-23新設・2026-07-28全ランク対応。ランクごとのON/OFFは
 #     keirin.netkeirin_settings＝kiseki側 /keirin/settings で管理）
 echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（夕）..."

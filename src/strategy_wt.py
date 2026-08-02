@@ -1029,7 +1029,7 @@ class PaperRankSpec:
     in_live_report: bool   # live_report_wt.py の集計対象(RANKS)に含めるか
 
 
-# 現行5ランク（2026-07-31 内部rank/suffixをRANK_+表示ラベル方式へ全面改名。
+# 現行4ランク（2026-07-31 内部rank/suffixをRANK_+表示ラベル方式へ全面改名。
 # 表示ラベル自体は変更なし。件数・期間・ROIは旧名時点の実績値）。
 # 並び順は Discord 表示・各参照先ファイルでの反復順とも一致させる。
 #
@@ -1050,20 +1050,15 @@ class PaperRankSpec:
 #
 # in_header_total: RANK_7SのみTrue（ヘッダー合計 p7b/p7r/p7h・n7 に算入する既存
 #   方針。kiseki Webサマリーのトップラインと揃える）。RANK_7A/RANK_9S/RANK_9A は
-#   境界ランク・独立ランクとして別集計する既存方針のためFalse。RANK_7SS（波乱軸
-#   選出・穴レース検知）もモデル系の本体ランクとは性質が異なる独立戦略のため
-#   別集計＝False。
-# in_live_report: RANK_7SS のみFalse。live_report_wt.py は「採否判断の唯一の
-#   裁定者」を自称するモデル系4ランク専用のツールで、RANK_7SS はモデル非依存の
-#   別戦略（見せ場・穴レース検知が目的でROI改善は非目標）のため意図的に対象外
-#   とする（2026-07-31 導入時からの方針。_query_stats・model_evaluation には
-#   含める）。
+#   境界ランク・独立ランクとして別集計する既存方針のためFalse。
+# in_live_report: 現行4ランクは全てTrue（live_report_wt.py はモデル系ランクの
+#   採否判断ツール）。唯一Falseだった RANK_7SS はモデル非依存の別戦略だったが
+#   2026-08-02 に全廃したため CURRENT から除去した（ABOLISHED_PAPER_RANKS 参照）。
 CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
     PaperRankSpec("RANK_7S",  "#7S",  "7S",  in_header_total=True,  in_live_report=True),
     PaperRankSpec("RANK_7A",  "#7A",  "7A",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9S",  "#9S",  "9S",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
-    PaperRankSpec("RANK_7SS", "#7SS", "7SS", in_header_total=False, in_live_report=False),
 )
 
 # 旧名(2026-07-31改名前)→新名のマッピング（過去のCSVバックアップ・Discordログ・
@@ -1099,6 +1094,11 @@ class AbolishedRankSpec:
 
 
 ABOLISHED_PAPER_RANKS: tuple[AbolishedRankSpec, ...] = (
+    AbolishedRankSpec("RANK_7SS", "#7SS",
+                       "波乱軸選出・穴レース検知／三連複2軸総流し（2026-08-02全廃）。"
+                       "live実績 n=16,298・ROI73.5%と控除率75%を下回り続けたため。"
+                       "判定ロジック(rank_7ss_*)とbackfill_7ss_rank_wt.pyは"
+                       "将来の再設定に備えて残置"),
     AbolishedRankSpec("SEVEN_S1", "#7S1",
                        "win軸1着固定×3着内モデル相手2車・三連単2点流し（2026-07-31全廃）"),
     AbolishedRankSpec("SIX_S1", "#6S1",

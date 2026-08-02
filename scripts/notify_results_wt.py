@@ -322,8 +322,8 @@ def _query_stats(like):
     2026-07-16に全廃されたrank='7PLUS_R'をハードコードしたまま放置されており、
     それ以降ずっと0件（"データなし"）を返し続けていたバグを2026-07-28に修正。
     ヘッダー（p7b/p7r/p7h・S1+S7のみ）とは異なり、こちらは現行の全ペーパーランク
-    （単一正本 CURRENT_PAPER_RANKS の5ランク: S7・7A・9S・9A・7SS）を合算する
-    （ユーザー要望・2026-07-28）。
+    （単一正本 CURRENT_PAPER_RANKS の4ランク: 7S・7A・9S・9A）を合算する
+    （ユーザー要望・2026-07-28。RANK_7SS は 2026-08-02 に全廃し正本から除外済み）。
 
     【2026-07-31修正】IN句が独自ハードコードのままだったため、7SS新設(dc89f14)
     でpicks_historyに16,273行（2022-12-01〜・ROI73.5%）が入ったにもかかわらず
@@ -477,26 +477,10 @@ def _main_inner(date):
         if _pk not in picks:
             picks[_pk] = ("RANK_7S", "", "")
 
-    # 7SS=波乱軸選出・穴レース検知（モデル非依存・ペーパートレード検証・2026-07-31導入）:
-    # decisions キー {rk}#7SS（decision=buy）を picks に注入する（slot="seven_ss"）。
-    # ※旧「7SS」（S7のgate_label="SS"・軸2車がWT◎◯と全く重ならない表示ランク）は
-    #   2026-07-31にSへ統合・廃止済み。このrank(RANK_7SS)・slotとは無関係の別物。
-    for _key, _dec in decisions.items():
-        if not _key.endswith("#7SS") or _dec.get("decision") != "buy" or not _dec.get("combos"):
-            continue
-        _rk = _key[:-4]
-        if not _rk.startswith(dc):
-            continue
-        try:
-            _, _code, _rno = _rk.split("_")
-        except ValueError:
-            continue
-        _venue = code2name.get(_code)
-        if _venue is None:
-            continue
-        _pk = (_venue, int(_rno), "seven_ss")
-        if _pk not in picks:
-            picks[_pk] = ("RANK_7SS", "", "")
+    # 7SS（波乱軸選出・穴レース検知・RANK_7SS）は 2026-08-02 に全廃したため
+    # decisions からの注入も停止した（live実績 n=16,298・ROI73.5%）。
+    # 候補生成・ライブ判定も同時に止めているので {rk}#7SS の decisions 自体が
+    # 新規発生しないが、S1全廃時の教訓に従い採点側でもコードレベルで停止する。
 
     # S9=S7の9車立て版（独立ランク・ペーパートレード検証・2026-07-26導入）:
     # decisions キー {rk}#S9（decision=buy）を picks に注入する（slot="nine_s9"）。
@@ -611,7 +595,6 @@ def _main_inner(date):
     results_s9 = []           # S9=S7の9車立て版（独立ランク・ペーパー）行 — ヘッダー合計には含めず[9車]別集計
     results_7a = []           # 7A=S7の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
     results_9a = []           # 9A=S9の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
-    results_sevenss = []      # 7SS=波乱軸選出・穴レース検知（モデル非依存・ペーパー）行 — 別集計（2026-07-31導入）
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 旧Sランク 合計
     p7rb = p7rr = p7rh = 0    # 旧S1（7PLUS_R・2026-07-16全廃・過去日再採点互換）合計
@@ -631,8 +614,6 @@ def _main_inner(date):
     # 7A/9A（S7/S9の境界ランク・単一サブランク・2026-07-27導入。ヘッダー合計には含めない）
     p7ab = p7ar = p7ah = 0
     p9ab = p9ar = p9ah = 0
-    # 7SS（波乱軸選出・穴レース検知・単一サブランク・2026-07-31導入。ヘッダー合計には含めない）
-    rank_7ss_bet = rank_7ss_ret = rank_7ss_hit = 0
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -784,73 +765,10 @@ def _main_inner(date):
                 continue
 
             if _slot == "seven_ss":
-                # ── 7SS（波乱軸選出・穴レース検知・ペーパートレード検証・2026-07-31導入）採点 ──
-                # 正本は decisions の {rk}#7SS。返還処理なし。単一サブランク（gate_labelなし）。
-                # モデル非依存（race_point/WT印/1着率/3着内率/ライン構成のみで判定）の
-                # 独立戦略。ヘッダー合計(p7b/p7h)には含めず7Aと同様に別行で表示する。
-                # ※旧「7SS」（S7のgate_label="SS"）とは無関係の別ランク（上記コメント参照）。
-                dec_ss = decisions.get(rk + "#7SS")
-                if not dec_ss or dec_ss.get("decision") not in ("buy", "skip"):
-                    print(f"[notify_results_wt] 7SS判定記録なし {rk}: 不計上", flush=True)
-                    continue
-                is_buy = dec_ss.get("decision") == "buy" and bool(dec_ss.get("combos"))
-                ss_rows = conn.execute(
-                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
-                    "ORDER BY finish_order", (rk,)).fetchall()
-                ss_order = [int(r[0]) for r in ss_rows]
-                if len(ss_order) < 3:
-                    continue
-                ss_stake = int(dec_ss.get("stake") or 100)
-                try:
-                    ss_axis1 = int(dec_ss.get("axis1"))
-                    ss_axis2 = int(dec_ss.get("axis2"))
-                except (TypeError, ValueError):
-                    continue
-                ss_top3 = frozenset(ss_order[:3])
-                ss_trio_pay = pm.get(rk, {}).get(("trio", ss_top3), 0)
-                ss_trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(ss_order[:3])), 0)
-
-                if is_buy:
-                    try:
-                        ss_combos = [frozenset(int(x) for x in str(c).split("-"))
-                                     for c in dec_ss["combos"]]
-                    except (TypeError, ValueError):
-                        continue
-                    ss_hit = any(cs == ss_top3 for cs in ss_combos)
-                    ss_pay = ss_trio_pay * ss_stake // 100 if ss_hit else 0
-                    ss_bet = len(ss_combos) * ss_stake
-                    ss_n_combos = len(ss_combos)
-                    ss_thirds = sorted(
-                        next(iter(cs - {ss_axis1, ss_axis2}))
-                        for cs in ss_combos if len(cs - {ss_axis1, ss_axis2}) == 1)
-                    ss_pred = f"{ss_axis1}={ss_axis2}-" + ",".join(map(str, ss_thirds))
-                else:
-                    ss_hit = ss_axis1 in ss_top3 and ss_axis2 in ss_top3
-                    ss_pay = 0
-                    ss_bet = 0
-                    ss_n_combos = 0
-                    ss_pred = f"{ss_axis1}={ss_axis2}-見送り"
-                ss_tstr = ptime
-                _ss_stt = start_map.get(rk)
-                if _ss_stt:
-                    try:
-                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-                        ss_tstr = _dt.fromtimestamp(int(_ss_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
-                    except (ValueError, TypeError):
-                        pass
-                if is_buy:
-                    ss_mark = f"◎ ¥{ss_pay:,}" if ss_hit else "×"
-                    results_sevenss.append(
-                        f"[7SS] {venue} {race_no}R {ss_tstr}  予:{ss_pred}"
-                        f"  実:{'-'.join(map(str, ss_order[:3]))}  {ss_mark}")
-                    rank_7ss_bet += ss_bet
-                    if ss_hit:
-                        rank_7ss_ret += ss_pay
-                        rank_7ss_hit += 1
-                history.append((target_date, f"{rk}#7SS", "RANK_7SS", ss_pred, ss_n_combos,
-                                int(ss_hit), ss_pay, ss_trio_pay, ss_trifecta_pay, ss_bet,
-                                not is_buy, None,
-                                *gap_map.get(rk, (None, None, None)), None))
+                # 7SS（波乱軸選出・穴レース検知・RANK_7SS）は 2026-08-02 に全廃。
+                # 候補生成・ライブ判定・decisions注入を全て止めているため
+                # このスロットに到達することは無いが、万一過去日を再採点した際に
+                # picks_history へ RANK_7SS 行が復活しないよう採点自体を停止する。
                 continue
 
             if _slot == "nine_s9":
@@ -1271,8 +1189,7 @@ def _main_inner(date):
 
     total_7plus = results_7plus_ss + results_7plus_s + results_7plus_r
     if (not total_7plus and not results_7plus_s1 and not results_7plus_s7
-            and not results_s9 and not results_7a and not results_9a
-            and not results_sevenss):
+            and not results_s9 and not results_7a and not results_9a):
         emit(f"📊 **競輪AI[wt]成績 {target_date}**\n確定レースなし")
         return
 
@@ -1307,15 +1224,15 @@ def _main_inner(date):
     s1_line = _rank_line("S1(win軸固定)", len(results_7plus_s1), p7s1b, p7s1r, p7s1h)
     # 【2026-07-31】旧「7SS+/7SS」（S7のgate_label="SS+"/"SS"）は廃止済み・
     # 常に0件のため出力には現れない（過去日再採点の互換のため関数呼び出しのみ残置）。
-    # 現在「7SS」の名を冠する実体は下の rank_7ss_line（波乱軸選出・別ランクRANK_7SS）のみ。
+    # （波乱軸選出の RANK_7SS も 2026-08-02 に全廃したため、現在「7SS」の名を冠する
+    #   行は Discord 出力に一切存在しない。）
     old7ssp_line = _rank_line("旧7SS+*", p7s7sspn, p7s7sspb, p7s7sspr, p7s7ssph)
     old7ss_line = _rank_line("旧7SS*", p7s7ssn, p7s7ssb, p7s7ssr, p7s7ssh)
     s7s_line = _rank_line("7S(波乱度選出)", p7s7sn, p7s7sb, p7s7sr, p7s7sh)
     # 7A（境界ランク・2026-07-27導入）はヘッダー合計(p7b/p7h)には含めず別行で表示する
     a7_line = _rank_line("7A(境界ランク)", len(results_7a), p7ab, p7ar, p7ah)
-    # 7SS（波乱軸選出・穴レース検知・2026-07-31導入）もヘッダー合計には含めず別行で表示する
-    rank_7ss_line = _rank_line("7SS(波乱軸選出)", len(results_sevenss), rank_7ss_bet, rank_7ss_ret, rank_7ss_hit)
-    for _l in (s1_line, old7ssp_line, old7ss_line, s7s_line, a7_line, rank_7ss_line, r_line, ss_line, s_line):
+    # 7SS（波乱軸選出・RANK_7SS）は 2026-08-02 に全廃したため Discord 行も削除した。
+    for _l in (s1_line, old7ssp_line, old7ss_line, s7s_line, a7_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1323,7 +1240,7 @@ def _main_inner(date):
     if rank_lines:
         msg += "\n" + "\n".join(rank_lines)
     msg += "\n```\n" + "\n".join(
-        total_7plus + results_7plus_s1 + results_7plus_s7 + results_7a + results_sevenss) + "\n```"
+        total_7plus + results_7plus_s1 + results_7plus_s7 + results_7a) + "\n```"
 
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"
@@ -1369,7 +1286,6 @@ def _main_inner(date):
           f"旧7SS(過去分互換) {p7s7ssn}R 的中{p7s7ssh} / "
           f"7S(ペーパー) {p7s7sn}R 的中{p7s7sh} / "
           f"7A(ペーパー) {len(results_7a)}R 的中{p7ah} / "
-          f"7SS(波乱軸選出・ペーパー) {len(results_sevenss)}R 的中{rank_7ss_hit} / "
           f"S9(ペーパー) {len(results_s9)}R / "
           f"9A(ペーパー) {len(results_9a)}R 的中{p9ah} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
