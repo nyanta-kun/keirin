@@ -45,7 +45,11 @@ data/models/lgbm.pkl (=lgbm_v6)         # 保持。日次/週次cronはwt版に�
 ### ドキュメント
 
 ```
-CONTINUATION.md                         # セッション引継ぎメモ（最重要）
+CONTINUATION.md                         # 2026-07-07までの検証履歴アーカイブ（★引継ぎメモではない）
+                                        #   価値があるのは「リーク無し再検証で結論が
+                                        #   変わったもの（要注意）」等の negative result 記録。
+                                        #   現行の状態は本ファイル、未対応作業は
+                                        #   kiseki側メモリ open_tasks_register を正本とする
 docs/prediction-factors.md             # 予想ファクター仕様書（要メンテ）
 docs/system-architecture.md            # システム構成・CLIコマンド一覧
 docs/data-collection.md                # データ収集手順（ks + winticket）
