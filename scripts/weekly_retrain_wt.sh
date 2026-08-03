@@ -1,7 +1,8 @@
 #!/bin/bash
 # 毎週日曜23:30実行（winticketルート）: wtモデル再学習
 # H-1対応: ①holdout評価(昇格せず・監視用) → ②全データ再学習で配信モデル(lgbm_wt)生成
-#          → ③カット再計測 → ④世代退避(ロールバック用)
+#          → ②''隊列位置補正(lgbm_wt_b/lgbm_wt_poscal) → ③カット再計測
+#          → ④世代退避(ロールバック用)
 set -e
 set -o pipefail   # L-5: | tee が python の終了コードをマスクしないように
 export PATH="/usr/sbin:/sbin:$PATH"
@@ -151,6 +152,21 @@ if [[ "$WIN_GATE_OK" == "1" ]]; then
   cp -f data/models/lgbm_wt_win.meta.json  "data/models/archive/lgbm_wt_win_${DATE}.meta.json"  2>/dev/null || true
 else
   echo "[$(date '+%H:%M:%S')] ②' 1着モデル品質ゲート不合格 → lgbm_wt_win 更新スキップ（旧モデル維持）" | tee -a "$LOG"
+fi
+
+# ②'' 隊列位置バイアス補正（lgbm_wt_b / lgbm_wt_poscal）を再学習
+#     3着内モデルは隊列後方の選手を系統的に過大評価するため2段目で補正する。
+#     ★ ③ のカット再計測より必ず前に置くこと。recompute_upset_cuts_wt.py は
+#     _apply_pred_prob_wt 経由で補正後の pred_prob を見るため、順序を入れ替えると
+#     旧確率分布のカット定数が新モデルに適用されて波乱帯がずれる。
+echo "[$(date '+%H:%M:%S')] ②'' 隊列位置補正モデルを再学習 ..." | tee -a "$LOG"
+if .venv/bin/python3 -m src.cli.main train-poscal-wt --from-date 2023-01-01 2>&1 | tee -a "$LOG"; then
+  cp -f data/models/lgbm_wt_b.pkl      "data/models/archive/lgbm_wt_b_${DATE}.pkl"      2>/dev/null || true
+  cp -f data/models/lgbm_wt_poscal.pkl "data/models/archive/lgbm_wt_poscal_${DATE}.pkl" 2>/dev/null || true
+else
+  # 失敗を握り潰さない。旧モデルが残っていれば配信は継続するが、
+  # 補正モデルだけ古いまま残る状態は検知できる必要がある。
+  echo "[$(date '+%H:%M:%S')] [WARN] 隊列位置補正の再学習に失敗しました（旧モデルを維持）。" | tee -a "$LOG" >&2
 fi
 
 # ③ 波乱ゲート top3_sum カット定数を配信モデルの分布で再計測（test期間除外）

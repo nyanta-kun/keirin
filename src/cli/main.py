@@ -1221,6 +1221,71 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
                f"full_refit={full_refit}, holdout_auc={test_auc}）")
 
 
+@cli.command("train-poscal-wt")
+@click.option("--from-date", "from_date", default="2023-01-01", help="学習データ開始日")
+@click.option("--inner-start", "inner_start", default=None,
+              help="2段目の学習に使う内側窓の開始日。省略時は train-end の12ヶ月前")
+@click.option("--train-end", "train_end", default=None, help="学習終了日（省略時はデータ最終日）")
+def train_poscal_wt(from_date: str, inner_start: str | None, train_end: str | None):
+    """隊列位置バイアス補正（lgbm_wt_b / lgbm_wt_poscal）を学習して保存する。
+
+    3着内モデルは隊列後方の選手を系統的に過大評価する（後方は最終コーナーを
+    外へ膨らんで回るため実走距離が伸びる）。その偏りを2段目モデルで補正する。
+    詳細は src/preprocessing/position_calib.py の docstring 参照。
+
+    Example:
+        python -m src.cli.main train-poscal-wt
+    """
+    import pandas as pd
+    from dateutil.relativedelta import relativedelta
+
+    from src.models.poscal_trainer import (
+        load_res_back, train_position_calibrator, evaluate_axis_quality)
+    from src.models.trainer import save_model
+    from src.preprocessing.feature_wt import (
+        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT)
+    from src.preprocessing.position_calib import (
+        POSCAL_FEATURE_COLS, add_position_features)
+
+    click.echo(f"[poscal] Loading data from {from_date} ...")
+    df = build_features_wt(load_raw_data_wt(min_date=from_date))
+    df = df.merge(load_res_back(from_date), on=["race_key", "frame_no"], how="left")
+    end = train_end or str(df["race_date"].max())
+    if inner_start is None:
+        inner_start = str(
+            (pd.to_datetime(end) - relativedelta(months=12)).date())
+    click.echo(f"[poscal] outer < {inner_start} <= inner <= {end} "
+               f"（{df['race_key'].nunique():,} races）")
+
+    b_model, calib, meta = train_position_calibrator(df, inner_start, end)
+    click.echo(f"[poscal] outer={meta['n_outer_races']:,}R "
+               f"inner={meta['n_inner_races']:,}R")
+    click.echo(f"[poscal] importance: {meta['importance']}")
+
+    # 内側窓での効き目を確認（学習データ上のためあくまで健全性チェック）
+    inner = df[(df["race_date"] >= inner_start) & (df["race_date"] <= end)
+               & df["finish_order"].notna()].copy()
+    if len(inner):
+        from src.models.trainer import load_model as _lm
+        try:
+            base = _lm("lgbm_wt")
+            inner["pred_prob"] = base.predict_proba(inner[FEATURE_COLS_WT])[:, 1]
+            inner["pc_p_b"] = b_model.predict_proba(inner[FEATURE_COLS_WT])[:, 1]
+            inner = add_position_features(inner, prob_col="pred_prob")
+            inner["pred_adj"] = calib.predict_proba(inner[POSCAL_FEATURE_COLS])[:, 1]
+            q = evaluate_axis_quality(inner, "pred_prob", "pred_adj")
+            click.echo(f"[poscal] 内側窓 n={q['n_races']:,}R  軸2車的中 "
+                       f"{q['axis2_hit_before']:.1%} → {q['axis2_hit_after']:.1%} "
+                       f"({q['axis2_hit_delta']:+.2%})  "
+                       f"Brier {q['brier_before']:.5f} → {q['brier_after']:.5f}")
+        except FileNotFoundError:
+            click.echo("[poscal] lgbm_wt が無いため内側窓チェックはスキップします。")
+
+    save_model(b_model, "lgbm_wt_b")
+    save_model(calib, "lgbm_wt_poscal")
+    click.echo("[poscal] lgbm_wt_b / lgbm_wt_poscal を保存しました。")
+
+
 @cli.command("wave-picks-wt")
 @click.option("--date", "target_date", default=None,
               help="対象日 YYYY-MM-DD（省略時: 今日）")
@@ -1362,6 +1427,20 @@ def wave_picks_wt(target_date, output_path, model_name,
     df = build_features_wt(df_raw)
     X = prepare_X(df)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
+
+    # 隊列位置バイアスの補正（2026-08-03〜）。3着内モデルは隊列後方の選手を
+    # 系統的に過大評価する（後方は最終コーナーを外へ膨らんで回るため実走距離が
+    # 伸びる）。軸2車の的中率が 7車 +0.68pt / 9車 +1.73pt（いずれも有意）改善する。
+    # 詳細は src/preprocessing/position_calib.py の docstring 参照。
+    from src.preprocessing.position_calib import apply_position_calibration
+    df, _poscal_applied = apply_position_calibration(df, prob_col="pred_prob")
+    if _poscal_applied:
+        _n_moved = int((df["pred_prob"] != df["pred_prob_raw"]).sum())
+        click.echo(f"[wt] 隊列位置補正を適用しました（{_n_moved}/{len(df)} 行）。")
+    else:
+        # 無言でフォールバックしない。モデル欠損は運用が気づくべき事象。
+        click.echo("[wt] lgbm_wt_b / lgbm_wt_poscal が無いため隊列位置補正は未適用です。"
+                   "train-poscal-wt を実行してください。", err=True)
 
     # 1着モデル（Phase B・2026-07-19〜）。M候補のwin_rankゲートに使う。
     # 存在しなければ None のままにし、M候補生成側で gap12 単独ゲートにフォールバックする。

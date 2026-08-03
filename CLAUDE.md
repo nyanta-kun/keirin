@@ -26,6 +26,14 @@ src/scraper/winticket.py                # PRELOADED_STATE JSON スクレイパ�
 src/scraper/pipeline_wt.py              # wt収集（レース+オッズ同時・結果ありのみスキップ）
 src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（46特徴・rolling統合。2026-07-31にex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46。H2H対戦表特徴は実装のみでFEATURE_COLS_WT非採用・下記参照）・build_features_wt() / add_rolling_features_wt()
 src/evaluation/backtest_wt.py           # wt用バックテスト（通常/--tiered/--value）
+src/preprocessing/position_calib.py    # 隊列位置バイアス補正（2段目）。lgbm_wt は隊列後方の選手を
+                                        #   系統的に過大評価する（後方は最終コーナーを外へ膨らんで
+                                        #   回るため実走距離が伸びる。400m7車で3.1m≒1車幅・
+                                        #   500m9車で8.0m≒2.6車幅＝車数が増えるほど不利）。
+                                        #   軸2車的中を 7車+0.56pt / 9車+1.41pt（有意）改善する。
+                                        #   ★ROIは改善しない。軸1・1着精度も有意差なしのため
+                                        #   三連単1着固定へ転用してはいけない
+src/models/poscal_trainer.py           # 同上の学習（train-poscal-wt → lgbm_wt_b / lgbm_wt_poscal）
 src/models/trainer.py                   # train_lgbm（feature_cols/weight_col引数で両ルート共用）
 src/cli/main.py                         # CLIコマンド（collect-wt/train-wt/backtest-wt/wave-picks-wt等）
 scripts/daily_picks_wt.sh               # 日次運用（cron 8:00）
