@@ -224,6 +224,9 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # レース単位S/B・上がり由来のローリング特徴（point-in-time・2026-07-18追加）
     df = add_sb_dyn_features_wt(df)
 
+    # 隊列推定位置（2026-08-03追加・b_rate_90 に依存するため sb_dyn の後に置く）
+    df = add_formation_features_wt(df)
+
     # 頭対頭対戦成績(H2H)は2026-07-28に実装しFEATURE_COLS_WTへ追加したが、S1/S9の
     # honest全期間walk-forwardでROIが悪化(S1 443.0%→363.5%・S9 412.8%→286.8%)した
     # ため本番投入を撤回した（S7のみ改善401.1%→424.8%。詳細
@@ -238,6 +241,88 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     df[present] = df[present].fillna(0)
 
     return df
+
+
+FORMATION_COLS_WT = ["formation_pos_frac", "formation_line_rank"]
+
+
+def add_formation_features_wt(df: pd.DataFrame) -> pd.DataFrame:
+    """隊列（前→後）の推定位置をレース内相対で付与する（2026-08-03追加）。
+
+    3着内モデルは **隊列後方の選手を系統的に過大評価する**。後方の選手は最終コーナーを
+    外へ膨らんで回るため実走距離が伸びるという物理的な理由による。上がりタイム
+    （最終半周）の「捲−差」から逆算した余剰距離は次のとおりで、**車数が増えるほど
+    不利が増す**（同一500mバンクで9車は7車の1.50倍）:
+
+    | バンク | 車数 | 捲−差 | 余剰距離 | 内側からの幅 |
+    |---|---|---|---|---|
+    | 400m | 7車 | −0.190秒 | 3.13m | 約1.0m（≒1車幅）|
+    | 500m | 7車 | −0.262秒 | 5.34m | 約1.7m |
+    | 500m | 9車 | −0.371秒 | 8.01m | 約2.6m |
+
+    位置そのものは既存特徴では表現できない。`line_pos` はライン内の順番、
+    `line_group` は winticket の**予想並びの配列インデックスで隊列の前後を表さない**
+    （第1ラインの先頭が実際にBを取る率50.5%に対し第2/第3も約30%で差がつかない）。
+    木モデルは行をまたぐ順位を自力で構成できないため、ここで明示的に作る。
+
+    - formation_pos_frac  : 隊列推定位置（0=先頭 … 1=最後方）
+    - formation_line_rank : 所属ラインの推定順（0=先行ライン … 1=最後方ライン）
+
+    どちらも**車数で正規化**してあるため、9車で「後方」が4車以上になるといった
+    境界の違いを閾値のハードコードなしに吸収する。
+
+    ラインの並び順は構成員の `b_rate_90`（既存のpoint-in-time B取得率）の最大値で決める
+    （Bは基本的にライン先頭が取るため）。単騎は1車のラインとして同じ土俵で順位づける。
+    **モデルを使わない純粋な特徴変換**なので追加の学習物・リーク経路を持たない。
+
+    Note:
+        `b_rate_90` に依存するため `add_sb_dyn_features_wt()` の後に呼ぶこと。
+        全選手の `b_rate_90` が同値（履歴が無い期間など）だと順位が付かず
+        `line_group` 順へ縮退する。2024-01 以前の学習データがこれに当たる。
+    """
+    if "b_rate_90" not in df.columns:
+        out = df.copy()
+        for c in FORMATION_COLS_WT:
+            out[c] = 0.0
+        return out
+
+    out = df.copy()
+    out["fm_row_id"] = np.arange(len(out))
+    pos_frac = np.zeros(len(out))
+    line_rank = np.zeros(len(out))
+    idx_of = {v: i for i, v in enumerate(out["fm_row_id"].values)}
+
+    for _, grp in out.groupby("race_key", sort=False):
+        n = len(grp)
+        lines: dict[int, list[tuple]] = {}
+        solo: list[tuple] = []
+        for row in grp.itertuples(index=False):
+            lg = getattr(row, "line_group", None)
+            key = (getattr(row, "b_rate_90", 0.0) or 0.0,
+                   getattr(row, "line_pos", 99) or 99,
+                   row.fm_row_id)
+            if getattr(row, "line_size", 1) in (1, None) or lg is None or pd.isna(lg):
+                solo.append(key)
+            else:
+                lines.setdefault(int(lg), []).append(key)
+        for mem in lines.values():
+            mem.sort(key=lambda t: t[1])          # ライン内は予想並び順
+        units = [(max(t[0] for t in mem), mem) for mem in lines.values()]
+        units += [(t[0], [t]) for t in solo]
+        units.sort(key=lambda u: -u[0])
+
+        i = 0
+        n_units = max(len(units) - 1, 1)
+        for li, (_, mem) in enumerate(units):
+            for t in mem:
+                j = idx_of[t[2]]
+                pos_frac[j] = i / (n - 1) if n > 1 else 0.0
+                line_rank[j] = li / n_units
+                i += 1
+
+    out["formation_pos_frac"] = pos_frac
+    out["formation_line_rank"] = line_rank
+    return out.drop(columns="fm_row_id")
 
 
 ROLLING_COLS_WT = [
@@ -741,6 +826,8 @@ FEATURE_COLS_WT = [
     *RP_TREND_COLS_WT,
     # レース単位S/B・上がりローリング（2026-07-18追加・展開/脚力の直接測定）
     *SB_DYN_COLS_WT,
+    # 隊列推定位置（2026-08-03追加・後方は外を回る分だけ実走距離が伸びる）
+    *FORMATION_COLS_WT,
     # 頭対頭対戦成績(H2H)は2026-07-28に検証→S1/S9悪化のため撤回・非採用（add_h2h_features_wt参照）
 ]
 

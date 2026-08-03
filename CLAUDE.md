@@ -24,19 +24,13 @@
 ```
 src/scraper/winticket.py                # PRELOADED_STATE JSON スクレイパー
 src/scraper/pipeline_wt.py              # wt収集（レース+オッズ同時・結果ありのみスキップ）
-src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（46特徴・rolling統合。2026-07-31にex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46。H2H対戦表特徴は実装のみでFEATURE_COLS_WT非採用・下記参照）・build_features_wt() / add_rolling_features_wt()
+src/preprocessing/feature_wt.py        # FEATURE_COLS_WT（48特徴・rolling統合。2026-08-03に隊列推定位置2特徴を追加し46→48
+                                        #   （後方は最終コーナーを外へ膨らんで回るため実走距離が伸びる。400m7車で3.1m≒1車幅・
+                                        #   500m9車で8.0m≒2.6車幅＝車数が増えるほど不利）。★ROIでなくランク母集団が効果の本体:
+                                        #   市場と不一致の母集団が7車+5.9%/9車+8.9%増え7S/7Aの枯渇を緩和する。
+                                        #   同じ知見を後段補正にした版は7車で効果ゼロ＝置き場所で結果が逆になる。
+                                        #   2026-07-31にex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46。H2H対戦表特徴は実装のみでFEATURE_COLS_WT非採用・下記参照）・build_features_wt() / add_rolling_features_wt()
 src/evaluation/backtest_wt.py           # wt用バックテスト（通常/--tiered/--value）
-src/preprocessing/position_calib.py    # 隊列位置バイアス補正（2段目）。lgbm_wt は隊列後方の選手を
-                                        #   系統的に過大評価する（後方は最終コーナーを外へ膨らんで
-                                        #   回るため実走距離が伸びる。400m7車で3.1m≒1車幅・
-                                        #   500m9車で8.0m≒2.6車幅＝車数が増えるほど不利）。
-                                        #   ★★適用は9車のみ（POSCAL_MIN_ENTRIES=8）。7車の改善は
-                                        #   軸が◎◯へ寄った(overlapが動いた)ことで全て説明され
-                                        #   軸の質は上がらない＝7S/7Aの母集団を削るだけ。
-                                        #   9車は 9S/9A対象に固定しても +2.50pt（有意）
-                                        #   ★ROIは改善しない。軸1・1着精度も有意差なしのため
-                                        #   三連単1着固定へ転用してはいけない
-src/models/poscal_trainer.py           # 同上の学習（train-poscal-wt → lgbm_wt_b / lgbm_wt_poscal）
 src/models/trainer.py                   # train_lgbm（feature_cols/weight_col引数で両ルート共用）
 src/cli/main.py                         # CLIコマンド（collect-wt/train-wt/backtest-wt/wave-picks-wt等）
 scripts/daily_picks_wt.sh               # 日次運用（cron 8:00）

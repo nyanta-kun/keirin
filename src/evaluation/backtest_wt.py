@@ -77,12 +77,6 @@ def _apply_pred_prob_wt(model, df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     df["pred_prob"] = model.predict_proba(prepare_X(df))[:, 1]
-
-    # 隊列位置バイアスの補正（2026-08-03〜）。本番 wave-picks-wt が適用するため、
-    # ここで適用しないとバックテストが本番の挙動を再現しなくなる（train/serve skew）。
-    # モデル未学習時は無適用のまま返す（挙動は導入前と同一）。
-    from src.preprocessing.position_calib import apply_position_calibration
-    df, _ = apply_position_calibration(df, prob_col="pred_prob")
     return df
 
 

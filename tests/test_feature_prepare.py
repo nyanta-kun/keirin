@@ -47,4 +47,4 @@ def test_leaky_ex_features_excluded_from_feature_cols_wt():
     """
     assert "ex_spurt_pct" not in FEATURE_COLS_WT
     assert "ex_thrust_pct" not in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 46
+    assert len(FEATURE_COLS_WT) == 48

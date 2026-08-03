@@ -115,4 +115,4 @@ def test_sb_dyn_cols_in_feature_cols():
     train/serve skewのため除外し48→46）に含まれる。"""
     for c in SB_DYN_COLS_WT:
         assert c in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 46
+    assert len(FEATURE_COLS_WT) == 48

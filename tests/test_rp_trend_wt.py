@@ -149,4 +149,4 @@ def test_feature_cols_contains_rp_trend():
     ex_spurt_pct/ex_thrust_pctをtrain/serve skewのため除外し48→46特徴）。"""
     for c in RP_TREND_COLS_WT:
         assert c in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 46
+    assert len(FEATURE_COLS_WT) == 48
