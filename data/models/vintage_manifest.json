@@ -329,6 +329,16 @@
       "sha256": "6b835b338d0653b9bc648705975a1e09beda69bb67377804b7096f65b19cee38",
       "size_bytes": 1757098,
       "registered_at": "2026-07-31T16:49:42"
+    },
+    "lgbm_wt_eval_m2608": {
+      "sha256": "df01607b687e628aebfd4732db59d3d384457837dc9ff5819a60fbe6f43bebc3",
+      "size_bytes": 1775779,
+      "registered_at": "2026-08-01T05:59:12"
+    },
+    "lgbm_wt_win_m2608": {
+      "sha256": "0399f202970cdc0b124aae6b6c4d418076dbc2096ccacb9416bcdd8d1ce60162",
+      "size_bytes": 1765404,
+      "registered_at": "2026-08-01T06:04:38"
     }
   }
 }

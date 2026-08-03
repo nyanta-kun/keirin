@@ -20,6 +20,7 @@ import numpy as np
 
 # conftest で sys.path に scripts/ が追加済み
 import live_report_wt as lr
+import src.strategy_wt as sw
 
 
 # ── ヘルパー ──────────────────────────────────────────────────────────
@@ -43,11 +44,16 @@ def _make_picks(*rows):
 # ── 0. ランク定義そのもの ─────────────────────────────────────────────
 
 def test_ranks_are_current_and_exclude_abolished():
-    """RANKS が現行4ランクで、全廃済みランクを含まないこと。
+    """RANKS が単一正本の現行ランク（in_live_report=True）と一致し、
+    全廃済みランクを含まないこと。
 
     2026-07-31 のレビューで検出した「全廃ランクのまま放置」の再発防止。
+    期待値は src.strategy_wt.CURRENT_PAPER_RANKS から導出する（ランクの
+    増減のたびにこのテストのリテラルを書き換える運用にすると、
+    「数を合わせるだけ」の修正で本来の検出力が失われるため）。
     """
-    assert lr.RANKS == ["RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A"]
+    expected = [spec.rank for spec in sw.CURRENT_PAPER_RANKS if spec.in_live_report]
+    assert lr.RANKS == expected
     for abolished in ("7PLUS_R", "7PLUS_ST", "7PLUS_STP", "7PLUS_U",
                       "7PLUS_M", "SEVEN_S1", "SIX_S1"):
         assert abolished not in lr.RANKS

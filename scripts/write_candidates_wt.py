@@ -355,6 +355,20 @@ def _write_paper_candidates(target_date: str) -> None:
             continue
         rows.append((f"{rk}#9A", "RANK_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None))
 
+    # 7B（2026-08-03導入）。他ランクと違い相手を絞る（総流しではない）ため、
+    # 候補時点の pred_combo も残り全車ではなく候補JSONの legs_7b（△除外・
+    # 複勝指数上位3車）を並べる。発走15分前判定が盤面から相手を再計算するので
+    # 欠車があれば最終的に上書きされる。
+    for c in _load((f"wave_picks_wt_{target_date}_s7b_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7b_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        legs = c.get("legs_7b") or []
+        if not rk or axis1 is None or axis2 is None or not legs:
+            continue
+        rows.append((f"{rk}#7B", "RANK_7B",
+                     f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None))
+
     if not rows:
         return
     inserted = 0

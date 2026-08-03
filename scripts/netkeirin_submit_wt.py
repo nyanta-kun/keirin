@@ -94,10 +94,24 @@ _DEFAULT_COMMENT_TEMPLATE = (
 RANK_CONFIGS: dict[str, dict[str, Any]] = {
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
     "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": None},
+    # 7B（2026-08-03新設）は総流しではなく相手を3点に絞る（partners_key）。
+    # 1レース総額を他ランク（約10,000円）と揃えるため 3点×3,300円とする。
+    # ⚠️ `_is_enabled()` は fail-open（netkeirin_settings に行が無いと常時ON）の
+    #    ため、導入時に enabled=false の行を明示投入してある。ユーザーが
+    #    /keirin/settings で明示的にONにするまで入稿されない。
+    "7B":  {"file_key": "s7b", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 3300, "gate_filter": None,
+            "partners_key": "legs_7b",
+            "default_comment": (
+                "本日の二軸をお届けします。\n\n"
+                "買い目は三連複・軸2車から相手を3点に絞った均等買いです。"
+                "本レースは公式予想の◎○と軸が一致していますが、"
+                "当方の指数では1番手評価が異なり、かつ公式△は相手から外しています。\n\n"
+                "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
+            )},
     "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
     "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
 }
-RANK_ORDER = ["7S", "7A", "9S", "9A"]
+RANK_ORDER = ["7S", "7A", "7B", "9S", "9A"]
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +297,17 @@ def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], di
         axis1, p1, p2 = int(cand["axis"]), int(cand["p1"]), int(cand["p2"])
         return axis1, p1, [p1, p2], {axis1: "◎", p1: "○", p2: "▲"}
     axis1, axis2 = int(cand["axis1"]), int(cand["axis2"])
-    partners = [c for c in range(1, cfg["n_cars"] + 1) if c not in (axis1, axis2)]
+    # 相手を絞るランク（7B: WT△を外した pred_prob 上位3車）は候補JSONが持つ
+    # 絞り込み済みリストをそのまま使う。総流しランク（7S/7A/9S/9A）は従来通り
+    # 軸以外の全車が相手。partners_key が無い＝総流し、が既定。
+    partners_key = cfg.get("partners_key")
+    if partners_key:
+        partners = [int(x) for x in (cand.get(partners_key) or [])
+                    if int(x) not in (axis1, axis2)]
+        if not partners:   # 候補JSONが旧形式等で絞り込み結果を持たない場合は入稿しない
+            raise ValueError(f"{partners_key} が空のため相手を決定できません")
+    else:
+        partners = [c for c in range(1, cfg["n_cars"] + 1) if c not in (axis1, axis2)]
     return axis1, axis2, partners, {axis1: "◎", axis2: "○"}
 
 
@@ -322,7 +346,11 @@ def _process_rank(
 
     setting = settings.get(rank_key)
     title_template = (setting or {}).get("title_template") or _DEFAULT_TITLE_TEMPLATE
-    comment_template = (setting or {}).get("comment_template") or _DEFAULT_COMMENT_TEMPLATE
+    # ランク固有の既定コメント（cfg["default_comment"]）があればそれを既定にする。
+    # 7B は買い目構造が「5点流し」ではなく「相手3点」で、共通既定文の説明が
+    # 事実と食い違うため必須（設定画面で上書きされていればそちらが優先）。
+    comment_template = ((setting or {}).get("comment_template")
+                        or cfg.get("default_comment") or _DEFAULT_COMMENT_TEMPLATE)
 
     client = NetkeirinClient() if not dry_run else None
     n_submitted = 0
@@ -389,7 +417,7 @@ def _process_rank(
 
 # S1は全廃済み、旧7SS/旧9SSは2026-08-01に削除済み（RANK_CONFIGS のコメント参照）
 # のためいずれも対象外。kiseki 側 _MANUAL_RANK_KEYS も ("7S","7A","9S","9A") で一致。
-MANUAL_ALLOWED_RANKS = ("7S", "7A", "9S", "9A")
+MANUAL_ALLOWED_RANKS = ("7S", "7A", "7B", "9S", "9A")
 
 
 def _resolve_race_info(race_key: str) -> tuple[str, int, int] | None:
@@ -440,7 +468,11 @@ def _process_manual(
 
     setting = settings.get(rank_key)
     title_template = (setting or {}).get("title_template") or _DEFAULT_TITLE_TEMPLATE
-    comment_template = (setting or {}).get("comment_template") or _DEFAULT_COMMENT_TEMPLATE
+    # ランク固有の既定コメント（cfg["default_comment"]）があればそれを既定にする。
+    # 7B は買い目構造が「5点流し」ではなく「相手3点」で、共通既定文の説明が
+    # 事実と食い違うため必須（設定画面で上書きされていればそちらが優先）。
+    comment_template = ((setting or {}).get("comment_template")
+                        or cfg.get("default_comment") or _DEFAULT_COMMENT_TEMPLATE)
 
     title = _apply_template(
         title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,

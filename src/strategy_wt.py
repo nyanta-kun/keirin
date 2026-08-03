@@ -750,6 +750,121 @@ def rank_9a_daily_select(candidates: list[dict]) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 7B（◎◯一致だが順序・相手で市場と不一致・三連複3点）— 2026-08-03 導入
+#
+# 背景（ユーザー方針）:
+#   「予想家としての売りは単純な市場との不一致を避けることに価値を見出される
+#     ため、7S/7Aの方針は正しい。ただし ◎◯ が一致してもある程度の配当を
+#     見込める・的中率が他よりも高い・相手を絞ることができる時は価値がある。」
+#
+# 7S/7A は wt_overlap_n==2（軸2車がWT公式印◎◯と完全一致）を全除外している。
+# しかしモデルが公式印へ収束する方向に進化した結果、この完全一致が多数派に
+# なり、対象レースが構造的に枯渇した（overlap∈{0,1}の比率:
+# 2024-01 68.6% → 2025年以降 18〜23%。7S+7A の選出は 39件/日 → 12件/日）。
+# 2026-08-02・08-03 は overlap∈{0,1} のレースを1本残らず採用しても6件・5件で、
+# entropy/axis_sum をどれだけ緩めても1件も増えない状態だった。
+#
+# 【検証: honest 月次凍結vintage・2025-01〜2026-08・579日・36,791候補】
+#   scripts/exp_7s7a_overlap2_conditional_value.py / _sweep.py / _disagreement.py
+#
+#   ① overlap2 は「的中率は高いが配当が消えている」:
+#        現行7S+7A(K=5): 13.42件/日 的中36.9% ROI78.3% 的中中央値5.9倍 ガミ率41.2%
+#        overlap2 (K=5): 50.01件/日 的中56.3% ROI72.4% 的中中央値4.0倍 ガミ率60.2%
+#      的中率は+19.4pt だが、当たっても賭け金を割る（ガミ）率が6割。
+#   ② entropy上限 × 相手集中度 × 買い目点数Kの120セルを掃引したが、
+#      ROIは全セル 72〜76% で完全に平坦（控除率の壁）。「高ROIの隠れ帯」は無い。
+#      的中率と配当は「予測確率の集中度」という同一軸の両端で、同時に立たない。
+#   ③ ただし**相手側で市場と不一致にする**と配当が戻る:
+#        overlap2・相手上位3点（△込み）: 的中47.0% ROI73.6% ガミ42.4% 中央値3.4倍 20倍超175本
+#        overlap2・相手上位3点（△除外）: 的中27.3% ROI74.7% ガミ10.8% 中央値6.1倍 20倍超435本
+#      さらに順序不一致（モデルのpred_win最上位 ≠ WT◎・overlap2の11.2%）を
+#      重ねると ROI が現行7S/7Aと同水準まで戻る。これを 7B として採用する。
+#
+# 【7B の実績（honest・2025-01〜2026-08）】
+#     5.58件/日・的中25.2%・ROI78.7%（現行7S+7A は 78.3%）
+#     ガミ率8.1%（現行41.2%）・的中中央値6.8倍（現行5.9倍）
+#     20倍超64本・最高116.6倍
+#     年次 2025:78.6% / 2026:78.8%、四半期7期すべて68〜89%で崩れなし
+#     月次ROI<60% は20ヶ月で0回・月次ROI標準偏差14.3（現行7Sは13.3）
+#
+# 【重要な位置づけ】
+#   ROI は改善しない（どの案も控除率75%の壁の周辺から出ない）。
+#   本ランクは「ROI同等のまま件数・見せ場・ガミ率を改善する」ための増枠であり、
+#   収支改善策ではない。[[keirin_clean_baseline_market_efficiency_2026_07_30]]。
+#
+# 【設計】
+#   母集団 = 7車立て ∧ rank_7s_select_axis 成功 ∧ wt_overlap_n == 2
+#            （7S/7A とは wt_overlap_n で論理的に排他。重複選出は起こり得ない）
+#   ゲート = 順序不一致のみ（entropy/axis_sum ゲートは掛けない）。
+#            entropy<=1.8329 を追加すると 3.54件/日・ROI79.8% と一見良くなるが、
+#            月次ROI標準偏差が 14.3→24.9 に悪化し ROI60%割れ月が0→3回に増える
+#            ため不採用（件数も足りない）。
+#   買い目 = 三連複 軸2車 + 相手（残り5車から WT△(ana) を除外し pred_prob 上位
+#            RANK_7B_LEGS 車）＝ 3点。7S/7A の5点流しとは点数が異なる。
+#   日次上限 = なし（honest 5.58件/日で暴走の懸念がないため。7S の
+#              RANK_7S_DAILY_CAP のような安全網は設けていない）。
+# ═══════════════════════════════════════════════════════════════════════════
+
+RANK_7B_NE = 7      # 対象車数（7車ちょうど・7S/7Aと同じ）
+RANK_7B_STAKE = 100  # 円/点（ペーパー・3点=300円/レース）
+RANK_7B_LEGS = 3     # 相手の購入点数（△除外後の pred_prob 上位K車）
+
+
+def rank_7b_order_disagree(win_probs: dict[int, float], wt_honmei: int | None) -> bool | None:
+    """7Bの順序不一致判定: モデルの単勝予測 pred_win 最上位が WT◎ でないか。
+
+    win_probs:  {frame_no: pred_win}（rank_7s_select_axis と同じ入力）
+    wt_honmei:  prediction_mark==1（◎）の frame_no
+
+    軸2車が◎◯と完全一致していても、モデルが「◯の方が強い」と見ているなら
+    完全なコンセンサスではない、という部分的不一致の検出。
+
+    returns True=不一致（7B対象）/ False=一致 / None=判定不能（◎欠損・要除外）
+    """
+    if wt_honmei is None or not win_probs:
+        return None
+    return max(win_probs, key=lambda f: win_probs[f]) != wt_honmei
+
+
+def rank_7b_select_legs(
+    others: list[int], top3_probs: dict[int, float], wt_ana: int | None,
+    k: int = RANK_7B_LEGS,
+) -> list[int]:
+    """7Bの相手選択: 残り5車から WT△(ana) を除外し pred_prob 上位k車を返す。
+
+    others:     軸2車を除いた残り車（通常5車）
+    top3_probs: {frame_no: pred_prob}
+    wt_ana:     prediction_mark==3（△）の frame_no。None なら除外しない。
+
+    △を切ることが配当を戻す本体（検証: 的中中央値3.4倍→6.1倍・ガミ率42.4%→10.8%・
+    20倍超175本→435本）。的中率は下がる（47.0%→27.3%）が、これは
+    「市場が推す相手を買わない」という7B設計の意図そのものである。
+    """
+    ranked = sorted(others, key=lambda x: -top3_probs.get(x, 0.0))
+    if wt_ana is not None:
+        ranked = [x for x in ranked if x != wt_ana]
+    return ranked[:k]
+
+
+def rank_7b_daily_select(candidates: list[dict]) -> list[dict]:
+    """7Bの選出（日次件数上限なし・全ゲート通過分を採用）。
+
+    candidates: rank_7s_* と同じ生候補 dict のリスト。最低限
+      {"wt_overlap_n": int|None, "order_disagree": bool|None} を持つこと。
+
+    - wt_overlap_n == 2 必須（7S/7A＝overlap∈{0,1} とは論理的に排他）
+    - order_disagree is True 必須（None＝◎欠損で判定不能はフェイルセーフで除外）
+
+    returns 採用された候補のリスト（entropy昇順・表示用の並び順のみ）。
+    """
+    pool = [
+        c for c in candidates
+        if c.get("wt_overlap_n") == 2 and c.get("order_disagree") is True
+    ]
+    return sorted(pool, key=lambda c: c.get("entropy", float("inf")))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # A（◎一致×波乱×別ライン先頭・二連単）戦略 — 2026-07-17 全廃
 #
 # 正規プロトコル（学習〜2025-03-31・検証2025-04-01〜2026-03-31の1年）の再検証で
@@ -1054,9 +1169,11 @@ class PaperRankSpec:
 # in_live_report: 現行4ランクは全てTrue（live_report_wt.py はモデル系ランクの
 #   採否判断ツール）。唯一Falseだった RANK_7SS はモデル非依存の別戦略だったが
 #   2026-08-02 に全廃したため CURRENT から除去した（ABOLISHED_PAPER_RANKS 参照）。
+#   RANK_7B   #7B       7B        （新設・旧名なし）                 —      2026-08-03〜            —
 CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
     PaperRankSpec("RANK_7S",  "#7S",  "7S",  in_header_total=True,  in_live_report=True),
     PaperRankSpec("RANK_7A",  "#7A",  "7A",  in_header_total=False, in_live_report=True),
+    PaperRankSpec("RANK_7B",  "#7B",  "7B",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9S",  "#9S",  "9S",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
 )
