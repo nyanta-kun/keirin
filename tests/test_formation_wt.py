@@ -90,3 +90,38 @@ def test_columns_are_in_feature_list_and_finite():
     for c in FORMATION_COLS_WT:
         assert c in FEATURE_COLS_WT, c
         assert np.isfinite(out[c].astype(float)).all(), c
+
+
+def test_load_model_rejects_mismatched_feature_set(tmp_path, monkeypatch):
+    """特徴量『数』が同じでも『中身』が違うモデルは拒否する。
+
+    LightGBM は列数さえ合えば素通しするため、旧特徴セットのモデルが無言で
+    誤った予測を返す。実例: 2026-07-31に ex_spurt_pct/ex_thrust_pct を除去して
+    48→46、2026-08-03に formation_* を追加して46→48。旧48は列数が一致するため
+    LightGBM の Fatal では止まらない。
+    """
+    import pickle
+    from types import SimpleNamespace
+
+    import src.models.trainer as trainer
+
+    def _Fake(cols):
+        return SimpleNamespace(feature_name_=list(cols))
+
+    monkeypatch.setattr(trainer, "MODEL_DIR", tmp_path)
+
+    # 中身が現行と一致 → 通る
+    (tmp_path / "lgbm_wt_ok.pkl").write_bytes(pickle.dumps(_Fake(FEATURE_COLS_WT)))
+    assert trainer.load_model("lgbm_wt_ok") is not None
+
+    # 列数は同じだが formation_* の代わりに旧特徴 → 拒否
+    old48 = [c for c in FEATURE_COLS_WT if c not in FORMATION_COLS_WT]
+    old48 += ["ex_spurt_pct", "ex_thrust_pct"]
+    assert len(old48) == len(FEATURE_COLS_WT)
+    (tmp_path / "lgbm_wt_old48.pkl").write_bytes(pickle.dumps(_Fake(old48)))
+    with pytest.raises(ValueError, match="特徴量セット"):
+        trainer.load_model("lgbm_wt_old48")
+
+    # ks ルート（lgbm_wt 以外）は検証対象外
+    (tmp_path / "lgbm_v6.pkl").write_bytes(pickle.dumps(_Fake(["a", "b"])))
+    assert trainer.load_model("lgbm_v6") is not None

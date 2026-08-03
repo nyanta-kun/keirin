@@ -193,6 +193,36 @@ def save_model(model, name: str, force: bool = False):
 
 
 def load_model(name: str):
+    """モデルを読み込む。winticketルートは特徴量セットの一致も検証する。
+
+    【2026-08-03 追加】特徴量**数**が一致しても**中身**が違うモデルは LightGBM が
+    素通しするため、無言で誤った予測を返す。実例: 2026-07-31 に
+    `ex_spurt_pct`/`ex_thrust_pct` を除去して48→46、2026-08-03 に
+    `formation_pos_frac`/`formation_line_rank` を追加して46→48 としたため、
+    **旧48特徴のモデル（`lgbm_wt_eval_w2` 等）は列数だけ一致してエラーにならない**。
+    列数が違う46特徴のモデルは LightGBM が Fatal で止めてくれるが、旧48は止まらない。
+
+    そのため列名で照合し、不一致なら明示的に落とす。「通ったのに実は別物を見ていた」
+    型の事故（本リポジトリで繰り返し踏んでいる）を構造的に防ぐ。
+
+    Raises:
+        ValueError: `lgbm_wt` 系モデルの特徴量セットが FEATURE_COLS_WT と異なる場合。
+    """
     path = MODEL_DIR / f"{name}.pkl"
     with open(path, "rb") as f:
-        return pickle.load(f)
+        model = pickle.load(f)
+
+    if name.startswith("lgbm_wt"):
+        from ..preprocessing.feature_wt import FEATURE_COLS_WT
+
+        cols = getattr(model, "feature_name_", None)
+        if cols is not None and list(cols) != list(FEATURE_COLS_WT):
+            missing = [c for c in FEATURE_COLS_WT if c not in cols]
+            extra = [c for c in cols if c not in FEATURE_COLS_WT]
+            raise ValueError(
+                f"モデル '{name}' の特徴量セットが現在の FEATURE_COLS_WT と一致しません"
+                f"（モデル{len(cols)}列 / 現在{len(FEATURE_COLS_WT)}列）。"
+                f" 不足={missing or 'なし'} 余分={extra or 'なし'}。"
+                " 再学習するか、当時の特徴量定義のコードで実行してください。"
+            )
+    return model
