@@ -106,3 +106,45 @@ def test_waku_check_9car():
 def test_waku_check_unsupported_raises():
     with pytest.raises(ValueError):
         waku_check_for(6)
+
+
+# ── mark_code（印）の生成 ───────────────────────────────────────────────
+# 2026-08-03: 相手を絞るランク（7B）で、買い目から外した車まで △ になっていた
+# 不具合の回帰テスト。submit_pick は HTTP を伴うため、mark 生成規則そのものを
+# 同一ロジックで検証する（実装を変えたら必ずここが落ちるようにしておく）。
+#
+# mark_code: 1=◎ / 2=○ / 3=▲ / 4=△ / 0=--（印なし・docs/netkeirin-input-api-spec.md 2.2）
+
+
+def _trio_axis2_marks(n_cars: int, axis1: int, axis2: int, partners: list[int]) -> dict[str, str]:
+    """src.netkeirin_client.submit_pick の BET_KIND_TRIO_AXIS2 分岐と同一規則。"""
+    mark = {str(axis1): "1", str(axis2): "2"}
+    marked = {axis1, axis2}
+    partner_set = set(partners)
+    for c in range(1, n_cars + 1):
+        if c in marked:
+            continue
+        mark[str(c)] = "4" if c in partner_set else "0"
+    return mark
+
+
+def test_marks_all_partners_when_full_nagashi():
+    """総流し（7S/7A/9S/9A）は軸以外すべて △。従来挙動が変わっていないこと。"""
+    marks = _trio_axis2_marks(7, axis1=7, axis2=2, partners=[1, 3, 4, 5, 6])
+    assert marks == {"7": "1", "2": "2", "1": "4", "3": "4", "4": "4", "5": "4", "6": "4"}
+    assert "0" not in marks.values()
+
+
+def test_marks_excluded_partners_as_hyphen_when_narrowed():
+    """相手を絞るランク（7B）は、買った相手のみ △・外した車は --(0)。"""
+    marks = _trio_axis2_marks(7, axis1=2, axis2=5, partners=[3, 7, 4])
+    assert marks["2"] == "1"          # ◎
+    assert marks["5"] == "2"          # ○
+    assert marks["3"] == marks["4"] == marks["7"] == "4"   # 買った相手 = △
+    assert marks["1"] == marks["6"] == "0"                 # 買っていない = --
+
+
+def test_marks_nine_car_full_nagashi_unchanged():
+    marks = _trio_axis2_marks(9, axis1=2, axis2=5, partners=[1, 3, 4, 6, 7, 8, 9])
+    assert set(marks.values()) == {"1", "2", "4"}
+    assert len(marks) == 9

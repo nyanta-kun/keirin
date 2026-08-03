@@ -283,9 +283,22 @@ class NetkeirinClient:
             mark[str(p1)] = "2"
             mark[str(p2)] = "3"
             marked = {axis1, p1, p2}
+        # 【2026-08-03改定】軸以外は「買い目に入っている相手だけ」を △(mark_code=4) にし、
+        # 買い目から外した車は --(mark_code=0・印なし) にする。
+        #
+        # 旧実装は `for c in range(1, n_cars+1): if c not in marked: mark[c]="4"` と
+        # partners を無視して**軸以外の全車**に △ を付けていた。総流しのランク
+        # （7S/7A/9S/9A は partners = 軸以外の全車）では結果が同じなので問題に
+        # ならなかったが、相手を絞る 7B では買っていない2車まで △ 表示になり、
+        # 入稿内容と買い目が食い違っていた（ユーザー指摘・2026-08-03）。
+        #
+        # partners を正とすることで総流しランクの挙動は完全に不変のまま、
+        # 絞り込みランクだけが正しく --(印なし) になる。
+        partner_set = set(partners)
         for c in range(1, n_cars + 1):
-            if c not in marked:
-                mark[str(c)] = "4"
+            if c in marked:
+                continue
+            mark[str(c)] = "4" if c in partner_set else "0"
 
         waku_check = waku_check_for(n_cars)
 
