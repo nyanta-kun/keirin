@@ -360,7 +360,17 @@ def _process_rank(
         race_key = cand["race_key"]
         venue_name = cand.get("venue_name", "?")
         race_no = int(cand["race_no"])
-        axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
+        # 相手絞りランク（partners_key あり）は候補JSONが絞り込み結果を持たないと
+        # 相手を決められず ValueError になる。ここで捕まえないと RANK_ORDER の
+        # ループごと落ち、**他ランクの入稿まで巻き添えで止まる**（本ループは
+        # main() 側でも try されていない）。1レース分の失敗として記録し継続する。
+        try:
+            axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
+        except (ValueError, KeyError, TypeError) as e:
+            failures.append(f"{race_key} ({rank_key}): 候補情報不正 - {e}")
+            print(f"[netkeirin_submit] スキップ {venue_name}{race_no}R ({rank_key}): {e}",
+                  flush=True)
+            continue
 
         title = _apply_template(
             title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
