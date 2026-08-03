@@ -38,7 +38,8 @@ from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
 from src.strategy_wt import (
-    S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
+    S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
+    rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_SCORE_THRESHOLD, RANK_7SS_STAKE,
     line_score_features, rank_7s_gate_label, ss_policy,
 )
@@ -1527,6 +1528,263 @@ def _process_rank_7a_candidates(today: str, now_unix: int, notified: set[str]) -
     return messages, newly_done
 
 
+def judge_rank_7b(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+    """7B（◎◯一致だが順序・相手で不一致）の発走前ライブオッズ判定（純関数・DB非依存）。
+
+    judge_rank_7s との違いは**買い目の作り方だけ**（盤面チェックは同一）:
+      7S/7A: 軸2車 + 残り5車の総流し（5点）
+      7B   : 軸2車 + 相手（残り5車から WT△(ana) を除外し pred_prob 上位
+             RANK_7B_LEGS 車）＝ 3点
+
+    相手は朝の候補JSONの `legs_7b` をそのまま使わず、**発走前の盤面から再計算する**
+    （欠車で相手が盤面から消えた場合に、朝の3点のうち買える目だけが残って
+    2点・1点に痩せるのを防ぐ。盤面7車チェックを通っている以上ここで相手が
+    消えることは通常ないが、朝の出走表と盤面がズレた場合のフェイルセーフ）。
+    `top3_probs` が候補JSONに無い旧形式の場合のみ `legs_7b` へフォールバックする。
+
+    returns (decision, detail) — judge_rank_7s と同一の形式。
+    """
+    detail: dict = {"axis1": None, "axis2": None, "combos": [], "leg_odds": {},
+                    "skip_reason": None, "dropped_ana": None}
+    try:
+        axis1 = int(cand["axis1"])
+        axis2 = int(cand["axis2"])
+    except (KeyError, TypeError, ValueError):
+        detail["skip_reason"] = "候補情報不正"
+        return "skip", detail
+    detail["axis1"] = axis1
+    detail["axis2"] = axis2
+
+    if not trio_lookup:
+        return "不明", detail
+
+    valid: dict[frozenset, float] = {}
+    for k, ov in trio_lookup.items():
+        try:
+            fv = float(ov)
+        except (TypeError, ValueError):
+            continue
+        if 0 < fv < 9000:
+            valid[k] = fv
+    if not valid:
+        return "不明", detail
+
+    board: set[int] = set()
+    for k in valid:
+        board |= set(k)
+
+    # ① 盤面7車判定（7S/7Aと同一。欠車発生なら見送り）
+    if len(board) != 7:
+        detail["skip_reason"] = f"盤面{len(board)}車（欠車）"
+        return "skip", detail
+
+    # ② 軸2車が盤面に在籍しているか
+    if axis1 not in board or axis2 not in board:
+        detail["skip_reason"] = "軸が盤面に不在"
+        return "skip", detail
+
+    # ③ 相手を盤面から再計算（△除外・pred_prob上位RANK_7B_LEGS車）
+    wt_ana = cand.get("wt_ana")
+    detail["dropped_ana"] = wt_ana
+    raw_probs = cand.get("top3_probs") or {}
+    others = sorted(board - {axis1, axis2})
+    if raw_probs:
+        probs = {int(k): float(v) for k, v in raw_probs.items()}
+        legs = rank_7b_select_legs(others, probs, wt_ana)
+    else:
+        legs = [x for x in (cand.get("legs_7b") or []) if x in board]
+    if not legs:
+        detail["skip_reason"] = "相手が選定できない"
+        return "skip", detail
+
+    # ④ 買い目 = {axis1, axis2, t}（t=選定した相手）のうちオッズ取得できた目のみ
+    leg_odds: dict[str, float | None] = {}
+    combos: list[str] = []
+    for t in legs:
+        label = "-".join(map(str, sorted((axis1, axis2, t))))
+        ov = valid.get(frozenset({axis1, axis2, t}))
+        leg_odds[label] = ov
+        if ov is not None:
+            combos.append(label)
+    detail["leg_odds"] = leg_odds
+    detail["combos"] = combos
+    if not combos:
+        detail["skip_reason"] = "対象目のオッズなし"
+        return "skip", detail
+
+    return "buy", detail
+
+
+def _load_rank_7b_candidates(today: str) -> list[dict]:
+    """当日の7B候補 JSON（昼 + 夜）を読み込む。
+
+    7B は `wt_overlap_n == 2` のみ、7S/7A は `wt_overlap_n ∈ {0,1}` のみを取るため
+    **定義上完全に排他**（7A vs 7S のようなゲート個数の境界による転びも起こらない）。
+    それでも 7S/7A と同じ重複ガードを掛けるのは、昼/夜の2ファイル間で
+    prediction_mark の取得状況が変わり overlap 判定が転ぶ可能性が理論上あるため
+    （フェイルセーフ。実際に発火したらログに警告が出る）。優先順位は 7S > 7A > 7B。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s7b_candidates.json",
+                  f"wave_picks_wt_{today}_night_s7b_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("7B候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    out = _exclude_overlapping_races(
+        out, _load_rank_7s_candidates(today), loser="7B", winner="7S")
+    return _exclude_overlapping_races(
+        out, _load_rank_7a_candidates(today), loser="7B", winner="7A")
+
+
+def _insert_rank_7b_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """7B（ペーパー）の記録行 {base}#7B を picks_history に即時反映する。
+
+    _insert_rank_7a_pick の7B版（rank='RANK_7B'・race_key末尾#7B・RANK_7B_STAKE・
+    gate_labelなし）。点数は総流しではなく相手を絞った RANK_7B_LEGS 点が基本。
+    """
+    store_key = race_key + "#7B"
+    bet = n_combos * RANK_7B_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "RANK_7B", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("7B pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "RANK_7B", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("7B pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_rank_7b_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """7B（◎◯一致×順序/相手不一致・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1 = detail.get("axis1")
+    axis2 = detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    ana = detail.get("dropped_ana")
+    ana_str = f"{ana}番(△)を相手から除外" if ana is not None else "△なし"
+    axis_sum = cand.get("axis_sum")
+    axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    return (
+        f"🎯 **[7B]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: {axis1}/{axis2}（WT公式印◎◯と一致・ただしモデル1位は◎ではない）\n"
+        f"  三連複2軸・相手絞り({n_pts}点 / 名目{n_pts * RANK_7B_STAKE:,}円): "
+        f"`{axis1}={axis2}-" + ",".join(str(c.split("-")[-1]) for c in combos) + "`\n"
+        f"  **{ana_str}**／軸合計複勝指数(波乱度)={axis_sum_str}\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_rank_7b_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """7B候補の発走前判定・記録・通知メッセージ生成（_process_rank_7a_candidates の7B版）。"""
+    cands = _load_rank_7b_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#7B" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        rank_7b_key = f"{rk}#7B"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(7B) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} 7B候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_rank_7b(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} 7B候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        _save_decision(today, rank_7b_key, {
+            "decision": decision, "rank": "RANK_7B", "paper": True,
+            "stake": RANK_7B_STAKE, "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": cand.get("wt_overlap_n"),
+            "order_disagree": cand.get("order_disagree"), **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_rank_7b_pick(rk, today, pred, len(combos))
+            messages.append((rank_7b_key, _build_rank_7b_message(cand, ri, detail)))
+            print(f"[prerace] {rk} 7B候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#7B")
+            print(f"[prerace] {rk} 7B候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(rank_7b_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 def _load_rank_9a_candidates(today: str) -> list[dict]:
     """当日の9A候補 JSON（昼 + 夜）を読み込む。9Sと重複するレースは除外する。
 
@@ -2270,6 +2528,15 @@ def main():
         newly_done |= rank_7a_done
     except Exception as e:
         logger.exception("7A候補処理失敗（他ランク通知には影響しない）: %s", e)
+
+    # ── 7B候補（◎◯一致だが順序・相手で不一致・三連複3点・ペーパー）処理 ──────
+    # 2026-08-03導入。7S/7Aとは wt_overlap_n（7B=2 / 7S・7A∈{0,1}）で定義上排他。
+    try:
+        rank_7b_messages, rank_7b_done = _process_rank_7b_candidates(today, now_unix, notified)
+        messages += rank_7b_messages
+        newly_done |= rank_7b_done
+    except Exception as e:
+        logger.exception("7B候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── 9A候補（S9の境界ランク・ペーパー）処理 ──────────────────────────────
     # 2026-07-27導入。S9とは論理的に排他（2ゲート中1つだけ不合格）。

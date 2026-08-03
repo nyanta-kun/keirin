@@ -37,8 +37,9 @@ import save_model_eval as sme
 import live_report_wt as lr
 
 
-# 現行4ランク（2026-08-02時点。RANK_7SS は同日に全廃し ABOLISHED へ移動）。
-CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_9S", "RANK_9A"}
+# 現行5ランク（2026-08-03時点。RANK_7SS は 2026-08-02 に全廃し ABOLISHED へ移動、
+# RANK_7B は 2026-08-03 に新設）。
+CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S", "RANK_9A"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
@@ -202,14 +203,17 @@ def test_paper_suffixes_include_legacy_hash_suffix_ranks():
 
 
 def test_paper_suffixes_has_no_unexpected_extra_entries():
-    """_PAPER_SUFFIXES が「現行4 + legacy3」の7件ちょうどであること。
+    """_PAPER_SUFFIXES が「現行ランク + legacy3」ちょうどで、重複が無いこと。
 
-    2026-08-02 の RANK_7SS 全廃で現行5→4・legacy2→3 に移り変わったが、
-    合計7件（#7SS は保護目的で legacy 側に残る）であることは変わらない。
+    2026-08-02 の RANK_7SS 全廃で現行5→4・legacy2→3、2026-08-03 の RANK_7B 新設で
+    現行4→5 と移り変わってきた。件数をハードコードするとランクの増減のたびに
+    このテストを直す必要があり、「数を合わせるだけ」の修正が混入しやすいので
+    単一正本から導出した集合との一致＋重複なしで検証する。
     """
     expected = {spec.suffix for spec in sw.CURRENT_PAPER_RANKS} | {"#7SS", "#7S1", "#6S1"}
     assert set(nr._PAPER_SUFFIXES) == expected
-    assert len(nr._PAPER_SUFFIXES) == 7
+    # tuple 側に重複が無いこと（集合比較だけでは検出できない）
+    assert len(nr._PAPER_SUFFIXES) == len(set(nr._PAPER_SUFFIXES)) == len(expected)
 
 
 # ── 4. save_model_eval.py::PAPER_RANKS ──────────────────────────────────

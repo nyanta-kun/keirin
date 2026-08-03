@@ -1267,6 +1267,7 @@ def wave_picks_wt(target_date, output_path, model_name,
         line_score_features, race_signals,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
+        rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
     )
     from pathlib import Path
@@ -1812,6 +1813,12 @@ def wave_picks_wt(target_date, output_path, model_name,
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
+                # 7B（2026-08-03導入）用: 順序不一致と相手選択に必要な情報を持たせる。
+                # others は軸2車を除いた残り車（通常5車）。盤面（オッズ掲載車）の
+                # 確定は発走前judgeで行うため、ここでは出走表ベースで良い。
+                others_7b = sorted(set(top3_probs) - {axis1, axis2})
+                order_disagree = rank_7b_order_disagree(win_probs, wt_honmei)
+
                 rank_7s_raw_candidates.append({
                     "race_key":   race_key,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
@@ -1824,6 +1831,12 @@ def wave_picks_wt(target_date, output_path, model_name,
                     "wt_mark3_overlap_n": wt_mark3_overlap_n,
                     "axis1_class": _class_map_s4.get(axis1),
                     "axis2_class": _class_map_s4.get(axis2),
+                    # ↓ 7B用
+                    "order_disagree": order_disagree,
+                    "wt_ana": wt_ana,
+                    "others": others_7b,
+                    "top3_probs": {str(k): round(v, 6) for k, v in top3_probs.items()},
+                    "legs_7b": rank_7b_select_legs(others_7b, top3_probs, wt_ana),
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
@@ -1859,6 +1872,18 @@ def wave_picks_wt(target_date, output_path, model_name,
             json.dump(rank_7a_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {rank_7a_path}  (7A候補 {len(rank_7a_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・境界ランク/ペーパー検証)")
+
+        # ── 7B候補（◎◯一致だが順序・相手で不一致・三連複3点・2026-08-03導入）──
+        # 7S/7A が wt_overlap_n∈{0,1} なのに対し 7B は wt_overlap_n==2 のみを取る
+        # ため論理的に排他（重複選出は起こり得ない）。詳細は
+        # strategy_wt.rank_7b_daily_select のセクションコメント参照。
+        rank_7b_candidates = rank_7b_daily_select(rank_7s_raw_candidates)
+        rank_7b_suffix = "_night_s7b_candidates.json" if is_night else "_s7b_candidates.json"
+        rank_7b_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7b_suffix}"
+        with open(rank_7b_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7b_candidates, f, ensure_ascii=False, indent=2)
+        click.echo(f"[保存先] {rank_7b_path}  (7B候補 {len(rank_7b_candidates)}件/{len(rank_7s_raw_candidates)}件中"
+                   f"・◎◯一致×順序/相手不一致/ペーパー検証)")
 
     # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
     # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は

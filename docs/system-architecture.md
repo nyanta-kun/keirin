@@ -1,12 +1,12 @@
 # システムアーキテクチャ
 
-> 最終更新: 2026-07-31（ランク全面改名 `f31f84b` / データ整合性レビュー是正）
+> 最終更新: 2026-08-03（7B新設 / 7SS全廃 / ランク全面改名 `f31f84b`）
 
 ---
 
 ## 概要
 
-競輪AI予想システム「穴車AI」。7車立て・9車立てレースを **7S / 7A / 9S / 9A**
+競輪AI予想システム「穴車AI」。7車立て・9車立てレースを **7S / 7A / 7B / 9S / 9A**
 （4内部rank・4表示ラベル。S1 は 2026-07-31 全廃・7SS は 2026-08-02 全廃）で
 予想し、Discord 通知と netkeirin 自動入稿を行う CLI ベースのシステム。現行ランク体系の
 詳細（ゲート条件・honest実績・沿革）は `../CLAUDE.md`「現行ランク体系」節、特徴量・モデルの
@@ -88,7 +88,7 @@ keirin/
 | `collect-wt-range --from [--to]` | 年月範囲を逆順収集 |
 | `train-wt [--from] [--test-from] [--save-as]` | winticket 用LightGBM学習（48特徴） |
 | `backtest-wt [--from] [--to] [--model] [--max-riders] [--min-gap12] [--tiered] [--value]` | 買い目バックテスト（wt_odds 実オッズ使用） |
-| `wave-picks-wt [--date] [--min-trio-odds] [--gami-skip-odds] [--b-rank-odds] [--upset-gate]` | 7S/7A/9S/9A 候補生成＋ガミ3段階／波乱ゲート（詳細は`../CLAUDE.md`「現行ランク体系」節） |
+| `wave-picks-wt [--date] [--min-trio-odds] [--gami-skip-odds] [--b-rank-odds] [--upset-gate]` | 7S/7A/7B/9S/9A 候補生成＋ガミ3段階／波乱ゲート（詳細は`../CLAUDE.md`「現行ランク体系」節） |
 
 **wave-picks-wt の主要フラグ（2026-06-08 追加）:**
 - `--gami-skip-odds 3.0`：3点中1点でも朝オッズ<3倍ならレース見送り
@@ -220,7 +220,7 @@ AM 8:00 （daily_picks_wt.sh・単一バッチ）
          旧evening_picks_wt.shが担っていたこの呼び出しを本スクリプトへ移設
          （night_raw相当のファイルが存在しない/空のため day_raw のみの日次トリムとして機能）。
          7A/S9/9A/S1には同種の日次合計マージ処理がそもそも無いため対応不要。
-  ⑧ write_candidates_wt.py $(today)              # 候補レース(S1/S7/S9/7A/9A)をpicks_historyへ即時書き込み
+  ⑧ write_candidates_wt.py $(today)              # 候補レース(7S/7A/7B/9S/9A)をpicks_historyへ即時書き込み
                                                   # （推奨ページ表示用。2026-07-28にS9/7A/9Aも対応）
   ⑨ netkeirin_submit_wt.py $(today) morning      # 全ランクをnetkeirinへ下書き入稿（session="morning"の
                                                   # 1回のみ。非"_night_"ファイルが当日全レース分を持つため
@@ -242,12 +242,13 @@ AM 8:00 （daily_picks_wt.sh・単一バッチ）
 週次（日 23:30, weekly_retrain_wt.sh・Mac実行）: ①holdout評価→AUCゲート→②全データ再学習→
   ③波乱ゲートcut再計測→④世代退避→rsyncでVPSへモデル配布。
 ```
-現行ランクは以下の**4内部rank / 4表示ラベル**（2026-08-02時点）:
+現行ランクは以下の**5内部rank / 5表示ラベル**（2026-08-03時点）:
 
 | 内部rank | suffix | 表示 | 内容 |
 |---|---|---|---|
 | `RANK_7S` | `#7S` | 7S | 7車・三連複2軸総流し・本流（全ゲート合格） |
 | `RANK_7A` | `#7A` | 7A | 7車・境界（ゲート1つのみ不合格） |
+| `RANK_7B` | `#7B` | 7B | 7車・◎◯一致だが順序/相手で不一致・**三連複3点（相手絞り）** |
 | `RANK_9S` | `#9S` | 9S | 9車・本流（RANK_7S の9車版・独立ランク） |
 | `RANK_9A` | `#9A` | 9A | 9車・境界 |
 
