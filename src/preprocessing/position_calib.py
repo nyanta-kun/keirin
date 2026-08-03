@@ -57,6 +57,29 @@ POSCAL_FEATURE_COLS: list[str] = [
 B_MODEL_NAME = "lgbm_wt_b"
 POSCAL_MODEL_NAME = "lgbm_wt_poscal"
 
+# 補正を適用する最小車数。**9車立てのみ**（7車には適用しない）。
+#
+# 【2026-08-03・7車への適用を取り下げた理由】
+# 全車数に適用した初版では軸2車的中が 7車 +0.56pt / 9車 +1.41pt（いずれも有意）
+# だったが、`wt_overlap_n`（軸2車とWT公式印◎◯の重なり）との整合を確認したところ、
+# **7車の改善は「軸が◎◯の側へ寄った＝overlapが動いた」ことで全て説明され、
+# 軸の質そのものは改善していない**ことが判明した:
+#
+# | 母集団を固定した比較 | 7車 | 9車 |
+# |---|---|---|
+# | overlapが変わらないレース | 54.2→54.2% (-0.01pt・ns) | 41.8→42.3% (+0.55pt・有意) |
+# | 7S/7A(9S/9A)対象(overlap≤1のまま) | 39.0→39.2% (+0.25pt・ns) | 29.2→31.7% (+2.50pt・有意) |
+#
+# 7S/7A は overlap∈{0,1}（＝市場と不一致）だけを対象とするランクなので、
+# overlap が 1→2 へ動いたレースは**改善ではなく7Bへの再分類**にすぎない。
+# さらに 7S/7A の母集団が 4,346→4,285（純 -61件・-1.4%）と減る。
+# 既に12件/日まで枯渇しているランクを見返りゼロで削ることになるため、7車では不適用とする。
+#
+# 9車は overlap を固定しても改善が残る＝市場追従では説明できない実質的な改善がある。
+# 車数が増えるほど外を回る距離が伸びる（500mバンクで9車は7車の1.50倍）という
+# 物理的根拠とも整合する。
+POSCAL_MIN_ENTRIES = 8
+
 _EPS = 1e-6
 
 
@@ -181,5 +204,10 @@ def apply_position_calibration(
     out["pc_p_b"] = b_model.predict_proba(prepare_X(out))[:, 1]
     out = add_position_features(out, prob_col=prob_col)
     out[f"{prob_col}{raw_suffix}"] = out[prob_col]
-    out[prob_col] = calib.predict_proba(out[fcols])[:, 1]
+
+    # 7車には適用しない（POSCAL_MIN_ENTRIES の解説を参照）。
+    target = out["pc_n_entries"] >= POSCAL_MIN_ENTRIES
+    if not target.any():
+        return out, False
+    out.loc[target, prob_col] = calib.predict_proba(out.loc[target, fcols])[:, 1]
     return out, True

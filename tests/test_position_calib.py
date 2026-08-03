@@ -112,6 +112,38 @@ def test_all_feature_columns_present_and_finite():
         assert np.isfinite(out[c].astype(float)).all(), c
 
 
+def test_seven_car_races_are_not_calibrated(monkeypatch):
+    """7車には適用しない。7車の改善は◎◯への寄りで説明され、質は上がらないため。
+
+    7S/7A は overlap∈{0,1}（市場と不一致）だけを対象とするランクなので、
+    軸が◎◯側へ寄ると改善ではなく7Bへの再分類になり、母集団だけが減る。
+    """
+    import src.models.trainer as trainer
+
+    class _Calib:
+        def predict_proba(self, X):
+            return np.column_stack([np.zeros(len(X)), np.full(len(X), 0.99)])
+
+    class _B:
+        def predict_proba(self, X):
+            return np.column_stack([np.zeros(len(X)), np.full(len(X), 0.5)])
+
+    monkeypatch.setattr(trainer, "load_model",
+                        lambda name: _B() if name.endswith("_b") else _Calib())
+    monkeypatch.setattr("src.preprocessing.feature_wt.prepare_X", lambda d: d[["frame_no"]])
+
+    seven = _race("R7", [dict(frame_no=i, pred_prob=i / 10) for i in range(1, 8)])
+    out, applied = apply_position_calibration(seven)
+    assert applied is False
+    assert list(out["pred_prob"]) == list(seven["pred_prob"])
+
+    nine = _race("R9", [dict(frame_no=i, pred_prob=i / 10) for i in range(1, 10)])
+    out, applied = apply_position_calibration(nine)
+    assert applied is True
+    assert out["pred_prob"].eq(0.99).all()
+    assert list(out["pred_prob_raw"]) == list(nine["pred_prob"])
+
+
 def test_apply_is_noop_without_models(monkeypatch):
     """モデルが無いときは無適用で返し、補正前の値を必ず残す。
 
