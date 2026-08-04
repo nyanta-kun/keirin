@@ -85,7 +85,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
     if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
-      log "前回実行(PID $OLD_PID)が継続中のためスキップします（$LOCK_DIR）。"
+      log "前回実行(PID $OLD_PID)が継続中のためスキップします（${LOCK_DIR}）。"
       exit 0
     fi
     log "古いロック（PID ${OLD_PID:-不明} は不在）を検出。奪って続行します。"
@@ -162,7 +162,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 
 if [[ "$N_TOTAL" -eq 0 ]]; then
-  notify_failure "転送対象ファイルが1件も見つかりませんでした（$MODEL_DIR）。"
+  notify_failure "転送対象ファイルが1件も見つかりませんでした（${MODEL_DIR}）。"
   exit 1
 fi
 
@@ -227,7 +227,7 @@ else
         --notes "CI デプロイが取得する本番モデル。sync_models_to_vps.sh が毎回上書きする。" \
         >>"$LOG" 2>&1 || log "[警告] Release の作成に失敗しました。"
     fi
-    log "Releases へアップロード中（${#UP[@]}件 → $RELEASE_TAG）..."
+    log "Releases へアップロード中（${#UP[@]}件 → ${RELEASE_TAG}）..."
     if gh release upload "$RELEASE_TAG" "${UP[@]}" --clobber >>"$LOG" 2>&1; then
       log "Releases アップロード OK（${#UP[@]}件）"
     else

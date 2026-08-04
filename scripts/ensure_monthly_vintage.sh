@@ -80,7 +80,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
     if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
-      log "前回実行(PID $OLD_PID)が継続中のためスキップします（$LOCK_DIR）。"
+      log "前回実行(PID $OLD_PID)が継続中のためスキップします（${LOCK_DIR}）。"
       exit 0
     fi
     log "古いロック（PID ${OLD_PID:-不明} は不在）を検出。奪って続行します。"
