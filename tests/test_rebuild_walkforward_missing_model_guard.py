@@ -71,7 +71,9 @@ def rebuild_module(request, monkeypatch):
     rebuild_calls: list[tuple] = []
     monkeypatch.setattr(
         mod, "rebuild_pg_atomic",
-        lambda rank_label, cond, per_window_rows, dry_run: rebuild_calls.append(
+        # **kwargs: 呼び出し側にキーワード引数が増えても（2026-08-04 の
+        # allow_legacy_axis など）このスタブが TypeError で落ちないようにする。
+        lambda rank_label, cond, per_window_rows, dry_run, **kwargs: rebuild_calls.append(
             (rank_label, cond, per_window_rows, dry_run)),
     )
     mod._test_rebuild_calls = rebuild_calls

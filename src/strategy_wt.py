@@ -391,6 +391,15 @@ RANK_7S_DAILY_CAP = 12
 #    知見が9車へ移らなかった事例（scripts/exp_three_head_axis.py --n-entries 9）。
 RANK_AXIS2_BAD_WEIGHT = 0.3
 
+# 3ヘッド軸選定を live 本番へ入れた日（この日以降の7車 picks は3ヘッドで選ばれている）。
+# `backfill_7*_rank_wt.py` / `rebuild_7*_walkforward_pg.py` は bad_probs を渡さないため
+# **旧軸で再構築すると live の3ヘッド記録を上書きして消す**。この日以降を含む再構築は
+# `src/wt_rebuild_common.py::rebuild_pg_atomic` が既定で拒否する。
+# 過去を旧軸で塗り直すこと自体が目的なら --allow-legacy-axis を明示すること。
+# 3ヘッドで honest に再構築できるようにするには月次 vintage の bad モデルが必要だが、
+# `train-wt --target` は top3/win しか作れない（2026-08-04 時点の制約）。
+THREE_HEAD_AXIS_SINCE = "2026-08-04"
+
 
 def _race_zscore(probs: dict[int, float]) -> dict[int, float]:
     """レース内で z 化する。全車同値・1車のみなら 0（ゼロ除算しない）。"""

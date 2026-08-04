@@ -44,6 +44,10 @@ _SCRIPT_NAME = "rebuild_7a_walkforward_pg.py"
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--allow-legacy-axis", action="store_true",
+                    help="3ヘッド軸選定の適用期間(THREE_HEAD_AXIS_SINCE以降)を"
+                         "旧軸で塗り直すことを明示的に許可する。liveの3ヘッド記録が"
+                         "失われるため、意図がある場合のみ使う（2026-08-04追加）")
     ap.add_argument("--tail-only", action="store_true",
                      help="直近月（今月）の窓のみ再構築する日次軽量運用向けオプション。"
                           "確定済み過去月は結果が変わらないため毎日再計算する必要がなく、"
@@ -110,7 +114,8 @@ def main() -> None:
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")
 
-    rebuild_pg_atomic(_RANK_LABEL, _DELETE_COND, per_window_rows, args.dry_run)
+    rebuild_pg_atomic(_RANK_LABEL, _DELETE_COND, per_window_rows, args.dry_run,
+                      allow_legacy_axis=args.allow_legacy_axis)
 
 
 if __name__ == "__main__":
