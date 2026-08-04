@@ -41,6 +41,7 @@ from __future__ import annotations
 from src.database import get_connection
 from src.models.trainer import MODEL_DIR
 from src.notify.discord import send as _discord_send
+from src.strategy_wt import THREE_HEAD_AXIS_SINCE
 
 # (date_from, date_to, eval_model_name, win_model_name)
 Window = tuple[str, str, str, str]
@@ -106,11 +107,17 @@ _INSERT_SQL = (
 )
 
 
+# 3ヘッド軸選定で選ばれた live 記録を、旧軸の再構築で上書きしてはいけないランク。
+# 9車(RANK_9S/9A)は3ヘッドを適用していないため対象外。
+_THREE_HEAD_RANKS = frozenset({"RANK_7S", "RANK_7A", "RANK_7B"})
+
+
 def rebuild_pg_atomic(
     rank_label: str,
     delete_cond_sql: str,
     per_window_rows: list[tuple[str, str, list[dict]]],
     dry_run: bool,
+    allow_legacy_axis: bool = False,
 ) -> None:
     """wipe(DELETE)→insertを単一トランザクションにまとめて実行する。
 
@@ -135,6 +142,25 @@ def rebuild_pg_atomic(
     このトランザクション内の全変更が取り消される
     （wipeだけが確定してinsertが失われる事故の防止）。
     """
+    # --- 3ヘッド期間を旧軸で塗り潰す事故の防止（2026-08-04） ---
+    # backfill_7*_rank_wt.py の build_rows() は rank_7s_select_axis(win, top3) を
+    # bad_probs 無しで呼ぶ＝旧軸。THREE_HEAD_AXIS_SINCE 以降を DELETE→INSERT すると
+    # live の3ヘッド記録が静かに消える（S1が第4経路で自動再生成されていた事故と同型）。
+    if rank_label in _THREE_HEAD_RANKS and not allow_legacy_axis:
+        overlap = sorted(dt for _, dt, rows in per_window_rows
+                         if rows and dt >= THREE_HEAD_AXIS_SINCE)
+        if overlap:
+            msg = (
+                f"[{rank_label}] 再構築の対象に 3ヘッド軸選定の適用期間"
+                f"（{THREE_HEAD_AXIS_SINCE} 以降・最終窓 {overlap[-1]}）が含まれています。"
+                f"このスクリプトの軸選定は bad_probs を渡さない**旧軸**のため、"
+                f"実行すると live の3ヘッド記録を上書きして消します。中止しました。"
+                f"（意図して旧軸で塗り直すなら --allow-legacy-axis を明示してください）"
+            )
+            print(msg)
+            notify_discord_warning(f"🚨 **{msg}**")
+            raise SystemExit(1)
+
     total_rows = sum(len(rows) for _, _, rows in per_window_rows)
     if total_rows == 0:
         msg = (
