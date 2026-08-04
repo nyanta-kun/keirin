@@ -17,6 +17,46 @@
 
 更新時は「最終更新」日付と「更新履歴」テーブルも必ず記入する。
 
+## ブランチ運用（2026-08-04〜・PR 必須）
+
+**`master` へ直接 push してはいけない。変更は必ず PR 経由で入れる。**
+2026-08-04 に branch protection を設定した（kiseki と同じ方式）。
+
+| 設定 | 値 |
+|---|---|
+| required status check | `Test (Python 3.12)` のみ |
+| `enforce_admins` | `true`（管理者も対象） |
+| required reviews | なし（1人開発のためレビュアーが立てられない） |
+| `strict`（最新追従の強制） | `false` |
+| force push / branch 削除 | 禁止 |
+
+```bash
+git checkout -b feat/<トピック>     # or fix/ docs/
+# 変更 → テスト（.venv/bin/python -m pytest tests/ -q）
+git push -u origin feat/<トピック>
+gh pr create --title "..." --body "..."
+```
+
+**push 時点では CI 未実行で required check が通らないため、直接 push は機械的に弾かれる。**
+障害対応などで直接 push が必要な場合は一時解除する:
+
+```bash
+gh api -X DELETE repos/nyanta-kun/keirin/branches/master/protection   # 解除
+# 作業後に再設定（contexts は check-run 名と完全一致させること）
+gh api -X PUT repos/nyanta-kun/keirin/branches/master/protection --input - <<'EOF'
+{"required_status_checks":{"strict":false,"contexts":["Test (Python 3.12)"]},
+ "enforce_admins":true,"required_pull_request_reviews":null,"restrictions":null,
+ "allow_force_pushes":false,"allow_deletions":false}
+EOF
+```
+
+⚠️ **`.github/workflows/ci.yml` の `deploy` ジョブが master への push で VPS へ自動デプロイする**
+（`if: github.ref == 'refs/heads/master' && github.event_name == 'push'`）。
+PR では走らないため、**マージした時点でVPSへ反映される**ことを前提に PR を出すこと。
+モデルファイル（`data/models/*.pkl`）は git 管理外なので、特徴量セットを変更した PR を
+マージするときは **`scripts/sync_models_to_vps.sh` によるモデル配布とタイミングを合わせる**
+（コードだけ先に入るとVPS側で `load_model` が特徴量数不一致で落ちる）。
+
 ## キーファイル
 
 ### winticket ルート（★本番稼働中・2026-06-08〜）
