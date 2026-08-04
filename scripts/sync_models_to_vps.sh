@@ -102,8 +102,20 @@ PROD_FILES=(
   "lgbm_wt.pkl" "lgbm_wt.meta.json"
   "lgbm_wt_train_only.pkl" "lgbm_wt_train_only.meta.json"
   "lgbm_wt_win.pkl" "lgbm_wt_win.meta.json"
+  "lgbm_wt_bad.pkl" "lgbm_wt_bad.meta.json"
   "lgbm_wt_eval.pkl" "lgbm_wt_eval.meta.json"
   "lgbm_wt_win_eval.pkl" "lgbm_wt_win_eval.meta.json"
+)
+# CI（GitHub Actions）がデプロイ時に取得する最小セット。
+# GitHub Actions は Mac のローカルファイルへ到達できないため、
+# ここで Releases へ上げておくことで **マージと同時にコードとモデルが揃う**。
+# rsync（VPSへの直接配布）はそのまま残す＝二重経路で、どちらか一方が
+# 失敗してもVPSが不整合にならないようにする。
+RELEASE_TAG="models-latest"
+RELEASE_FILES=(
+  "lgbm_wt.pkl" "lgbm_wt.meta.json"
+  "lgbm_wt_win.pkl" "lgbm_wt_win.meta.json"
+  "lgbm_wt_bad.pkl" "lgbm_wt_bad.meta.json"
 )
 EXTRA_FILES=("upset_cuts_wt.json")
 
@@ -191,5 +203,37 @@ if [[ "$REMOTE_COUNT" -lt "$N_TOTAL" ]]; then
   exit 1
 fi
 log "検証(2/2) OK: VPS側ファイル数=${REMOTE_COUNT}（ローカル転送対象=${N_TOTAL}、VPS側は他バージョンも含み得るため >= であれば正常）"
+
+# --- GitHub Releases へのアップロード（CI がデプロイ時に取得する） ---
+# ここを忘れると CI 側は古いモデルを配ってしまうため、rsync と同じ実行で必ず行う。
+# gh 不在・認証なし・ネットワーク断でも rsync 自体は成功しているので、
+# ここでの失敗は警告に留めて全体は成功扱いにする（VPSへの配布は完了している）。
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  log "[dry-run] GitHub Releases へのアップロードはスキップします"
+elif ! command -v gh >/dev/null 2>&1; then
+  log "[警告] gh CLI が無いため Releases へのアップロードをスキップしました。"
+  log "        CI デプロイ時は古いモデルが配られる可能性があります。"
+else
+  UP=()
+  for name in "${RELEASE_FILES[@]}"; do
+    [[ -f "$MODEL_DIR/$name" ]] && UP+=("$MODEL_DIR/$name")
+  done
+  if [[ ${#UP[@]} -eq 0 ]]; then
+    log "[警告] Releases へ上げるファイルが1つも見つかりませんでした。"
+  else
+    if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+      log "Release '$RELEASE_TAG' が無いため作成します..."
+      gh release create "$RELEASE_TAG" --title "本番モデル（最新）" \
+        --notes "CI デプロイが取得する本番モデル。sync_models_to_vps.sh が毎回上書きする。" \
+        >>"$LOG" 2>&1 || log "[警告] Release の作成に失敗しました。"
+    fi
+    log "Releases へアップロード中（${#UP[@]}件 → $RELEASE_TAG）..."
+    if gh release upload "$RELEASE_TAG" "${UP[@]}" --clobber >>"$LOG" 2>&1; then
+      log "Releases アップロード OK（${#UP[@]}件）"
+    else
+      log "[警告] Releases へのアップロードに失敗しました。VPSへのrsyncは成功しています。"
+    fi
+  fi
+fi
 
 log "=== sync_models_to_vps: 完了（本番${N_PROD}件 + vintage${N_VINTAGE}件 = 計${N_TOTAL}件を配布・検証OK） ==="

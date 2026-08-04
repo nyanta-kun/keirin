@@ -53,6 +53,35 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.DEPLOY_SSH_HOST }}" >> ~/.ssh/known_hosts
 
+      # モデル（data/models/*.pkl）は git 管理外で Mac のローカルにあるため、
+      # GitHub Actions からは直接到達できない。sync_models_to_vps.sh が学習のたびに
+      # Releases(models-latest) へ上げているので、ここから取得してVPSへ配る。
+      # これで **マージと同時にコードとモデルが揃う**（コードだけ先に入る事故が消える）。
+      # Release が無い/取得できない場合もデプロイは続行する。VPSには既存モデルが
+      # あり、後段の整合チェックが不整合を検出してロールバックするため。
+      - name: Fetch models from Release
+        id: fetch_models
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ./_models
+          if gh release download models-latest --dir ./_models --clobber; then
+            echo "fetched=true" >> "$GITHUB_OUTPUT"
+            ls -lh ./_models
+          else
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release 'models-latest' を取得できませんでした。VPS 既存のモデルで整合チェックします。"
+          fi
+
+      - name: Upload models to VPS
+        if: steps.fetch_models.outputs.fetched == 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+              ./_models/* \
+              "${{ secrets.DEPLOY_SSH_USER }}@${{ secrets.DEPLOY_SSH_HOST }}:~/keirin/data/models/"
+          echo "[deploy] モデルを配布しました"
+
       - name: Deploy to VPS
         run: |
           ssh -i ~/.ssh/deploy_key \
@@ -63,7 +92,65 @@ jobs:
           set -e
           cd ~/keirin
           git stash -u || true
+          BEFORE=$(git rev-parse HEAD)
           git pull origin master
           .venv/bin/pip install -r requirements_vps_slim.txt -q
+
+          # --- モデル整合チェック（2026-08-04 追加）---------------------------
+          # モデルファイル（data/models/*.pkl）は git 管理外のため、
+          # 特徴量セットを変えたコードだけが先に入ると load_model が
+          # ValueError（列名不一致）で落ち、翌朝の予想生成が丸ごと死ぬ。
+          # 2026-08-04 の 48→60特徴化で実際にVPSが一時この状態になった。
+          #
+          # ここで新コード×現行モデルの組み合わせを実際に読んで検証し、
+          # 通らなければ **コードを元に戻して** デプロイを失敗させる。
+          # こうすればVPSは常に「コードとモデルが噛み合った状態」に保たれ、
+          # モデルを配布してから再実行すれば通る。
+          if ! .venv/bin/python - <<'PYEOF'
+          import sys
+          from src.models.trainer import load_model
+          from src.preprocessing.feature_wt import FEATURE_COLS_WT
+
+          # 欠けると予想生成が止まる必須モデル
+          REQUIRED = ("lgbm_wt", "lgbm_wt_win")
+          # 欠けてもフォールバックが効く任意モデル（ただし特徴不一致は許さない）
+          OPTIONAL = ("lgbm_wt_bad",)
+
+          ng = []
+          for name in REQUIRED:
+              try:
+                  load_model(name)
+              except Exception as e:
+                  ng.append(f"{name}: {type(e).__name__}: {e}")
+          for name in OPTIONAL:
+              try:
+                  load_model(name)
+              except FileNotFoundError:
+                  print(f"[warn] {name} は未配布（旧ロジックにフォールバックします）")
+              except Exception as e:
+                  ng.append(f"{name}: {type(e).__name__}: {e}")
+
+          if ng:
+              print(f"[FATAL] コードは {len(FEATURE_COLS_WT)}特徴だが"
+                    " モデルと噛み合っていません:")
+              for x in ng:
+                  print("  -", x)
+              sys.exit(1)
+          print(f"[ok] {len(FEATURE_COLS_WT)}特徴 / 必須モデル整合")
+          PYEOF
+          then
+            echo "[deploy] モデル不整合のためコードを $BEFORE へ戻します"
+            git reset --hard "$BEFORE"
+            .venv/bin/pip install -r requirements_vps_slim.txt -q || true
+            .venv/bin/python -c "
+          from src.notify.discord import send
+          send('🚨 **[CI deploy] モデル不整合のためロールバックしました**\n'
+               'コードだけ先に入ると load_model が落ちるため、デプロイを取り消しました。\n'
+               '\`scripts/sync_models_to_vps.sh\` でモデルを配布してから再実行してください。',
+               channel='system')
+          " || true
+            exit 1
+          fi
+          # ------------------------------------------------------------------
           echo "[deploy] $(date '+%Y-%m-%d %H:%M:%S') OK"
           SSHEOF
