@@ -111,8 +111,12 @@ def test_backward_compat_without_required_columns():
 
 
 def test_sb_dyn_cols_in_feature_cols():
-    """4特徴が FEATURE_COLS_WT（46特徴・2026-07-31にex_spurt_pct/ex_thrust_pctを
-    train/serve skewのため除外し48→46）に含まれる。"""
+    """4特徴が FEATURE_COLS_WT（60特徴）に含まれる。
+
+    本数の変遷: 2026-07-31 に ex_spurt_pct/ex_thrust_pct を train/serve skew の
+    ため除外し 48→46、2026-08-03 に隊列推定位置2特徴で 46→48、
+    2026-08-04 に race_type 7特徴 + ライン実力5特徴で 48→60。
+    """
     for c in SB_DYN_COLS_WT:
         assert c in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 48
+    assert len(FEATURE_COLS_WT) == 60

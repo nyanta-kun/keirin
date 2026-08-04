@@ -48,6 +48,7 @@ def load_raw_data_wt(min_date: str = "2025-01-01", max_date: str | None = None) 
             r.race_date,
             r.venue_id,
             r.grade,
+            r.race_type,
             r.distance,
             r.start_at,
             e.frame_no,
@@ -227,6 +228,10 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # 隊列推定位置（2026-08-03追加・b_rate_90 に依存するため sb_dyn の後に置く）
     df = add_formation_features_wt(df)
 
+    # レース種別・ライン実力（2026-08-04追加）
+    df = add_race_type_features_wt(df)
+    df = add_line_strength_features_wt(df)
+
     # 頭対頭対戦成績(H2H)は2026-07-28に実装しFEATURE_COLS_WTへ追加したが、S1/S9の
     # honest全期間walk-forwardでROIが悪化(S1 443.0%→363.5%・S9 412.8%→286.8%)した
     # ため本番投入を撤回した（S7のみ改善401.1%→424.8%。詳細
@@ -241,6 +246,93 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     df[present] = df[present].fillna(0)
 
     return df
+
+
+RACE_TYPE_COLS_WT = [
+    "rt_is_final", "rt_is_semifinal", "rt_is_heat", "rt_is_senbatsu",
+    "rt_is_tokusen", "rt_is_hatsu", "rt_is_ippan",
+]
+LINE_STRENGTH_COLS_WT = [
+    "line_rp_sum", "line_rp_max", "line_rp_mean",
+    "line_rank_by_rp", "line_rp_gap_top",
+]
+
+
+def add_race_type_features_wt(df: pd.DataFrame) -> pd.DataFrame:
+    """レース種別（wt_races.race_type）をキーワードフラグとして付与する（2026-08-04追加）。
+
+    3着内モデルは **勝ち上がりで実力者が揃うレースで軸1を系統的に過大評価する**。
+    honest 実測（36,831レース・`scripts/exp_axis1_miss_analysis.py`）の較正誤差:
+
+    | race_type | n | 予測p1 | 実測 | 乖離 |
+    |---|---|---|---|---|
+    | 初特選 | 1,536 | 75.1% | 68.4% | −6.7pt |
+    | 選抜 | 1,228 | 76.0% | 69.7% | −6.3pt |
+    | ガールズ決勝 | 549 | 91.7% | 85.4% | −6.2pt |
+    | 決勝 | 1,554 | 76.0% | 70.4% | −5.6pt |
+    | ガールズ予選 | 2,047 | 92.7% | 94.8% | +2.1〜+2.2pt |
+
+    全体の較正は±1pt以内で正確なのに種別ごとに±7pt振れており、`grade_enc`
+    （S級/A級/L級）だけでは表現できない。序数エンコードではなくキーワードの
+    フラグにしてあるのは、race_type が100種類以上のロングテール（頻度上位20種で
+    約95%）で、学習データに無い種別が出ても分解して表現できるようにするため。
+    """
+    out = df.copy()
+    s = out["race_type"].fillna("") if "race_type" in out.columns else pd.Series(
+        [""] * len(out), index=out.index)
+    s = s.astype(str)
+    out["rt_is_semifinal"] = s.str.contains("準決").astype(int)
+    out["rt_is_final"] = (s.str.contains("決勝") & ~s.str.contains("準決")).astype(int)
+    out["rt_is_heat"] = s.str.contains("予選").astype(int)
+    out["rt_is_senbatsu"] = s.str.contains("選抜").astype(int)
+    out["rt_is_tokusen"] = s.str.contains("特選").astype(int)
+    out["rt_is_hatsu"] = s.str.startswith("初").astype(int)
+    out["rt_is_ippan"] = s.str.contains("一般").astype(int)
+    return out
+
+
+def add_line_strength_features_wt(df: pd.DataFrame) -> pd.DataFrame:
+    """ライン単位の実力集約を付与する（2026-08-04追加）。
+
+    競輪はライン戦であるにもかかわらず、既存特徴はラインの**構造**
+    （line_size / line_pos / is_line_leader / n_lines / line_frac）しか持たず、
+    「そのラインが強いか」を一切持っていなかった。A/B（2窓×5seed・
+    `scripts/exp_racetype_field_ab.py`）で `line_rp_gap_top` が全60特徴中
+    **2位**の重要度に入り、ΔAUC +0.00206/+0.00218・Δ1位3着内 +0.22/+0.08pt。
+
+    同時に検証した「レース単位の集約」（rp_mean/rp_std 等）は AUC を +0.0017〜
+    0.0027 上げるのに 1位3着内率は窓1で −0.20pt と悪化したため**不採用**とした。
+    レース内で全車同値の特徴はレース間の識別しか改善せず、レース内の順位付けに
+    寄与しないため（AUCだけで採否を決めてはいけない実例）。
+
+    ラインは `line_group` で識別する。値そのものは隊列の前後を表さないが所属の
+    識別には使える。単騎（line_group 欠損含む）は1車ラインとして同じ土俵で扱う。
+    `race_point` は開催中に更新されない安定値・`line_group` は出走表情報のため、
+    `ex_*` 系のような train/serve skew リスクは持たない。
+    """
+    out = df.copy()
+    rp = out["race_point"].astype(float).fillna(0.0)
+    # line_group 欠損は「単騎扱い」。車番から負のグループIDを与えて一意にする。
+    lg = out["line_group"]
+    lg = lg.where(lg.notna(), -out["frame_no"].astype(float))
+    key = out["race_key"].astype(str) + "#" + lg.astype(str)
+
+    grp = rp.groupby(key)
+    out["line_rp_sum"] = grp.transform("sum")
+    out["line_rp_max"] = grp.transform("max")
+    out["line_rp_mean"] = grp.transform("mean")
+
+    # レース内でのラインの強さ順位（0=最強）と、最強ラインとの得点合計差
+    per_line = out.groupby(["race_key", key.rename("_lk")])["line_rp_sum"].first()
+    rank = (per_line.groupby(level=0).rank(ascending=False, method="min") - 1)
+    top = per_line.groupby(level=0).transform("max")
+    lk = list(zip(out["race_key"], key))
+    out["line_rank_by_rp"] = [rank.get(k, 0.0) for k in lk]
+    out["line_rp_gap_top"] = [top.get(k, 0.0) for k in lk] - out["line_rp_sum"]
+
+    for c in LINE_STRENGTH_COLS_WT:
+        out[c] = out[c].astype(float).fillna(0.0)
+    return out
 
 
 FORMATION_COLS_WT = ["formation_pos_frac", "formation_line_rank"]
@@ -828,7 +920,14 @@ FEATURE_COLS_WT = [
     *SB_DYN_COLS_WT,
     # 隊列推定位置（2026-08-03追加・後方は外を回る分だけ実走距離が伸びる）
     *FORMATION_COLS_WT,
+    # レース種別（2026-08-04追加・勝ち上がりで実力者が揃うレースの過大評価を是正）
+    *RACE_TYPE_COLS_WT,
+    # ライン実力（2026-08-04追加・競輪はライン戦なのに構造しか持っていなかった）
+    *LINE_STRENGTH_COLS_WT,
     # 頭対頭対戦成績(H2H)は2026-07-28に検証→S1/S9悪化のため撤回・非採用（add_h2h_features_wt参照）
+    # レース単位集約(rp_mean/rp_std/rp_gap_top2/rp_gap_top_self)は2026-08-04に検証→
+    # AUCは上がるが1位3着内率が窓で符号反転（−0.20pt/+0.07pt）のため非採用
+    # （add_line_strength_features_wt の docstring 参照）
 ]
 
 TARGET_COL_WT = "top3_flag"

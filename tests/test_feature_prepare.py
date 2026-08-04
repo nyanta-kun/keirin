@@ -47,4 +47,10 @@ def test_leaky_ex_features_excluded_from_feature_cols_wt():
     """
     assert "ex_spurt_pct" not in FEATURE_COLS_WT
     assert "ex_thrust_pct" not in FEATURE_COLS_WT
-    assert len(FEATURE_COLS_WT) == 48
+    # 本数の変遷: 48→46（本除外）→48（隊列推定位置・2026-08-03）
+    #             →60（race_type 7 + ライン実力 5・2026-08-04）
+    assert len(FEATURE_COLS_WT) == 60
+    # 同時に検証したレース単位集約は「AUCは上がるが1位3着内率が窓で符号反転」
+    # のため不採用。誤って再混入しないことを保証する（ex_* と同型の回帰テスト）。
+    for c in ("rp_mean", "rp_std", "rp_gap_top2", "rp_gap_top_self"):
+        assert c not in FEATURE_COLS_WT
