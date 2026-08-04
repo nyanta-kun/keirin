@@ -1373,6 +1373,20 @@ def wave_picks_wt(target_date, output_path, model_name,
         click.echo("[wt] lgbm_wt_win が見つかりません。M候補は gap12 単独ゲートで生成します。",
                    err=True)
 
+    # 大敗モデル（3ヘッド軸選定・2026-08-04〜）。7車立ての軸2選定にのみ使う。
+    # 存在しなければ None のままにし、rank_7s_select_axis 側で従来の重なり方式へ
+    # フォールバックする（モデル配布前にコードだけ先行デプロイされても壊れない）。
+    # ⚠️ lgbm_wt_bad は full_refit=True でホールドアウト無し。live予想は未来の
+    # レースなので問題ないが、backfill_7*_rank_wt.py で過去を再構築すると in-sample
+    # になる（lgbm_wt_win と同じ注意・strategy_wt.py L170 参照）。
+    try:
+        bad_model = load_model("lgbm_wt_bad")
+        df["pred_bad"] = bad_model.predict_proba(X)[:, 1]
+    except FileNotFoundError:
+        df["pred_bad"] = None
+        click.echo("[wt] lgbm_wt_bad が見つかりません。7車の軸選定は従来の重なり方式で行います。",
+                   err=True)
+
     # Web表示用の単勝/複勝指数を wt_entries に書き込む（2026-07-19）。
     # 候補選定と無関係に全出走馬分を更新するため、この位置（pred_prob/pred_win
     # 算出直後・候補フィルタ前）で行う。
@@ -1775,6 +1789,10 @@ def wave_picks_wt(target_date, output_path, model_name,
                         rank_7s_pm_fallback.setdefault(_rk_s4, {})[int(_fno_s4)] = int(_pm_s4)
 
         rank_7s_raw_candidates = []
+        # 3ヘッド軸選定が実際に使われた races 数。0 件のまま終わったら黙って旧方式へ
+        # フォールバックしている＝モデル未配布などの事故なので、必ずログに出す。
+        rank_7s_n_three_head = 0
+        rank_7s_n_legacy = 0
         if "pred_win" in df.columns:
             for race_key, grp in df.groupby("race_key"):
                 if n_entries_map.get(race_key, 0) != 7:
@@ -1788,7 +1806,19 @@ def wave_picks_wt(target_date, output_path, model_name,
                              for r in grp_sorted.itertuples(index=False)}
                 top3_probs = {int(r.frame_no): float(r.pred_prob)
                               for r in grp_sorted.itertuples(index=False)}
-                sel = rank_7s_select_axis(win_probs, top3_probs)
+                # 3ヘッド軸選定（2026-08-04〜・**7車立てのみ**）。9車は掃引で窓別に
+                # 符号が反転したため従来のまま（strategy_wt.RANK_AXIS2_BAD_WEIGHT 参照）。
+                # pred_bad が無い日は None を渡して従来の重なり方式へフォールバック。
+                bad_probs = None
+                if "pred_bad" in grp_sorted.columns \
+                        and not grp_sorted["pred_bad"].isna().any():
+                    bad_probs = {int(r.frame_no): float(r.pred_bad)
+                                 for r in grp_sorted.itertuples(index=False)}
+                if bad_probs:
+                    rank_7s_n_three_head += 1
+                else:
+                    rank_7s_n_legacy += 1
+                sel = rank_7s_select_axis(win_probs, top3_probs, bad_probs)
                 if sel is None:
                     continue
                 axis1, axis2, axis_sum = sel
@@ -1851,6 +1881,16 @@ def wave_picks_wt(target_date, output_path, model_name,
             else f"wave_picks_wt_{target_date}_s7_raw_candidates.json")
         with open(rank_7s_raw_path, "w", encoding="utf-8") as f:
             json.dump(rank_7s_raw_candidates, f, ensure_ascii=False, indent=2)
+
+        # 軸選定の内訳を必ず出す。lgbm_wt_bad の配布漏れ等で 3ヘッドが一度も
+        # 使われないまま「正常終了」するのを検知できるようにするため（2026-08-04）。
+        _n_axis = rank_7s_n_three_head + rank_7s_n_legacy
+        if _n_axis:
+            click.echo(f"[wt] 7車の軸選定: 3ヘッド {rank_7s_n_three_head}件 / "
+                       f"従来方式 {rank_7s_n_legacy}件 (計{_n_axis}件)")
+            if rank_7s_n_three_head == 0:
+                click.echo("[wt][警告] 3ヘッド軸選定が一度も適用されていません。"
+                           "lgbm_wt_bad の配布漏れの可能性があります。", err=True)
 
         rank_7s_candidates = rank_7s_daily_select(rank_7s_raw_candidates)
         rank_7s_candidates.sort(key=lambda c: c["axis_sum"])

@@ -66,6 +66,7 @@ WINDOWS = {
 }
 SEEDS = [42, 101, 202, 303, 404]
 STAKE = 100
+N_ENTRIES = 7          # main() で --n-entries から設定（run_window が参照する）
 
 
 def fit_predict(train: pd.DataFrame, test: pd.DataFrame, target: str) -> np.ndarray:
@@ -197,7 +198,7 @@ def run_window(df: pd.DataFrame, tf: str, tt: str, acc: dict) -> None:
     t["pp3"], t["ppw"], t["pbad"] = p3, pw, pbad
     races = []
     for rk, g in t.groupby("race_key"):
-        if len(g) != 7:
+        if len(g) != N_ENTRIES:
             continue
         fo = {int(r.frame_no): (int(r.finish_order)
                                 if r.finish_order is not None and r.finish_order == r.finish_order
@@ -237,16 +238,26 @@ def run_window(df: pd.DataFrame, tf: str, tt: str, acc: dict) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--windows", default="w1,w2,w3,w4")
+    ap.add_argument("--n-entries", type=int, default=7,
+                    help="対象車数（7 または 9）。9車は7車の知見が移る保証が無いため"
+                         "別途測るのに使う（2026-08-04 追加）")
+    ap.add_argument("--bad-rank", type=int, default=6,
+                    help="大敗ヘッドの閾値。既定6=「6着以下」。7車では下位2/7=27.8%%だが"
+                         "9車では下位4/9=43.3%% と意味が変わるため、9車では 7 "
+                         "（下位3/9=33%%）も試すこと")
     args = ap.parse_args()
+    global N_ENTRIES
+    N_ENTRIES = args.n_entries
     print(f"データ読み込み ... ({len(FEATURE_COLS_WT)}特徴)", flush=True)
     max_to = max(t for _, t in WINDOWS.values())
     df = build_features_wt(load_raw_data_wt(min_date=TRAIN_FROM, max_date=max_to))
     fo = pd.to_numeric(df["finish_order"], errors="coerce")
-    df["bad6"] = ((fo >= 6) & (fo >= 1)).astype(int)
+    df["bad6"] = ((fo >= args.bad_rank) & (fo >= 1)).astype(int)
     with get_connection() as conn:
         ne = dict(conn.execute("SELECT race_key, n_entries FROM wt_races"))
-    df = df[df["race_key"].map(ne) == 7].copy()
-    print(f"7車立てに限定: {len(df):,}行")
+    df = df[df["race_key"].map(ne) == args.n_entries].copy()
+    print(f"{args.n_entries}車立てに限定: {len(df):,}行 "
+          f"（大敗ヘッド = {args.bad_rank}着以下・実勢 {100*df['bad6'].mean():.1f}%）")
 
     acc: dict[str, list] = {}
     for w in args.windows.split(","):

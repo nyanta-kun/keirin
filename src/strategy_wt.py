@@ -368,6 +368,42 @@ RANK_7S_ENTROPY_MAX = 1.8329
 # （exp_s4_daily_cap_by_entropy.py参照）。異常発生時のみ効く設計。
 RANK_7S_DAILY_CAP = 12
 
+# ---- 3ヘッド軸選定の大敗ペナルティ重み（2026-08-04・7車立てのみ） ----------
+# 軸1 = pred_win 最上位、軸2 = z(pred_prob) − w2·z(bad_prob) の最上位（軸1を除く）。
+# w1（軸1側の大敗ペナルティ）は 0 で固定＝定数を置かない。軸1の外れは惜敗(4着)が
+# 62% で大敗が少なく、ペナルティを掛けるほど1着率が落ちるため（w1=0.6 で −3.5pt）。
+# 対して軸2の外れは6着以下の大敗が67%を占めるので、軸2にだけ掛ける。
+#
+# w2=0.3 の根拠（scripts/exp_three_head_axis.py・月次凍結せず窓ごとに再学習した
+# honest walk-forward 4窓 2025-07〜2026-07・約4,300推奨）:
+#   現行(win∩top3重なり) → w2=0.3 で 的中 38.9→41.4% / ROI 77.5→82.8% /
+#   軸2の6着以下 17.2→14.1% / 軸2の3着内 57.4→60.1%
+#   **4窓すべてで的中・ROIとも改善し符号反転なし**（85.9→88.9 / 80.4→81.4 /
+#   69.3→79.1 / 74.5→81.8）。
+# w2=0.6 も平均は近い(ROI 81.0%)が、w1=0.3 を併用する案は 2026-01〜04 窓で
+# ROI が −0.9pt 反転する。4/4クリーンなのは w1=0.0 × w2=0.3 だけ。
+#
+# ⚠️ ROI は改善するが 100% には届かない（77.5→82.8%）。控除率75%の壁は破れておらず、
+#    改善するのは的中率と軸品質であって黒字化ではない。
+# ⚠️ **9車立てには適用しない**。同じ掃引を9車(4窓・約550推奨)で回すと、平均では
+#    +2.0pt に見えるが窓別では 2026-01〜04 で 的中 −2.8pt・ROI −19.9pt と反転する。
+#    窓あたり139推奨ではノイズに埋もれ判定不能。9B・S9/9A再較正と同じく、7車の
+#    知見が9車へ移らなかった事例（scripts/exp_three_head_axis.py --n-entries 9）。
+RANK_AXIS2_BAD_WEIGHT = 0.3
+
+
+def _race_zscore(probs: dict[int, float]) -> dict[int, float]:
+    """レース内で z 化する。全車同値・1車のみなら 0（ゼロ除算しない）。"""
+    if not probs:
+        return {}
+    vals = list(probs.values())
+    mean = sum(vals) / len(vals)
+    var = sum((v - mean) ** 2 for v in vals) / len(vals)
+    if var <= 0:
+        return {f: 0.0 for f in probs}
+    sd = math.sqrt(var)
+    return {f: (v - mean) / sd for f, v in probs.items()}
+
 
 def rank_7s_field_entropy(top3_probs: dict[int, float]) -> float:
     """レース全体（出走7車）の指数エントロピー（占有率ベースの拮抗度）を返す。
@@ -389,20 +425,43 @@ def rank_7s_field_entropy(top3_probs: dict[int, float]) -> float:
 
 def rank_7s_select_axis(
     win_probs: dict[int, float], top3_probs: dict[int, float],
+    bad_probs: dict[int, float] | None = None,
+    bad_weight: float = RANK_AXIS2_BAD_WEIGHT,
 ) -> tuple[int, int, float] | None:
     """S7の軸2車とaxis_sum（波乱度指数の元）を選定する。
 
     win_probs / top3_probs: {frame_no: 確率(0-1 or pct、比較にのみ使うのでスケール不問)}
       レース内全車分。
+    bad_probs: 大敗（6着以下）確率。**渡された場合のみ3ヘッド選定**に切り替わる。
+      None なら従来の重なり方式を完全に維持する（9車立て・過去分バックフィル用）。
 
-    軸選定: win_probs上位3 ∩ top3_probs上位3 の重なり車から、
+    軸選定（3ヘッド版・bad_probs あり）:
+      軸1 = win_probs 最上位
+      軸2 = z(top3_probs) − bad_weight × z(bad_probs) の最上位（軸1を除く）
+      重なりを要求しないため、旧ロジックが None を返す「重なり0」でも軸が立つ。
+
+    軸選定（従来版・bad_probs なし）:
+      win_probs上位3 ∩ top3_probs上位3 の重なり車から、
       重なり>=2ならtop3_probs上位2、重なり==1ならその1車+残りのtop3_probs最上位。
 
     returns (axis1, axis2, axis_sum) or None（重なり0・データ不足で選定不能）。
     axis_sum は axis1/axis2 の top3_probs 合計（波乱度指数・低いほど波乱寄り）。
+    **3ヘッド版でも axis_sum の定義は変えない**（RANK_7S_AXIS_SUM_MAX ゲートの
+    意味を変えないため）。
     """
     if not win_probs or not top3_probs or len(win_probs) < 3 or len(top3_probs) < 3:
         return None
+
+    if bad_probs:
+        axis1 = max(win_probs, key=lambda f: win_probs[f])
+        zp = _race_zscore(top3_probs)
+        zb = _race_zscore(bad_probs)
+        rest = [f for f in top3_probs if f != axis1 and f in zb]
+        if not rest:
+            return None
+        axis2 = max(rest, key=lambda f: zp[f] - bad_weight * zb[f])
+        return axis1, axis2, top3_probs[axis1] + top3_probs[axis2]
+
     win_top3 = {f for f, _ in sorted(win_probs.items(), key=lambda kv: -kv[1])[:3]}
     place_top3 = {f for f, _ in sorted(top3_probs.items(), key=lambda kv: -kv[1])[:3]}
     overlap = win_top3 & place_top3

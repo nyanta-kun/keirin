@@ -36,7 +36,7 @@ mkdir -p "$LOG_DIR" "data/picks"
 LOCK_FILE="$LOG_DIR/daily_picks_wt.lock"
 exec 200>"$LOCK_FILE"
 if ! flock -n 200; then
-  echo "[$(date '+%H:%M:%S')] [daily_picks_wt] 前回実行がロック中のためスキップします（$LOCK_FILE）。" \
+  echo "[$(date '+%H:%M:%S')] [daily_picks_wt] 前回実行がロック中のためスキップします（${LOCK_FILE}）。" \
     | tee -a "$LOG_DIR/lock_skips.log" >&2
   exit 0
 fi

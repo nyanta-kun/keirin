@@ -66,7 +66,7 @@ def _fmt_start(start_at: str | int | None) -> str:
 
 
 def build(target_date: str, model_name: str, win_model_name: str,
-          future_only: bool) -> list[dict]:
+          future_only: bool, bad_model_name: str = "lgbm_wt_bad") -> list[dict]:
     model = load_model(model_name)
     win_model = load_model(win_model_name)
     df = build_features_wt(load_raw_data_wt(min_date=target_date, max_date=target_date))
@@ -105,6 +105,14 @@ def build(target_date: str, model_name: str, win_model_name: str,
     X = prepare_X(df)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
     df["pred_win"] = win_model.predict_proba(X)[:, 1]
+    # 3ヘッド軸選定（2026-08-04〜・7車立てのみ）。本番の wave-picks-wt と同じ軸を
+    # 引くため、7B候補もここで pred_bad を持たせる。モデルが無ければ None のまま
+    # 従来の重なり方式へフォールバックする。
+    try:
+        df["pred_bad"] = load_model(bad_model_name).predict_proba(X)[:, 1]
+    except FileNotFoundError:
+        df["pred_bad"] = None
+        print(f"[gen-7b] {bad_model_name} が見つかりません。従来の重なり方式で軸選定します。")
 
     now = int(time.time())
     raw: list[dict] = []
@@ -119,7 +127,10 @@ def build(target_date: str, model_name: str, win_model_name: str,
 
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
-        sel = rank_7s_select_axis(win_probs, top3_probs)
+        bad_probs = None
+        if "pred_bad" in g.columns and not g["pred_bad"].isna().any():
+            bad_probs = {int(r.frame_no): float(r.pred_bad) for r in g.itertuples(index=False)}
+        sel = rank_7s_select_axis(win_probs, top3_probs, bad_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
@@ -160,12 +171,14 @@ def main() -> None:
     ap.add_argument("date", help="YYYY-MM-DD")
     ap.add_argument("--model", default="lgbm_wt_eval")
     ap.add_argument("--win-model", default="lgbm_wt_win")
+    ap.add_argument("--bad-model", default="lgbm_wt_bad")
     ap.add_argument("--future-only", action="store_true",
                     help="発走時刻を過ぎたレースを除外する（入稿用途で推奨）")
     ap.add_argument("--dry-run", action="store_true", help="ファイルを書かず内容だけ表示")
     args = ap.parse_args()
 
-    cands = build(args.date, args.model, args.win_model, args.future_only)
+    cands = build(args.date, args.model, args.win_model, args.future_only,
+                  args.bad_model)
     for c in cands:
         print(f"  {c['venue_name']}{c['race_no']}R {c['start_time']} "
               f"軸{c['axis1']}={c['axis2']} 相手{c['legs_7b']} "
