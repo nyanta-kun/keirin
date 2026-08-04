@@ -1239,9 +1239,13 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
               help="7車以上レースを対象に追加（gami≥GAMI_THRESHOLD倍+gap12≥min_gap12）。"
                    "doc48 Phase2通過: VAL 129.9%★(3143R)/HOLD 138.3%★(1381R)/12.93R/日。"
                    "既定on＝7+車専用本番モード。")
+@click.option("--only-races-file", "only_races_file", default=None,
+              type=click.Path(exists=True, dir_okay=False),
+              help="1行1race_keyのファイル。指定するとそのレースだけを対象に候補生成する"
+                   "（16:00の不足分再算出用・2026-08-04）")
 @click.option("--7plus-s-gap12", "seven_plus_s_gap12", default=0.10, show_default=True, type=float,
               help="7+車 Sランク閾値: gap12がこの値以上をSランク、未満をAランク（default: 0.10=HOLD143%）")
-def wave_picks_wt(target_date, output_path, model_name,
+def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                   start_from_hour, start_to_hour, min_gap12, include_7plus,
                   seven_plus_s_gap12):
     """winticket モデルで wave-picks を生成（7+車 SS=三連複 専用）
@@ -1405,6 +1409,25 @@ def wave_picks_wt(target_date, output_path, model_name,
             _idx_rows,
         )
         _conn_idx.commit()
+
+    # --- 対象レースの限定（2026-08-04・U-1 二段構成の第2パス用）---
+    # 16:00 の再算出は「朝8:00 に情報不足で候補にできなかったレースだけ」を対象にする。
+    # 朝に評価済みのレースまで作り直すと、既に公開した推奨の軸が後から変わってしまう。
+    # 対象の抽出は scripts/list_deferred_races_wt.py（朝の生候補で
+    # wt_overlap_n が null ＝ WINTICKET公式の◎◯が未公開だったレース）。
+    # wt_entries の指数更新は全レース分を先に済ませてから絞る（Web表示は全レース維持）。
+    if only_races_file:
+        _only = {
+            ln.strip() for ln in Path(only_races_file).read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.startswith("#")
+        }
+        _before = df["race_key"].nunique()
+        df = df[df["race_key"].isin(_only)].copy()
+        click.echo(f"[wt] 対象レース限定: {_before}R → {df['race_key'].nunique()}R "
+                   f"（{only_races_file} に {len(_only)}件）")
+        if df.empty:
+            click.echo("[wt] 対象レースが0件のため候補生成を行わず終了します。")
+            return
 
     df["race_no"] = df["race_key"].apply(
         lambda rk: int(rk.split("_")[2]) if len(rk.split("_")) >= 3 else 0

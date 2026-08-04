@@ -643,7 +643,15 @@ def rank_7s_evening_reselect(
 
     returns 採用された候補のリスト。
     """
-    all_raw = day_raw + night_raw
+    # 同一 race_key が朝夜の両方に居たら夜側（新しい情報で評価し直した方）を採る。
+    # 2026-08-04 の第2パスは「朝に◎◯が未公開だったレース」を再評価するため、
+    # 同じ race_key が day_raw（overlap=None・ゲートで落ちる）と night_raw の両方に
+    # 現れる。現状は day 側が必ずゲートで落ちるので実害は無いが、素朴な連結のままだと
+    # ゲート条件が変わった途端に同じレースを2行採用してしまうため明示的に潰す。
+    merged: dict[str, dict] = {}
+    for c in day_raw + night_raw:
+        merged[c.get("race_key")] = c
+    all_raw = list(merged.values())
     locked = [c for c in all_raw if c.get("race_key") in locked_keys]
     gated = rank_7s_daily_select([c for c in all_raw if c.get("race_key") not in locked_keys])
     unlocked = sorted(gated, key=lambda c: c["entropy"])
