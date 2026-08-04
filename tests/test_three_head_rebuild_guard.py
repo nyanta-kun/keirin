@@ -58,7 +58,13 @@ def test_past_only_window_is_untouched(monkeypatch):
     assert not (isinstance(e.value, SystemExit) and e.value.code == 1)
 
 
-def test_empty_rows_window_does_not_trigger():
-    """行が空の窓は wipe 対象外なのでガードも発火しない（0件wipeスキップと整合）。"""
+def test_empty_rows_window_does_not_trigger(monkeypatch):
+    """行が空の窓は wipe 対象外なのでガードも発火しない（0件wipeスキップと整合）。
+
+    ⚠️ このケースは「挿入対象0件」の警告経路を通るため、monkeypatch を忘れると
+    本番の #システム障害 チャンネルへ実際に投稿される（2026-08-04 に5通投稿する
+    事故を起こした）。conftest の `_block_discord` でも二重に塞いでいる。
+    """
+    monkeypatch.setattr("src.wt_rebuild_common.notify_discord_warning", lambda *_: None)
     rebuild_pg_atomic("RANK_7S", "cond BETWEEN ? AND ?",
                       [("2026-07-01", THREE_HEAD_AXIS_SINCE, [])], dry_run=True)
