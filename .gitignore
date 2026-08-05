@@ -60,3 +60,4 @@ data/picks/
 # 2026-07-08 判明: push毎のCIデプロイ(stash -u, popなし)が本ファイルを削除していた
 data/prerace_decisions_*.json*
 data/prerace_notified_*.json*
+data/feature_cache/
