@@ -37,13 +37,15 @@ import save_model_eval as sme
 import live_report_wt as lr
 
 
-# 現行5ランク（2026-08-03時点。RANK_7SS は 2026-08-02 に全廃し ABOLISHED へ移動、
-# RANK_7B は 2026-08-03 に新設）。
-CURRENT_RANK_NAMES = {"RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S", "RANK_9A"}
+# 現行6ランク（2026-08-05時点）。
+# ⚠️ RANK_7SS は 2026-08-02 に旧定義（波乱軸選出）を全廃したが、2026-08-05 に
+#    **同じ名前を別戦略（entropy不合格 × 軸2車が同一ライン）へ充てて再新設**した。
+#    したがって CURRENT 側に存在する。旧定義の成績（picks_history 16,298行）は
+#    削除済みでDBには0件、バックアップCSVは旧定義なので新7SSと合算してはいけない。
+CURRENT_RANK_NAMES = {"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S", "RANK_9A"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
-    "RANK_7SS",
     "SEVEN_S1", "SIX_S1", "7PLUS_U", "7PLUS_M", "7PLUS_R", "7PLUS_ST", "7PLUS_STP",
 }
 
@@ -51,7 +53,7 @@ ABOLISHED_RANK_NAMES = {
 # ── 1. 単一正本そのもの ──────────────────────────────────────────────
 
 
-def test_current_paper_ranks_has_all_five_current_ranks():
+def test_current_paper_ranks_has_all_current_ranks():
     """CURRENT_PAPER_RANKS に現行5ランクが全て含まれること。"""
     ranks = {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
     assert ranks == CURRENT_RANK_NAMES
@@ -85,20 +87,21 @@ def test_each_current_rank_has_unique_rank_and_suffix():
     assert len(suffixes) == len(set(suffixes))
 
 
-def test_rank_7s_is_the_only_header_total_member():
-    """ヘッダー合計(in_header_total)に含まれるのはRANK_7Sのみ（7A/9A/9S/SSは除外）。
+def test_header_total_members_are_top_ranks():
+    """ヘッダー合計(in_header_total)に含まれるのは 7SS と 7S（7A/7B/9S/9Aは除外）。
 
     notify_results_wt.py の既存設計方針「7A/9Aはヘッダー合計には含めないが
     _query_statsには含める」を単一正本側で保持していることの確認。
+    2026-08-05 に再新設した RANK_7SS は最上位ランクのため合計に含める。
     """
     header_members = {spec.rank for spec in sw.CURRENT_PAPER_RANKS if spec.in_header_total}
-    assert header_members == {"RANK_7S"}
+    assert header_members == {"RANK_7SS", "RANK_7S"}
 
 
 def test_all_current_ranks_in_live_report():
     """現行4ランクは全て in_live_report=True。
 
-    唯一Falseだった RANK_7SS は 2026-08-02 に全廃し CURRENT から除外したため、
+    2026-08-05 に再新設した RANK_7SS は最上位ランクのため True（合計に含む）。
     除外対象は空集合になる。
     """
     excluded = {spec.rank for spec in sw.CURRENT_PAPER_RANKS if not spec.in_live_report}
@@ -197,7 +200,8 @@ def test_paper_suffixes_include_legacy_hash_suffix_ranks():
     サフィックスも安全網として残っていること（誤って巻き込み削除しないため）。
     """
     legacy_suffixed = {spec.suffix for spec in sw.ABOLISHED_PAPER_RANKS if spec.suffix}
-    assert legacy_suffixed == {"#7SS", "#7S1", "#6S1"}
+    # "#7SS" は現行ランクのsuffixになったため legacy 側からは外れた。
+    assert legacy_suffixed == {"#7S1", "#6S1"}
     for suffix in legacy_suffixed:
         assert suffix in nr._PAPER_SUFFIXES
 
@@ -210,7 +214,7 @@ def test_paper_suffixes_has_no_unexpected_extra_entries():
     このテストを直す必要があり、「数を合わせるだけ」の修正が混入しやすいので
     単一正本から導出した集合との一致＋重複なしで検証する。
     """
-    expected = {spec.suffix for spec in sw.CURRENT_PAPER_RANKS} | {"#7SS", "#7S1", "#6S1"}
+    expected = {spec.suffix for spec in sw.CURRENT_PAPER_RANKS} | {"#7S1", "#6S1"}
     assert set(nr._PAPER_SUFFIXES) == expected
     # tuple 側に重複が無いこと（集合比較だけでは検出できない）
     assert len(nr._PAPER_SUFFIXES) == len(set(nr._PAPER_SUFFIXES)) == len(expected)
@@ -258,9 +262,9 @@ def test_live_report_ranks_matches_single_source_subset():
     assert lr.RANKS == expected
 
 
-def test_live_report_ranks_excludes_seven_ss():
-    """live_report_wt.RANKS は意図的にRANK_7SSを含まない（既存テストの前提と一致）。"""
-    assert "RANK_7SS" not in lr.RANKS
+def test_live_report_ranks_includes_seven_ss():
+    """live_report_wt.RANKS は単一正本と一致する（2026-08-05 に RANK_7SS を再新設）。"""
+    assert "RANK_7SS" in lr.RANKS
 
 
 def test_live_report_rank_labels_matches_single_source():
@@ -324,21 +328,21 @@ def test_all_four_locations_agree_on_current_rank_universe():
 
 
 def test_regression_seven_ss_absent_everywhere():
-    """RANK_7SS 全廃（2026-08-02）が全参照先へ波及していることの単体確認。
+    """RANK_7SS 再新設（2026-08-05）が全参照先へ波及していることの単体確認。
 
     live実績 n=16,298・ROI73.5% と控除率75%を下回り続けたため全廃した。
     S1 全廃時と同じく「単一正本から消せば4つの参照先すべてから消える」
     構造になっていることを担保する（旧S3/S1全廃時に取りこぼした経路が
     翌日以降ランクを復活させた事故の再発防止）。
     """
-    assert "RANK_7SS" not in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
-    assert "RANK_7SS" in {spec.rank for spec in sw.ABOLISHED_PAPER_RANKS}
-    assert "'RANK_7SS'" not in nr._QUERY_STATS_RANKS_SQL
+    assert "RANK_7SS" in {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
+    assert "RANK_7SS" not in {spec.rank for spec in sw.ABOLISHED_PAPER_RANKS}
+    assert "'RANK_7SS'" in nr._QUERY_STATS_RANKS_SQL
     # "#7SS" は _PAPER_SUFFIXES には残る（廃止済みsuffixは「巻き込み削除の
     # 保護対象」として意図的に含める設計。#7S1/#6S1 と同じ扱い）
     assert "#7SS" in nr._PAPER_SUFFIXES
-    assert not any(r[1] == "RANK_7SS" for r in sme.PAPER_RANKS)
-    assert "RANK_7SS" not in lr.RANKS
+    assert any(r[1] == "RANK_7SS" for r in sme.PAPER_RANKS)
+    assert "RANK_7SS" in lr.RANKS
 
 
 def test_regression_seven_s1_absent_everywhere():

@@ -347,6 +347,19 @@ def _write_paper_candidates(target_date: str) -> None:
         # （rank_7s_gate_label が None を返すケース）のため、ここでは再フィルタしない。
         rows.append((f"{rk}#7A", "RANK_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
 
+    # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
+    # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物。
+    # 買い目は7S/7Aと同じ総流し5点。候補JSONは rank_7ss_daily_select() で
+    # 既に絞り込み済みのため、ここでは再フィルタしない。
+    for c in _load((f"wave_picks_wt_{target_date}_s7ss_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7ss_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1"), c.get("axis2")
+        if not rk or axis1 is None or axis2 is None:
+            continue
+        rows.append((f"{rk}#7SS", "RANK_7SS",
+                     f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
+
     for c in _load((f"wave_picks_wt_{target_date}_s9a_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s9a_candidates.json")):
         rk = c.get("race_key")

@@ -92,6 +92,9 @@ _DEFAULT_COMMENT_TEMPLATE = (
 # 朝の候補JSON（file_key 方式）が存在せず、本スクリプトの現行構造では入稿できない。
 # 入稿対象に加えるには 7SS 専用の候補供給経路を別途用意する必要がある（未実装）。
 RANK_CONFIGS: dict[str, dict[str, Any]] = {
+    # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。最上位ランク。
+    # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物で名前のみ継承。
+    "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_per_line": 2000, "gate_filter": None},
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
     "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": None},
     # 7B（2026-08-03新設）は総流しではなく相手を3点に絞る（partners_key）。
@@ -404,6 +407,9 @@ def _process_rank(
                 axis2=(axis2_or_p1 if cfg["bet_kind"] == BET_KIND_TRIO_AXIS2 else None),
                 partners=partners, stake_per_line=cfg["stake_per_line"],
                 title=title, comment=comment,
+                # 「自信あり」は最上位の 7SS のみ（2026-08-05・ユーザー指示）。
+                # 上限に当たれば client 側が type=0 で自動リトライする。
+                confident=(rank_key == "7SS"),
             )
         except Exception as e:
             ok, msg = False, f"例外: {e}"

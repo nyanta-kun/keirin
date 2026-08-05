@@ -240,6 +240,7 @@ class NetkeirinClient:
         axis1: int, partners: list[int], axis2: int | None = None,
         stake_per_line: int,
         title: str, comment: str = DEFAULT_COMMENT,
+        confident: bool = False,
     ) -> tuple[bool, str]:
         """1レース分の下書き（action=add）を入稿する。
 
@@ -311,12 +312,13 @@ class NetkeirinClient:
             "comment": comment,
             # race.html実ソース確認済み: type=勝負アイコン値・point=販売価格
             # （式別/方式はkaime[].bet_idにのみ含まれる。旧仮実装の誤りを訂正済み）。
-            # 2026-07-24〜: 「自信あり」(type=1)の1日あたり投稿上限が不明なため
-            # ACT_TYPE_CONFIDENT自動付与を一時停止し、常にACT_TYPE_DEFAULT（指定なし）
-            # で送信する。SS/SS+の「自信あり」指定は上限が判明するまでユーザーが
-            # netkeirin.jp上で手動設定する運用とする。上限判明後にCONFIDENT_GATE_LABELS
-            # 判定へ戻すこと。
-            "type": ACT_TYPE_DEFAULT,
+            # 2026-07-24〜2026-08-05: 「自信あり」(type=1)の1日あたり投稿上限が
+            # 不明なため自動付与を停止していた（2件目以降が yoso_tag_over で拒否
+            # された実測あり。上限は1件/日の可能性が高い）。
+            # 2026-08-05〜: **7SS（最上位ランク・実測1.9件/日）にのみ**付与を再開。
+            # 上限に当たった場合は呼び出し側(submit_pick)が type=0 で自動リトライ
+            # するため、拒否されても入稿自体は失われない。
+            "type": ACT_TYPE_CONFIDENT if confident else ACT_TYPE_DEFAULT,
             "point": SALE_PRICE_DEFAULT,
             "waku_check": json.dumps(waku_check),
             "kaime": json.dumps(
@@ -328,6 +330,15 @@ class NetkeirinClient:
             r = self.session.post(POST_GOODS_URL, data=payload, timeout=15)
             r.raise_for_status()
             resp = r.json()
+            # 「自信あり」の1日上限（yoso_tag_over）に当たったら、タグ無しで
+            # もう一度だけ送る。**入稿そのものを落とさないため**の措置。
+            # 上限が1件/日と推定されるため 7SS が同日2件以上ある日は必ず起きる。
+            if confident and not resp.get("result") \
+                    and "yoso_tag_over" in str(resp):
+                payload["type"] = ACT_TYPE_DEFAULT
+                r = self.session.post(POST_GOODS_URL, data=payload, timeout=15)
+                r.raise_for_status()
+                resp = r.json()
         except (requests.RequestException, ValueError) as e:
             return False, f"入稿リクエスト失敗: {e}"
 
