@@ -811,10 +811,14 @@ def rank_7a_daily_select(candidates: list[dict]) -> list[dict]:
     ないことをhonest全期間で検算済み（本セクション冒頭コメント参照）。
 
     - wt_overlap_n ∈ {0,1} 必須（◎◯完全一致=2・マーク欠損=None は対象外、S7と同様）
-    - axis_sum<=RANK_7S_AXIS_SUM_MAX・entropy<=RANK_7S_ENTROPY_MAX の2条件のうち、
-      不合格の個数がちょうど1個の候補のみ採用
-      （0個=S7本体の対象・2個とも不合格は市場効率の壁でROI不採用、
-        詳細は本セクション冒頭参照）
+    - **axis_sum だけが不合格**（entropy は合格）の候補のみ採用
+
+    【2026-08-05改定】旧来は「不合格ちょうど1つ」だったため、
+      A群 axis_sum だけ不合格（軸2車が堅い）  的中52-53% / 中央値0.78倍
+      E群 entropy  だけ不合格（レースが荒れ）  的中30-32% / 中央値1.57倍
+    という**性質が正反対の2群の混合**になっていた（同じラベルなのに当たり方も
+    配当も一貫しない）。E群は 7SS（同一ライン条件付き）へ分離したため、
+    7A は A群のみを指す。詳細は RANK_7SS_STAKE 定義部のコメント参照。
 
     returns 採用された候補のリスト（axis_sum昇順）。
     """
@@ -824,10 +828,37 @@ def rank_7a_daily_select(candidates: list[dict]) -> list[dict]:
             continue
         axis_ok = c["axis_sum"] <= RANK_7S_AXIS_SUM_MAX
         ent_ok = c.get("entropy", float("inf")) <= RANK_7S_ENTROPY_MAX
-        n_fail = (not axis_ok) + (not ent_ok)
-        if n_fail == 1:
+        if (not axis_ok) and ent_ok:
             pool.append(c)
     return sorted(pool, key=lambda c: c["axis_sum"])
+
+
+def rank_7ss_daily_select(candidates: list[dict]) -> list[dict]:
+    """7SSの選出: entropy だけ不合格 ∧ 軸2車が同一ライン。
+
+    candidates: 各要素は最低限
+      {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None,
+       "same_line": bool} を持つ dict。
+
+    - wt_overlap_n ∈ {0,1} 必須（7S/7Aと同様）
+    - axis_sum は合格（<=RANK_7S_AXIS_SUM_MAX）かつ entropy が不合格
+    - **軸1と軸2が同一ライン**（`same_line`）。判定は rank_7ss_same_line()。
+      候補生成側で埋める。**未取得は False 側に倒す**（推奨を増やさない）
+
+    returns 採用された候補のリスト（entropy昇順＝荒れが小さい順）。
+    """
+    pool = []
+    for c in candidates:
+        if c.get("wt_overlap_n") not in (0, 1):
+            continue
+        if c["axis_sum"] > RANK_7S_AXIS_SUM_MAX:
+            continue
+        if c.get("entropy", float("inf")) <= RANK_7S_ENTROPY_MAX:
+            continue
+        if not c.get("same_line"):
+            continue
+        pool.append(c)
+    return sorted(pool, key=lambda c: c.get("entropy", 0.0))
 
 
 def rank_9a_daily_select(candidates: list[dict]) -> list[dict]:
@@ -1036,184 +1067,78 @@ def ss_policy(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 7SS（波乱軸選出・穴レース検知・2026-07-31導入）
+# 7SS（entropy不合格 × 軸2車が同一ライン・2026-08-05 新設）
 #
-# S7/S9の「本命ピックアップ」とは逆に、高配当の的中（見せ場・購入者への
-# アピール）を狙う独立戦略。モデル予測に依存せず、wt_entriesの公表値
-# （競走得点・1着率・3着内率・WT公式印・ライン構成）のみで判定する
-# （2022年以降のデータで即座にhonest backtestが可能な設計）。
+# ⚠️ **この 7SS は 2026-08-02 に全廃した旧 RANK_7SS（波乱軸選出・穴レース検知・
+#    モデル非依存の別戦略）とは無関係の別物**。名前だけを引き継いだ。
+#    旧実装は「順位が名前で伝わること」を優先するユーザー判断で破棄した
+#    （commit `7048db5` 以前の git 履歴から復元可能）。picks_history に旧7SSの
+#    行は0件（16,298行は2026-08-02に削除・CSVへ退避済み）なので成績は混ざらない。
 #
-# 検証（TRAIN=2022-01-01〜2023-12-31 / TEST=2024-01-01〜2026-07-30・
-# scripts/exp_upset50_*_2026_07_31.py 系列）:
-#   ①「拮抗度（際立った実力上位馬の不在）」を表す13特徴の標準化合算スコアが
-#     高いレースほど、勝ち三連複が50倍以上になる確率が高い（再現性あり・
-#     lift 1.1〜1.2倍程度と控えめ）。
-#   ②軸選定は「race_point(競走得点)単独top1」が「1着率+3着内率」複合より
-#     一貫して優れる。
-#   ③軸2はWT公式印(◯△✕=prediction_mark 2,3,4)のうち軸1と重ならない
-#     3着内率最大の1頭が最も安定（TRAIN/TESTの目減りが最小）。
-#   ④この組み合わせでもROIは70〜72%（TEST）止まりで控除率75%の壁・
-#     ROI100%には届かないが、的中時の配当は最高354.2倍（TEST全体）・
-#     最高250.5倍（穴指数上位20%）に達し、購入者へのアピュールとして
-#     ユーザー判断により採用。ROI改善ではなく「見せ場」が目的の商品。
+# ## 定義
 #
-# 買い目 = 三連複 軸2車+残り5車流し（5点・S7と同じ100円/点）。
+#     wt_overlap_n ∈ {0,1}
+#     ∧ axis_sum <= RANK_7S_AXIS_SUM_MAX      （7S と同じ）
+#     ∧ entropy  >  RANK_7S_ENTROPY_MAX       （＝レースが荒れている側）
+#     ∧ **軸1と軸2が同一ライン**（wt_entries.line_group が一致）
+#
+# 買い目は 7S/7A と同一（三連複 軸2車＋残り5車流し・5点500円）。
+#
+# ## 経緯：7A が性質の違う2群の混合だった
+#
+# 2026-08-05 の分解で、7A（不合格ちょうど1つ）は正反対の2群の混合と判明した:
+#   A群 axis_sum だけ不合格（＝軸2車が堅い）  的中52-53% / 低配当(中央値0.78倍)
+#   E群 entropy  だけ不合格（＝レースが荒れ）  的中30-32% / 高配当(中央値1.57倍)
+# 同じラベルで出しているため利用者から見て当たり方も配当も一貫しなかった。
+#
+# ## 同一ライン条件の根拠
+#
+# 7S/7A では**二軸に負の相関**（実測 −2.7〜−2.9pt。独立仮定より両方3着内率が低い）
+# がある。7車で3枠を奪い合うためだが、**その正体の一部がライン関係**だった。
+# 別ラインの2車は競合するが、同一ラインなら連動して残る（競輪はライン戦）。
+#
+# 確認窓（2024-07〜2025-06・掃引に一度も使っていない4窓）:
+#
+#   E群 基準       7.34件/日  的中30.2%  ROI 76.8%  (82.3 76.3 67.4 81.4)
+#   E群 同一ライン  1.90件/日  的中41.2%  ROI 85.9%  (94.1 86.5 88.7 74.3)
+#   E群 別ライン    5.44件/日  的中26.7%  ROI 75.0%  (79.6 73.6 61.7 85.1) ← 除外する層
+#
+# **的中率 +11.0pt・ROI +9.1pt**。除外される別ライン側は7Aの中で最も弱い。
+#
+# ⚠️ **c4窓が 74.3% で「4窓すべて75%以上」を 0.7pt 割る**（ユーザー承知の上で採用）。
+#    構成全体（7SS+7S+7A）では 79.2/84.2/83.8/80.8 と4窓すべて合格する。
+#
+# ⚠️ **A群には適用しない**。確認窓で同一ライン80.4% vs 別ライン78.7%、基準80.8%を
+#    下回り適用根拠がない（掃引窓では+10ptに見えたが確認窓で消えた）。
+#
+# ## 構成全体（確認窓・件数は目標10〜15件/日に対して 11.87）
+#
+#   7SS  1.90件/日  的中41.2%  ROI 85.9%   ← 最上位
+#   7S   3.68件/日  的中41.0%  ROI 84.4%
+#   7A   6.28件/日  的中53.2%  ROI 80.8%
+#   合計 11.87件/日 的中47.5%  ROI 82.0%  (79.2 84.2 83.8 80.8) ✓
+#
+# ROI が 7SS > 7S > 7A と単調になり「S が特別に良く A から下がる」並びが成立する。
 # ═══════════════════════════════════════════════════════════════════════════
 
-RANK_7SS_STAKE = 100  # 円/点（ペーパー・5点=500円/レース）
-
-RANK_7SS_FEATURES = (
-    "rp_max", "rp_std", "rp_gap12",
-    "fr_max", "fr_std", "fr_gap12",
-    "tr_max", "tr_std", "tr_gap12",
-    "n_lines", "max_line_size", "n_solo", "line_entropy",
-)
-
-# TRAIN(2022-01-01〜2023-12-31・7車立て・n=22,953)のみで確定した凍結パラメータ。
-# TESTでの再計算・再学習は一切行わない（honest固定閾値）。
-RANK_7SS_MU = {
-    "rp_max": 88.290582, "rp_std": 3.683336, "rp_gap12": 2.264474,
-    "fr_max": 35.481724, "fr_std": 11.360250, "fr_gap12": 13.195604,
-    "tr_max": 66.454028, "tr_std": 15.218289, "tr_gap12": 10.974465,
-    "n_lines": 3.454015, "max_line_size": 2.885941, "n_solo": 1.105607,
-    "line_entropy": 1.146982,
-}
-RANK_7SS_SD = {
-    "rp_max": 14.343346, "rp_std": 2.951000, "rp_gap12": 2.233535,
-    "fr_max": 17.586289, "fr_std": 5.714892, "fr_gap12": 13.676320,
-    "tr_max": 14.768138, "tr_std": 5.438257, "tr_gap12": 9.756276,
-    "n_lines": 1.160679, "max_line_size": 0.749428, "n_solo": 1.871859,
-    "line_entropy": 0.283591,
-}
-RANK_7SS_SIGN = {
-    "rp_max": 1.0, "rp_std": -1.0, "rp_gap12": -1.0,
-    "fr_max": -1.0, "fr_std": -1.0, "fr_gap12": -1.0,
-    "tr_max": -1.0, "tr_std": -1.0, "tr_gap12": -1.0,
-    "n_lines": -1.0, "max_line_size": -1.0, "n_solo": -1.0,
-    "line_entropy": 1.0,
-}
-# TRAIN上位20%点（この値以上を「穴指数」高＝波乱予兆レースとして採用）
-RANK_7SS_SCORE_THRESHOLD = 4.796886
+RANK_7SS_STAKE = 100   # 円/点（ペーパー・5点=500円/レース。7S/7Aと同一）
 
 
-def _rank_7ss_entropy(vals: list[float]) -> float:
-    total = sum(vals)
-    if total <= 0:
-        return 0.0
-    ent = 0.0
-    for v in vals:
-        s = max(v / total, 1e-9)
-        ent -= s * math.log(s)
-    return ent
+def rank_7ss_same_line(axis1: int, axis2: int,
+                       line_groups: dict[int, object] | None) -> bool:
+    """軸1と軸2が同一ラインかを判定する。
 
-
-def _rank_7ss_pop_std(vals: list[float]) -> float:
-    """母集団標準偏差（ddof=0・exp_upset50系スクリプトのnp.std(default)と同一定義）。"""
-    n = len(vals)
-    if n == 0:
-        return 0.0
-    mean = sum(vals) / n
-    return math.sqrt(sum((v - mean) ** 2 for v in vals) / n)
-
-
-def rank_7ss_field_features(entries: list[dict]) -> dict[str, float] | None:
-    """entries（各要素: race_point/first_rate/third_rate/line_groupを持つdict）
-    から13特徴を計算する。値欠損時は None。
+    line_groups: {frame_no: wt_entries.line_group}。単騎や未取得は None/空文字。
+    **どちらかが不明なら False**（不明を同一ラインとみなして推奨を増やさない）。
     """
-    if any(e.get("race_point") is None or e.get("first_rate") is None
-           or e.get("third_rate") is None for e in entries):
-        return None
-    rps = sorted((float(e["race_point"]) for e in entries), reverse=True)
-    frs = sorted((float(e["first_rate"]) for e in entries), reverse=True)
-    trs = sorted((float(e["third_rate"]) for e in entries), reverse=True)
-    if len(rps) < 2 or len(frs) < 2 or len(trs) < 2:
-        return None
+    if not line_groups:
+        return False
+    g1, g2 = line_groups.get(axis1), line_groups.get(axis2)
+    if g1 is None or g2 is None:
+        return False
+    s1, s2 = str(g1).strip(), str(g2).strip()
+    return bool(s1) and s1 == s2
 
-    line_sizes: dict[int, int] = {}
-    for e in entries:
-        lg = e.get("line_group")
-        if lg is not None:
-            line_sizes[lg] = line_sizes.get(lg, 0) + 1
-    n_lines = float(entries[0].get("n_lines") or len(line_sizes) or 0)
-    max_line_size = float(max(line_sizes.values())) if line_sizes else 0.0
-    n_solo = float(sum(1 for v in line_sizes.values() if v == 1))
-    line_entropy = _rank_7ss_entropy(list(line_sizes.values())) if line_sizes else 0.0
-
-    return {
-        "rp_max": rps[0], "rp_std": _rank_7ss_pop_std(rps), "rp_gap12": rps[0] - rps[1],
-        "fr_max": frs[0], "fr_std": _rank_7ss_pop_std(frs), "fr_gap12": frs[0] - frs[1],
-        "tr_max": trs[0], "tr_std": _rank_7ss_pop_std(trs), "tr_gap12": trs[0] - trs[1],
-        "n_lines": n_lines, "max_line_size": max_line_size, "n_solo": n_solo,
-        "line_entropy": line_entropy,
-    }
-
-
-def rank_7ss_score(feat: dict[str, float]) -> float:
-    """穴指数（標準化合算スコア）。高いほど波乱（三連複50倍以上）寄り。"""
-    return sum(
-        RANK_7SS_SIGN[f] * (feat[f] - RANK_7SS_MU[f]) / RANK_7SS_SD[f]
-        for f in RANK_7SS_FEATURES
-    )
-
-
-def rank_7ss_select_axis(entries: list[dict]) -> tuple[int, int] | None:
-    """7SSの軸2車を選定する。
-
-    軸1 = race_point(競走得点)単独top1。
-    軸2 = WT公式印(prediction_mark in (2,3,4)=◯△✕)のうち軸1以外で
-          third_rate(3着内率)最大の1頭。
-    候補なし（◯△✕が軸1以外に存在しない・マーク欠損）は None（選定不能）。
-
-    entries の各要素は frame_no/race_point/third_rate/prediction_mark を持つdict。
-    """
-    by_frame = {int(e["frame_no"]): e for e in entries}
-    if any(by_frame[f].get("race_point") is None for f in by_frame):
-        return None
-    axis1 = max(by_frame, key=lambda f: float(by_frame[f]["race_point"]))
-
-    mark_frames = [
-        f for f in by_frame
-        if by_frame[f].get("prediction_mark") in (2, 3, 4) and f != axis1
-        and by_frame[f].get("third_rate") is not None
-    ]
-    if not mark_frames:
-        return None
-    axis2 = max(mark_frames, key=lambda f: float(by_frame[f]["third_rate"]))
-    return axis1, axis2
-
-
-def rank_7ss_build_candidate(entries: list[dict]) -> dict | None:
-    """entries(7件)から7SSの穴指数・軸1/軸2を算出する。対象外はNone。
-
-    entries: wt_entries の1レース分（race_point/first_rate/third_rate/
-      line_group/n_lines/prediction_mark/frame_no を持つ dict のリスト）。
-
-    None を返す条件（いずれもこの戦略の対象外＝見送り記録もしない）:
-      - 7車立てでない
-      - 軸選定不能（race_point欠損・WT印(2/3/4)を持つ軸1以外の車が居ない等）
-      - 13特徴のいずれかが欠損
-      - 穴指数が RANK_7SS_SCORE_THRESHOLD 未満
-
-    【単一正本】2026-08-01: 朝の候補生成（src/cli/main.py::wave-picks-wt）と
-    発走前判定（scripts/notify_prerace_wt.py）の双方から呼ばれる。7SSは
-    モデル非依存なので当初は発走15分前にDBから直接算出する設計だったが、
-    他ランクと同じく朝に候補JSONを書き出す方式へ統一した（ユーザー判断）。
-    同じ判定ロジックが2箇所に複製されると内容が食い違う典型的な事故に
-    なるため、必ず本関数を経由すること。
-    """
-    if len(entries) != 7:
-        return None
-    axis = rank_7ss_select_axis(entries)
-    if axis is None:
-        return None
-    feat = rank_7ss_field_features(entries)
-    if feat is None:
-        return None
-    score = rank_7ss_score(feat)
-    if score < RANK_7SS_SCORE_THRESHOLD:
-        return None
-    axis1, axis2 = axis
-    return {"axis1": axis1, "axis2": axis2, "score": score}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1274,6 +1199,9 @@ class PaperRankSpec:
 #   2026-08-02 に全廃したため CURRENT から除去した（ABOLISHED_PAPER_RANKS 参照）。
 #   RANK_7B   #7B       7B        （新設・旧名なし）                 —      2026-08-03〜            —
 CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
+    # 2026-08-05 新設。旧 RANK_7SS(波乱軸選出・2026-08-02全廃)とは**無関係の別物**で
+    # 名前だけを引き継いだ。picks_history に旧7SSの行は0件なので成績は混ざらない。
+    PaperRankSpec("RANK_7SS", "#7SS", "7SS", in_header_total=True,  in_live_report=True),
     PaperRankSpec("RANK_7S",  "#7S",  "7S",  in_header_total=True,  in_live_report=True),
     PaperRankSpec("RANK_7A",  "#7A",  "7A",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_7B",  "#7B",  "7B",  in_header_total=False, in_live_report=True),
@@ -1314,11 +1242,17 @@ class AbolishedRankSpec:
 
 
 ABOLISHED_PAPER_RANKS: tuple[AbolishedRankSpec, ...] = (
-    AbolishedRankSpec("RANK_7SS", "#7SS",
-                       "波乱軸選出・穴レース検知／三連複2軸総流し（2026-08-02全廃）。"
-                       "live実績 n=16,298・ROI73.5%と控除率75%を下回り続けたため。"
-                       "判定ロジック(rank_7ss_*)とbackfill_7ss_rank_wt.pyは"
-                       "将来の再設定に備えて残置"),
+    # ⚠️ 旧 RANK_7SS（波乱軸選出・穴レース検知／モデル非依存の別戦略）は
+    #    2026-08-02 に全廃（live n=16,298・ROI73.5%で控除率割れ）。当初は
+    #    「将来の再設定に備えて」判定ロジックを残置していたが、2026-08-05 に
+    #    **同じ "7SS" の名前を別戦略（entropy不合格×同一ライン）へ充てた**ため、
+    #    残置の意味が消え、むしろ新旧の取り違え事故の元になることから
+    #    ユーザー判断で判定ロジックごと破棄した（commit `7048db5` 以前の
+    #    git 履歴から復元可能）。
+    #    **したがって RANK_7SS は ABOLISHED ではなく CURRENT に存在する。**
+    #    picks_history の旧7SS行は 2026-08-02 に16,298行削除済み（0件）で、
+    #    バックアップは data/backup/picks_history_rank_7ss_before_abolition_20260802.csv。
+    #    このCSVだけは旧定義の成績なので、新7SSと合算してはいけない。
     AbolishedRankSpec("SEVEN_S1", "#7S1",
                        "win軸1着固定×3着内モデル相手2車・三連単2点流し（2026-07-31全廃）"),
     AbolishedRankSpec("SIX_S1", "#6S1",

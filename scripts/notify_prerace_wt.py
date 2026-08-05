@@ -40,7 +40,7 @@ from src.notify.discord import send
 from src.strategy_wt import (
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
     rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
-    RANK_7SS_SCORE_THRESHOLD, RANK_7SS_STAKE,
+    RANK_7SS_STAKE,
     line_score_features, rank_7s_gate_label, ss_policy,
 )
 
@@ -919,193 +919,10 @@ def _process_rank_7s_candidates(today: str, now_unix: int, notified: set[str]) -
     return messages, newly_done
 
 
-# ── 7SS候補（波乱軸選出・穴レース検知・ペーパー・2026-07-31導入） ──────────
-# S7/S9とは独立の戦略。モデル予測に依存せず wt_entries の公表値のみで判定する。
-# 導入当初はモデル非依存であることを活かし、朝の候補生成(wave-picks-wt)を経由せず
-# この発走前チェック時に当日の対象レースを直接DBから読み直して算出していたが、
-# 2026-08-01に他ランクと同じ候補JSON方式へ統一した（ユーザー判断。netkeirin入稿
-# 経路に乗せられるようにするため）。判定ロジックの単一正本は
-# strategy_wt.rank_7ss_build_candidate()。
-
-def _load_rank_7ss_candidates(today: str) -> list[dict]:
-    """当日の7SS候補 JSON（昼 + 夜）を読み込む。
-
-    2026-08-01: 7SSは当初、発走15分前に wt_races/wt_entries から直接算出していたが
-    （モデル非依存のため可能だった）、他ランクと同じく朝の候補JSONを読む方式へ
-    統一した（ユーザー判断）。生成側は src/cli/main.py::wave-picks-wt、
-    判定ロジックの単一正本は strategy_wt.rank_7ss_build_candidate()。
-    """
-    picks_dir = Path(__file__).parent.parent / "data" / "picks"
-    out: list[dict] = []
-    for fname in (f"wave_picks_wt_{today}_7ss_candidates.json",
-                  f"wave_picks_wt_{today}_night_7ss_candidates.json"):
-        p = picks_dir / fname
-        if p.exists():
-            try:
-                out += json.loads(p.read_text(encoding="utf-8"))
-            except Exception as e:
-                logger.warning("7SS候補 JSON 読み込み失敗 %s: %s", p.name, e)
-    return out
-
-
-def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
-    """7SS（波乱軸選出・ペーパー）の記録行 {base}#7SS を picks_history に即時反映する。
-
-    実際の賭けはないが、集計・kiseki 表示互換のため bet_amount は名目値
-    （n_combos × RANK_7SS_STAKE）で記録する。gate_label は使わない（単一
-    サブランク・7A/9Aと同じ扱い）。
-    """
-    store_key = race_key + "#7SS"
-    bet = n_combos * RANK_7SS_STAKE
-    try:
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO picks_history "
-                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
-                (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
-            )
-            conn.commit()
-    except Exception as e:
-        logger.warning("7SS pick SQLite 書き込み失敗 %s: %s", race_key, e)
-
-    db_url = os.environ.get("KEIRIN_DB_URL")
-    if db_url:
-        try:
-            import psycopg2  # noqa: PLC0415
-            with psycopg2.connect(db_url) as pg_conn:
-                with pg_conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO keirin.picks_history "
-                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
-                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
-                        "ON CONFLICT (race_key) DO UPDATE SET "
-                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
-                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
-                        (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
-                    )
-        except Exception as e:
-            logger.warning("7SS pick VPS 書き込み失敗 %s: %s", race_key, e)
-
-
-def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
-    """7SS（波乱軸選出・ペーパー）の15分前 Discord 通知メッセージ。"""
-    venue = race_info.get("venue_name") or race_info.get("venue_id", "?")
-    race_no = race_info.get("race_no", "?")
-    start = "--:--"
-    _stt = race_info.get("start_at")
-    if _stt:
-        try:
-            start = datetime.fromtimestamp(int(_stt), tz=_JST).strftime("%H:%M")
-        except (TypeError, ValueError):
-            pass
-    axis1 = detail.get("axis1")
-    axis2 = detail.get("axis2")
-    combos = detail.get("combos") or []
-    leg_odds = detail.get("leg_odds") or {}
-    n_pts = len(combos)
-    lines = []
-    for c in combos:
-        ov = leg_odds.get(c)
-        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
-        lines.append(f"    {c}:  {ov_str}")
-    return (
-        f"🎰 **[7SS]  {venue} {race_no}R  発走 {start}**\n"
-        f"  軸: 競走得点1位×WT印内3着内率最大 {axis1}/{axis2}\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7SS_STAKE:,}円): "
-        f"`{axis1}={axis2}流し`\n"
-        f"  **穴指数(波乱予兆スコア)={cand.get('score', 0):.2f}**（閾値{RANK_7SS_SCORE_THRESHOLD:.2f}以上を採用）\n"
-        f"\n"
-        f"  📊 現在オッズ（締切10分前）:\n"
-        + "\n".join(lines)
-    )
-
-
-def _process_rank_7ss_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
-    """7SS候補の発走前判定・記録・通知メッセージ生成。
-
-    2026-08-01: 朝の候補JSON（wave-picks-wt が生成）を読む方式へ統一した。
-    それ以前はこの場で wt_races/wt_entries から穴指数・軸を直接算出していた
-    （モデル非依存のため可能だった）が、他ランクと構造を揃え netkeirin 入稿
-    経路にも乗せられるようにするためユーザー判断で朝算出へ移行した。
-
-    returns (messages, newly_done)
-    """
-    cands = _load_rank_7ss_candidates(today)
-    if not cands:
-        return [], set()
-
-    race_info_map = _load_race_info(
-        [c["race_key"] for c in cands if c.get("race_key")])
-
-    in_window: list[tuple[dict, dict]] = []
-    for cand in cands:
-        rk = cand.get("race_key")
-        if not rk or f"{rk}#7SS" in notified:
-            continue
-        ri = race_info_map.get(rk)
-        if ri is None or ri.get("n_entries") != 7:
-            continue
-        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
-        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
-            in_window.append((cand, ri))
-    if not in_window:
-        return [], set()
-
-    scraper = WinticketScraper(request_interval=1.0)
-    messages: list[tuple[str, str]] = []
-    newly_done: set[str] = set()
-    for cand, ri in in_window:
-        rk = cand["race_key"]
-        ss_key = f"{rk}#7SS"
-
-        try:
-            odds_data = scraper.fetch_odds(
-                venue_id  = ri["venue_id"],
-                race_date = ri["race_date"],
-                race_no   = ri["race_no"],
-                cup_id    = ri["cup_id"],
-                day_index = ri["day_index"],
-            )
-        except Exception as e:
-            logger.warning("fetch_odds 失敗(7SS) %s: %s", rk, e)
-            odds_data = None
-        if odds_data is None:
-            print(f"[prerace] {rk} 7SS候補 → オッズ取得不可（次回再試行）", flush=True)
-            time.sleep(0.3)
-            continue
-
-        trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_rank_7s(cand, trio_lookup)  # 買い目構造(軸2車+5点流し)が同一のため共用
-        if decision == "不明":
-            print(f"[prerace] {rk} 7SS候補 → 盤面取得不可（次回再試行）", flush=True)
-            time.sleep(0.3)
-            continue
-
-        # 判定を確定記録（翌朝の採点は notify_results_wt がこの内容で行う）
-        _save_decision(today, ss_key, {
-            "decision": decision,
-            "rank": "RANK_7SS",
-            "paper": True,
-            "stake": RANK_7SS_STAKE,
-            "score": cand.get("score"),
-            **detail,
-        })
-
-        if decision == "buy":
-            combos = detail["combos"]
-            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
-            pred = (f"{detail['axis1']}={detail['axis2']}-"
-                    + ",".join(map(str, thirds)))
-            _insert_rank_7ss_pick(rk, today, pred, len(combos))
-            messages.append((ss_key, _build_rank_7ss_message(cand, ri, detail)))
-            print(f"[prerace] {rk} 7SS候補 → buy（ペーパー・{len(combos)}点・穴指数{cand['score']:.2f}）", flush=True)
-        else:
-            print(f"[prerace] {rk} 7SS候補 → skip: {detail.get('skip_reason')}", flush=True)
-        newly_done.add(ss_key)
-        time.sleep(0.3)
-    return messages, newly_done
-
+# ── 旧7SS（波乱軸選出・穴レース検知）は 2026-08-02 に全廃し、判定ロジックごと
+#    2026-08-05 に破棄した（同名を別戦略へ充てたため残置の意味が消えた）。
+#    **現行の 7SS は entropy不合格 × 軸2車が同一ライン の別物**で、7S/7A と同じ
+#    候補JSON方式（wave-picks-wt が生成）に乗る。処理は _process_rank_7ss_candidates()。
 
 def judge_rank_9s(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     """S9（S7の9車立て版）の発走前ライブオッズ判定（純関数・DB非依存）。
@@ -1526,6 +1343,182 @@ def _process_rank_7a_candidates(today: str, now_unix: int, notified: set[str]) -
         newly_done.add(rank_7a_key)
         time.sleep(0.3)
     return messages, newly_done
+
+
+
+# ── 7SS（entropy不合格 × 軸2車が同一ライン・2026-08-05新設）─────────────────
+#    ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物。
+#    7A から entropy 不合格群を分離し、さらに同一ライン条件で絞ったもの。
+#    買い目・判定は 7S/7A と同一（三連複 軸2車＋総流し5点）。
+#    根拠は strategy_wt.RANK_7SS_STAKE 定義部のコメント参照。
+
+def _load_rank_7ss_candidates(today: str) -> list[dict]:
+    """当日の7SS候補 JSON（昼 + 夜）を読み込む。7Sと重複するレースは除外する。
+
+    ⚠️ この 7SS は 2026-08-05 新設の「entropy不合格 × 軸2車が同一ライン」。
+       2026-08-02 に全廃した旧 RANK_7SS（波乱軸選出）とは**無関係の別物**。
+
+    7SS(entropy不合格) と 7S(2ゲート合格) / 7A(axis_sumだけ不合格) は定義上排他だが、
+    昼/夜の2バッチでライン情報や確率が更新されて判定が転ぶと同一レースが両方に
+    載りうる（_load_rank_7a_candidates の docstring 参照・実測6件）。cron 構成に
+    依存しない構造的ガードとしてここで排他を保証する。優先は 7S。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    out: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s7ss_candidates.json",
+                  f"wave_picks_wt_{today}_night_s7ss_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                out += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("7SS候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    return _exclude_overlapping_races(
+        out, _load_rank_7s_candidates(today), loser="7SS", winner="7S")
+
+
+def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
+    """7A（境界ランク・ペーパー）の記録行 {base}#7SS を picks_history に即時反映する。
+
+    _insert_rank_7s_pick の7SS版（rank='RANK_7A'・race_key末尾#7SS・RANK_7SS_STAKE・gate_labelなし）。
+    """
+    store_key = race_key + "#7SS"
+    bet = n_combos * RANK_7SS_STAKE
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("7A pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as pg_conn:
+                with pg_conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',FALSE) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE",
+                        (race_date, store_key, "RANK_7SS", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("7A pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """7A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1 = detail.get("axis1")
+    axis2 = detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    axis_sum = cand.get("axis_sum")
+    axis_sum_str = f"{float(axis_sum):.1f}" if axis_sum is not None else "—"
+    return (
+        f"🎲 **[7A]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
+        f"（S7の境界ランク・3ゲート中1つだけ不合格）\n"
+        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7SS_STAKE:,}円): "
+        f"`{axis1}={axis2}流し`\n"
+        f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_rank_7ss_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """7SS候補の発走前判定・記録・通知メッセージ生成（_process_rank_7s_candidates の7SS版）。"""
+    cands = _load_rank_7ss_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#7SS" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != 7:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        rank_7ss_key = f"{rk}#7SS"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(7A) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} 7SS候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_rank_7s(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} 7SS候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        _save_decision(today, rank_7ss_key, {
+            "decision": decision, "rank": "RANK_7SS", "paper": True,
+            "stake": RANK_7SS_STAKE, "axis_sum": cand.get("axis_sum"),
+            "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_rank_7ss_pick(rk, today, pred, len(combos))
+            messages.append((rank_7ss_key, _build_rank_7ss_message(cand, ri, detail)))
+            print(f"[prerace] {rk} 7SS候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#7SS")
+            print(f"[prerace] {rk} 7SS候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(rank_7ss_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 
 
 def judge_rank_7b(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
@@ -2509,7 +2502,7 @@ def main():
     # S1全廃時の教訓（CLAUDE.md: 候補生成/ライブ判定/欠損自動補完の3経路すべてを
     # 止める）に従い、ここの呼び出しもコードレベルで停止する
     # （残置ファイルが手元に残っていても picks_history へ書き戻らないようにする）。
-    # 再設定する場合は _process_rank_7ss_candidates() の呼び出しを復活させる。
+    # （旧RANK_7SSの記述。2026-08-05に同名の別戦略を新設し上で処理している）
 
     # ── S9候補（S7の9車立て版・独立ランク・ペーパー）処理 ────────────────────
     # 2026-07-26導入。S7等との重複排除はない（独立戦略・車数も異なる）。
@@ -2528,6 +2521,16 @@ def main():
         newly_done |= rank_7a_done
     except Exception as e:
         logger.exception("7A候補処理失敗（他ランク通知には影響しない）: %s", e)
+
+    # ── 7SS候補（entropy不合格 × 軸2車が同一ライン・ペーパー）処理 ─────────────
+    # 2026-08-05新設。7A から entropy 不合格群を分離したもので、7S(2ゲート合格)・
+    # 7A(axis_sumだけ不合格) とは定義上排他。⚠️旧RANK_7SS(波乱軸選出・全廃)とは別物。
+    try:
+        rank_7ss_messages, rank_7ss_done = _process_rank_7ss_candidates(today, now_unix, notified)
+        messages += rank_7ss_messages
+        newly_done |= rank_7ss_done
+    except Exception as e:
+        logger.exception("7SS候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── 7B候補（◎◯一致だが順序・相手で不一致・三連複3点・ペーパー）処理 ──────
     # 2026-08-03導入。7S/7Aとは wt_overlap_n（7B=2 / 7S・7A∈{0,1}）で定義上排他。

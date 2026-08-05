@@ -1272,6 +1272,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
+        rank_7ss_daily_select, rank_7ss_same_line,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
     )
     from pathlib import Path
@@ -1872,8 +1873,15 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                 others_7b = sorted(set(top3_probs) - {axis1, axis2})
                 order_disagree = rank_7b_order_disagree(win_probs, wt_honmei)
 
+                # 7SS（2026-08-05新設）判定用。軸2車が同一ラインか。
+                # line_group は wt_entries 由来で build_features_wt が引き回している。
+                _lg = {int(r.frame_no): getattr(r, "line_group", None)
+                       for r in grp_sorted.itertuples(index=False)}
+                same_line = rank_7ss_same_line(axis1, axis2, _lg)
+
                 rank_7s_raw_candidates.append({
                     "race_key":   race_key,
+                    "same_line":  same_line,
                     "venue_name": _venue_name(venue_map, grp_sorted["venue_id"].iloc[0]),
                     "race_no":    int(grp_sorted["race_no"].iloc[0]),
                     "start_time": grp_sorted["start_time"].iloc[0],
@@ -1947,6 +1955,20 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
             json.dump(rank_7b_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {rank_7b_path}  (7B候補 {len(rank_7b_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・◎◯一致×順序/相手不一致/ペーパー検証)")
+
+        # ── 7SS候補（entropy不合格 × 軸2車が同一ライン・2026-08-05新設）──
+        # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは**無関係の別物**。
+        # 7A から entropy 不合格群を分離したもので、7A(axis_sumだけ不合格)とは
+        # 論理的に排他。詳細は strategy_wt.RANK_7SS_STAKE 定義部のコメント参照。
+        rank_7ss_candidates = rank_7ss_daily_select(rank_7s_raw_candidates)
+        rank_7ss_suffix = "_night_s7ss_candidates.json" if is_night else "_s7ss_candidates.json"
+        rank_7ss_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7ss_suffix}"
+        with open(rank_7ss_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7ss_candidates, f, ensure_ascii=False, indent=2)
+        _n_same = sum(1 for c in rank_7s_raw_candidates if c.get("same_line"))
+        click.echo(f"[保存先] {rank_7ss_path}  (7SS候補 {len(rank_7ss_candidates)}件/"
+                   f"{len(rank_7s_raw_candidates)}件中・entropy不合格×同一ライン/ペーパー検証)")
+        click.echo(f"[wt] 軸2車が同一ライン: {_n_same}件 / {len(rank_7s_raw_candidates)}件")
 
     # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
     # 2026-08「ドリームレース」（S級・過去3回全て9車立て）対応。軸選定・entropy計算は

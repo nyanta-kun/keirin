@@ -27,9 +27,15 @@ def test_7a_axis_sum_only_fail_is_included():
     assert rank_7a_daily_select([c]) == [c]
 
 
-def test_7a_entropy_only_fail_is_included():
+def test_7a_entropy_only_fail_is_now_excluded():
+    """【2026-08-05改定】entropy だけ不合格は 7SS へ分離したため 7A には含まれない。
+
+    旧仕様（不合格ちょうど1つ）では 7A に入っていた。7A は
+    「axis_sum だけ不合格」＝軸2車が堅い群のみを指す。
+    詳細は strategy_wt.rank_7a_daily_select / RANK_7SS_STAKE のコメント参照。
+    """
     c = _cand(axis_sum=RANK_7S_AXIS_SUM_MAX, entropy=RANK_7S_ENTROPY_MAX + 0.1)
-    assert rank_7a_daily_select([c]) == [c]
+    assert rank_7a_daily_select([c]) == []
 
 
 def test_7a_both_gates_fail_is_excluded():
@@ -57,8 +63,9 @@ def test_7a_mark3_only_fail_no_longer_qualifies_for_7a():
 
 
 def test_7a_sorted_by_axis_sum_ascending():
-    low = _cand(axis_sum=0.5, entropy=RANK_7S_ENTROPY_MAX + 0.1)
-    high = _cand(axis_sum=1.2, entropy=RANK_7S_ENTROPY_MAX + 0.1)
+    # axis_sum だけ不合格（entropy は合格）が 7A の対象。
+    low = _cand(axis_sum=RANK_7S_AXIS_SUM_MAX + 0.1, entropy=RANK_7S_ENTROPY_MAX)
+    high = _cand(axis_sum=RANK_7S_AXIS_SUM_MAX + 0.5, entropy=RANK_7S_ENTROPY_MAX)
     assert rank_7a_daily_select([high, low]) == [low, high]
 
 
