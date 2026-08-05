@@ -29,6 +29,19 @@ def _month_tag(y: int, m: int) -> str:
     return f"m{y % 100:02d}{m:02d}"
 
 
+def bad_model_name(eval_model_name: str) -> str:
+    """eval の vintage 名から、対応する大敗モデルの vintage 名を導く。
+
+    例: "lgbm_wt_eval_m2401" → "lgbm_wt_bad_m2401"
+
+    ⚠️ `monthly_windows()` は互換のため 4-tuple のまま（eval/win のみ）にしてある。
+    大敗モデルは 3ヘッド軸選定（2026-08-04〜）でのみ必要で、全ての rebuild 系が
+    要求するわけではないため、必要な呼び出し側だけが本関数で名前を導く設計にした
+    （タプルを 5 要素に広げると既存の全 rebuild スクリプトが壊れる）。
+    """
+    return eval_model_name.replace("lgbm_wt_eval_", "lgbm_wt_bad_", 1)
+
+
 def month_bounds(y: int, m: int, upto: date | None = None) -> tuple[str, str]:
     """月(y,m)の(test_from, test_to)を返す。upto指定時は当月分をuptoで打ち切る。"""
     first = date(y, m, 1)

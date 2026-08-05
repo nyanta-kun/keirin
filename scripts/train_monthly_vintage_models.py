@@ -51,7 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.models import vintage_manifest
-from src.wt_vintage_config import BASE_FROM, monthly_windows
+from src.wt_vintage_config import BASE_FROM, bad_model_name, monthly_windows
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = REPO_ROOT / "data" / "models"
@@ -121,7 +121,7 @@ def main():
     print(f"対象月数: {len(windows)}（{windows[0][0]}〜{windows[-1][1]}）")
     if args.force_retrain_all:
         print("⚠️ --force-retrain-all: 凍結vintageの書き込み保護を突破して"
-              f"全{len(windows)}ヶ月×2モデルを再学習します（旧重みは失われます）")
+              f"全{len(windows)}ヶ月×3モデルを再学習します（旧重みは失われます）")
 
     # 「pklは無いがマニフェストには登録済み」は save_model のガードに必ず弾かれる。
     # 従来はこれを検出せず1モデルあたり10〜15分学習してから保存を拒否され、結果を
@@ -129,7 +129,7 @@ def main():
     # 学習を始める前に落として、必要な操作を提示する。
     if not args.force_retrain_all and not args.dry_run:
         registered = _registered_model_names()
-        orphaned = [n for _, _, e, w in windows for n in (e, w)
+        orphaned = [n for _, _, e, w in windows for n in (e, w, bad_model_name(e))
                     if n in registered and not (MODEL_DIR / f"{n}.pkl").exists()]
         if orphaned:
             months = sorted({n.rsplit("_m", 1)[1] for n in orphaned})
@@ -147,18 +147,29 @@ def main():
     for test_from, test_to, eval_name, win_name in windows:
         tag = eval_name.replace("lgbm_wt_eval_", "")
 
-        if args.only_missing and (MODEL_DIR / f"{eval_name}.pkl").exists() \
-                and (MODEL_DIR / f"{win_name}.pkl").exists():
-            print(f"[skip] {tag} ({test_from}~{test_to}) 既存")
-            skipped += 1
-            continue
+        bad_name = bad_model_name(eval_name)
+        # 大敗モデル（3ヘッド軸選定の第2項・2026-08-05追加）。7B の honest walk-forward
+        # 再構築に必要。既存の eval/win と同じ窓・同じ学習期間で凍結する。
+        targets = [(eval_name, "top3"), (win_name, "win"), (bad_name, "bad")]
 
-        print(f"\n=== {tag}: test_from={test_from} test_to={test_to} ===", flush=True)
-        ok1 = run_train(test_from, test_to, eval_name, "top3", args.dry_run,
-                        force=args.force_retrain_all)
-        ok2 = run_train(test_from, test_to, win_name, "win", args.dry_run,
-                        force=args.force_retrain_all)
-        if ok1 and ok2:
+        # ⚠️ スキップは**モデル単位**で判定する。月単位（3本とも揃っている月だけ
+        # スキップ）にすると、eval/win は在るが bad だけ無い月で既存の eval/win まで
+        # 再学習しようとし、凍結vintageの書き込み保護に必ず弾かれて failed になる
+        # （bad を後から追加した 2026-08-05 は全32ヶ月がこの状態だった）。
+        if args.only_missing:
+            targets = [(n, t) for n, t in targets
+                       if not (MODEL_DIR / f"{n}.pkl").exists()]
+            if not targets:
+                print(f"[skip] {tag} ({test_from}~{test_to}) 既存")
+                skipped += 1
+                continue
+
+        print(f"\n=== {tag}: test_from={test_from} test_to={test_to} "
+              f"({', '.join(t for _, t in targets)}) ===", flush=True)
+        results = [run_train(test_from, test_to, name, target, args.dry_run,
+                             force=args.force_retrain_all)
+                   for name, target in targets]
+        if all(results):
             ok += 1
         else:
             failed += 1

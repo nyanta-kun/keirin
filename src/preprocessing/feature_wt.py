@@ -120,6 +120,20 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # 1着モデル用ターゲット（Phase B・2026-07-19〜。win_flag=1着のみ、DNF/2着以下は0）
     df["win_flag"] = (df["finish_order"].notna()
                       & (df["finish_order"] == 1)).astype(int)
+    # 大敗モデル用ターゲット（3ヘッド軸選定・2026-08-04〜／列の追加は 2026-08-05）。
+    # 軸2 = argmax( z(3着内率) − 0.3×z(大敗率) ) の第2項に使う。
+    #
+    # ⚠️ **この列は本番モデル lgbm_wt_bad が既に使っている定義を後から明文化したもの**。
+    # lgbm_wt_bad.meta.json は target="bad6_flag" と記録しているが、その列を作る
+    # コードがリポジトリに存在せず（全git履歴を検索して0件）、本番モデルは
+    # 再現不能な経路で学習されていた。2026-08-05 に実測で定義を同定した:
+    #   本番モデルの平均予測 0.2795 に対し
+    #     (finish_order >= 6)          → 実測率 0.2829（差 0.0034・AUC 0.768）✅
+    #     (finish_order >= 6 or DNF=0) → 実測率 0.2941（差 0.0146・AUC 0.759）
+    #   前者が一致。**DNF(finish_order=0) は「大敗」に含めない。**
+    # exp系スクリプト（軸選定の検証に使用）の bad6 定義とも一致する。
+    df["bad6_flag"] = (df["finish_order"].notna()
+                       & (df["finish_order"] >= 6)).astype(int)
 
     # レート正規化（winticket は % 表記、0-1 スケールへ変換）
     df["first_rate_norm"]  = df["first_rate"].fillna(0.0) / 100.0
@@ -932,6 +946,7 @@ FEATURE_COLS_WT = [
 
 TARGET_COL_WT = "top3_flag"
 WIN_TARGET_COL_WT = "win_flag"
+BAD_TARGET_COL_WT = "bad6_flag"
 
 
 def prepare_X(df: pd.DataFrame) -> pd.DataFrame:

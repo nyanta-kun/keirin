@@ -42,6 +42,7 @@ from src.database import get_connection
 from src.models.trainer import MODEL_DIR
 from src.notify.discord import send as _discord_send
 from src.strategy_wt import THREE_HEAD_AXIS_SINCE
+from src.wt_vintage_config import bad_model_name
 
 # (date_from, date_to, eval_model_name, win_model_name)
 Window = tuple[str, str, str, str]
@@ -50,7 +51,7 @@ MissingWindow = tuple[Window, list[str]]
 
 
 def split_by_model_availability(
-    windows: list[Window],
+    windows: list[Window], require_bad: bool = False,
 ) -> tuple[list[Window], list[MissingWindow]]:
     """各窓のeval/winモデルpklが存在するか事前チェックする。
 
@@ -58,17 +59,25 @@ def split_by_model_availability(
     実行）は窓によっては数十分かかりうるため、これを始める前に軽量な
     ファイル存在チェックだけで不足を検出できるようにする。
 
+    require_bad: 3ヘッド軸選定（軸2 = argmax z(3着内率) − 0.3×z(大敗率)）で
+      再構築する場合に True。大敗モデルの vintage（lgbm_wt_bad_mYYMM）も
+      存在チェックの対象に加える。**既定は False**（他ランクの rebuild は
+      まだ旧2ヘッド軸のため、要求すると全窓が不足扱いになってしまう）。
+
     Returns:
         (available, missing)
-        available: 両モデルpklが揃っている窓のリスト（元の順序を維持）。
+        available: 必要なモデルpklが揃っている窓のリスト（元の順序を維持）。
         missing:   [(window, [不足モデル名, ...]), ...]（元の順序を維持）。
     """
     available: list[Window] = []
     missing: list[MissingWindow] = []
     for window in windows:
         _, _, eval_model, win_model = window
+        required = [eval_model, win_model]
+        if require_bad:
+            required.append(bad_model_name(eval_model))
         missing_names = [
-            name for name in (eval_model, win_model)
+            name for name in required
             if not (MODEL_DIR / f"{name}.pkl").exists()
         ]
         if missing_names:
@@ -118,6 +127,7 @@ def rebuild_pg_atomic(
     per_window_rows: list[tuple[str, str, list[dict]]],
     dry_run: bool,
     allow_legacy_axis: bool = False,
+    axis_is_three_head: bool = False,
 ) -> None:
     """wipe(DELETE)→insertを単一トランザクションにまとめて実行する。
 
@@ -146,7 +156,13 @@ def rebuild_pg_atomic(
     # backfill_7*_rank_wt.py の build_rows() は rank_7s_select_axis(win, top3) を
     # bad_probs 無しで呼ぶ＝旧軸。THREE_HEAD_AXIS_SINCE 以降を DELETE→INSERT すると
     # live の3ヘッド記録が静かに消える（S1が第4経路で自動再生成されていた事故と同型）。
-    if rank_label in _THREE_HEAD_RANKS and not allow_legacy_axis:
+    #
+    # 【2026-08-05】呼び出し側が **月次vintageの大敗モデルを使って3ヘッド軸で**
+    # 再構築する場合は、塗り潰しではなく正しい更新なのでガードを外す
+    # （`axis_is_three_head=True`）。現時点で該当するのは RANK_7B のみ。
+    # ⚠️ `allow_legacy_axis`（旧軸のまま強行）とは意味が違う。前者は「3ヘッドで
+    # 正しく作り直す」、後者は「旧軸で塗り潰すと承知の上で強行する」。
+    if rank_label in _THREE_HEAD_RANKS and not allow_legacy_axis and not axis_is_three_head:
         overlap = sorted(dt for _, dt, rows in per_window_rows
                          if rows and dt >= THREE_HEAD_AXIS_SINCE)
         if overlap:

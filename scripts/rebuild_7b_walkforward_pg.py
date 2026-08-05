@@ -34,7 +34,7 @@ from src.wt_rebuild_common import (
     rebuild_pg_atomic,
     split_by_model_availability,
 )
-from src.wt_vintage_config import monthly_windows
+from src.wt_vintage_config import bad_model_name, monthly_windows
 
 _RANK_LABEL = "RANK_7B"
 _DELETE_COND = "rank='RANK_7B' AND race_key LIKE '%#7B' AND race_date BETWEEN ? AND ?"
@@ -64,7 +64,9 @@ def main() -> None:
         windows = windows[-1:]
 
     # --- 事前チェック: build_rows(重い計算)を始める前に全窓のモデル存在を検証 ---
-    available, missing = split_by_model_availability(windows)
+    # 7B は 3ヘッド軸（軸2 = argmax z(3着内率) − 0.3×z(大敗率)）で再構築するため、
+    # 大敗モデルの vintage（lgbm_wt_bad_mYYMM）も存在チェックの対象に含める。
+    available, missing = split_by_model_availability(windows, require_bad=True)
     if missing:
         report = format_missing_report(_RANK_LABEL, missing)
         print(report)
@@ -93,8 +95,11 @@ def main() -> None:
     per_window_rows: list[tuple[str, str, list[dict]]] = []
     all_rows: list[dict] = []
     for date_from, date_to, eval_model, win_model in windows:
-        print(f"\n[rebuild-7b-pg] {date_from}〜{date_to}  eval={eval_model} win={win_model}", flush=True)
-        rows = build_rows(eval_model, date_from, date_to, win_model_name=win_model)
+        bad_model = bad_model_name(eval_model)
+        print(f"\n[rebuild-7b-pg] {date_from}〜{date_to}  eval={eval_model} "
+              f"win={win_model} bad={bad_model}", flush=True)
+        rows = build_rows(eval_model, date_from, date_to, win_model_name=win_model,
+                          bad_model_name=bad_model)
         n_hit = sum(r["hit"] for r in rows)
         bet = sum(r["bet_amount"] for r in rows)
         pay = sum(r["payout"] for r in rows)
@@ -114,8 +119,12 @@ def main() -> None:
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")
 
+    # axis_is_three_head=True: build_rows に月次vintageの大敗モデルを渡して
+    # **本番と同じ3ヘッド軸**で作り直しているため、「旧軸で3ヘッド期間を塗り潰す」
+    # ガードの対象外。allow_legacy_axis（旧軸のまま強行）とは意味が異なる。
     rebuild_pg_atomic(_RANK_LABEL, _DELETE_COND, per_window_rows, args.dry_run,
-                      allow_legacy_axis=args.allow_legacy_axis)
+                      allow_legacy_axis=args.allow_legacy_axis,
+                      axis_is_three_head=True)
 
 
 if __name__ == "__main__":
