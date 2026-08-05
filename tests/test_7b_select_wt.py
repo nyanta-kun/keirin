@@ -27,6 +27,8 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+import pytest
+
 import src.strategy_wt as sw
 from notify_prerace_wt import judge_rank_7b
 
@@ -36,10 +38,45 @@ def _cand(rk, overlap, disagree, entropy=1.80, axis_sum=1.4):
             "entropy": entropy, "axis_sum": axis_sum}
 
 
-# ── 1. 選出ゲート ────────────────────────────────────────────────
+@pytest.fixture
+def gen_enabled(monkeypatch):
+    """候補生成の停止フラグを一時的に解除する（2026-08-05〜）。
+
+    7B は 2026-08-05 に候補生成を停止した（`RANK_7B_GENERATION_STOPPED`）が、
+    **判定ロジック自体は残す**方針のため、ロジックの回帰テストはフラグを外して行う。
+    フラグを外さずに書くと「常に空」を検証するだけの**素通りテスト**になり、
+    将来 False に戻したときにロジックの壊れを検出できない。
+    """
+    monkeypatch.setattr(sw, "RANK_7B_GENERATION_STOPPED", False)
 
 
-def test_selects_only_overlap2_with_order_disagreement():
+# ── 0. 候補生成の停止（2026-08-05 ユーザー判断）────────────────────
+
+
+def test_generation_is_stopped_by_default():
+    """既定では候補が1件も出ないこと（停止フラグが効いていること）。
+
+    ⚠️ このテストが落ちたら 7B が本番で再稼働している。
+    停止理由は strategy_wt.RANK_7B_GENERATION_STOPPED のコメント参照。
+    """
+    assert sw.RANK_7B_GENERATION_STOPPED is True
+    assert sw.rank_7b_daily_select([_cand("ok", 2, True)]) == []
+
+
+def test_reusable_parts_survive_the_stop():
+    """停止しても後継ランクが使う部品は残っていること。
+
+    `rank_7b_select_legs`（△除外3点）は空白3×準決勝など後継候補でも使うため、
+    7B の停止と一緒に消してはいけない。
+    """
+    assert sw.rank_7b_select_legs([2, 3, 4, 5, 6], PROBS, wt_ana=3) == [2, 4, 5]
+    assert sw.RANK_7B_STAKE > 0
+
+
+# ── 1. 選出ゲート（フラグを外してロジック本体を検証）──────────────
+
+
+def test_selects_only_overlap2_with_order_disagreement(gen_enabled):
     cands = [
         _cand("ok", 2, True),
         _cand("consensus", 2, False),      # 順序も一致＝完全コンセンサス
@@ -51,7 +88,7 @@ def test_selects_only_overlap2_with_order_disagreement():
     assert got == ["ok"]
 
 
-def test_none_order_disagree_is_failsafe_excluded():
+def test_none_order_disagree_is_failsafe_excluded(gen_enabled):
     """order_disagree=None（◎欠損）は「不一致でない」として扱い除外する。
 
     True 以外を全て弾く実装であること（`is True` 判定）。truthy 判定だと
@@ -62,7 +99,7 @@ def test_none_order_disagree_is_failsafe_excluded():
     assert sw.rank_7b_daily_select([_cand("x", 2, False)]) == []
 
 
-def test_mutually_exclusive_with_7s_and_7a():
+def test_mutually_exclusive_with_7s_and_7a(gen_enabled):
     """同一候補集合に対し 7S / 7A / 7B の選出結果が互いに素であること。"""
     cands = []
     for i, (ov, dis) in enumerate([(0, True), (1, True), (2, True), (2, False), (1, False)]):
@@ -71,12 +108,13 @@ def test_mutually_exclusive_with_7s_and_7a():
     s7 = {c["race_key"] for c in sw.rank_7s_daily_select(cands)}
     s7a = {c["race_key"] for c in sw.rank_7a_daily_select(cands)}
     s7b = {c["race_key"] for c in sw.rank_7b_daily_select(cands)}
+    assert s7b, "フラグ解除時は選出されること（素通りテスト化の防止）"
     assert s7.isdisjoint(s7b)
     assert s7a.isdisjoint(s7b)
     assert s7.isdisjoint(s7a)
 
 
-def test_selection_sorted_by_entropy_ascending():
+def test_selection_sorted_by_entropy_ascending(gen_enabled):
     cands = [_cand("hi", 2, True, entropy=1.90), _cand("lo", 2, True, entropy=1.60)]
     assert [c["race_key"] for c in sw.rank_7b_daily_select(cands)] == ["lo", "hi"]
 

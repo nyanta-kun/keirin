@@ -980,17 +980,51 @@ def rank_7b_select_legs(
     return ranked[:k]
 
 
+# 7B の候補生成を止めるキルスイッチ（2026-08-05・ユーザー判断）。
+#
+# 【なぜ止めるか】測ったすべての窓で控除率75%の壁を越えなかった:
+#   確認窓(2024-07〜2025-06) 71.1% / 掃引窓(2025-07〜2026-07) 75.3% / live全期間 75.9%
+# 絞り込みも全滅した。損失の8割は「意図的に除外した WT△ が3着」だったが、朝の時点で
+# △の強さを測る量（絶対値 p3[△] / 相対値 △と4位の差 / 同一ライン / entropy / axis_sum /
+# bad[軸2] / ライン数）はどれも確認窓を越えられなかった。最良候補ですら
+# +8.2pt [−2.1, +19.1] と有意差なし（memory: keirin_7b_filter_rejected_2026_08_05）。
+# 増枠という存在理由も 7SS 新設で 7SS+7S+7A が 11.87件/日・ROI 82.0% となり代替済み。
+#
+# 【なぜ「関数を空にする」形にしたか】CLAUDE.md が警告するとおり、ランクを止めるには
+# **候補生成・ライブ判定・欠損自動補完の3箇所すべて**を止める必要がある。本関数は
+# その3経路すべての単一の入口になっている:
+#   - 朝/夜バッチ           src/cli/main.py → rank_7b_daily_select
+#   - 手動復旧             scripts/gen_7b_candidates_only.py → 同
+#   - T-15分ライブ判定      scripts/notify_prerace_wt.py は候補JSONを読むだけなので、
+#                          生成が空になれば自動的に何も判定しない
+#   - 欠損自動補完          scripts/backfill_missing_prerace_wt.py は RANK_7S のみが
+#                          対象で 7B を含まない（誤検知による再挿入は起こらない）
+# ここ1箇所で止めることで「片方だけ止めて毎晩復活する」事故（S1/S3 全廃時に踏んだ型）を
+# 構造的に防ぐ。
+#
+# 【残してあるもの】判定ロジック本体・`rank_7b_select_legs`・picks_history の過去行・
+# kiseki 側の Web 表示と集計はすべて残す（ユーザー判断: 過去実績を追えるようにする）。
+# とくに `rank_7b_select_legs`（△除外3点）は**後継ランクの候補でも使う**ため消さない。
+#
+# 【再開するには】この定数を False に戻すだけでよい。
+RANK_7B_GENERATION_STOPPED = True
+
+
 def rank_7b_daily_select(candidates: list[dict]) -> list[dict]:
-    """7Bの選出（日次件数上限なし・全ゲート通過分を採用）。
+    """7Bの選出（**2026-08-05 に候補生成を停止済み。常に空を返す**）。
 
     candidates: rank_7s_* と同じ生候補 dict のリスト。最低限
       {"wt_overlap_n": int|None, "order_disagree": bool|None} を持つこと。
 
+    停止前の選出条件（`RANK_7B_GENERATION_STOPPED = False` で復活する）:
     - wt_overlap_n == 2 必須（7S/7A＝overlap∈{0,1} とは論理的に排他）
     - order_disagree is True 必須（None＝◎欠損で判定不能はフェイルセーフで除外）
 
     returns 採用された候補のリスト（entropy昇順・表示用の並び順のみ）。
+      停止中は常に空リスト。
     """
+    if RANK_7B_GENERATION_STOPPED:
+        return []
     pool = [
         c for c in candidates
         if c.get("wt_overlap_n") == 2 and c.get("order_disagree") is True
