@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""7B（◎◯一致だが順序・相手で不一致・相手絞り3点・RANK_7B）の過去分バックフィル。
+"""7B（◎◯一致 × 順序も一致 × 準決勝・相手絞り3点・RANK_7B）の過去分バックフィル。
 
 7B の検証期間実績を picks_history（VPS PG）に構築する。
 backfill_7a_rank_wt.py の7B版（構造は同一。選出条件と買い目の作り方だけが違う）。
+
+⚠️ **2026-08-05 に 7B は定義を全面的に入れ替えた**（order**不一致**→**一致** ∧ 準決勝）。
+   本スクリプトは `rank_7b_daily_select` を呼ぶので**自動的に新定義**で構築する。
+   picks_history には旧定義で書かれた行（2024-01-01〜2026-08-05・5,636行）が残って
+   いるため、**新旧が混ざらないよう退避・削除してから流すこと**。混在させると
+   Web の 7B 集計が別戦略2つの合算になる。
 
   7車ちょうど ∧ 盤面(trio)あり
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
           strategy_wt.rank_7s_select_axis() で選定
   選出 = strategy_wt.rank_7b_daily_select():
          wt_overlap_n == 2（軸2車がWT公式印◎◯と完全一致）
-         ∧ order_disagree（モデルのpred_win最上位 ≠ WT◎）
-         ※7S/7A（wt_overlap_n∈{0,1}）とは定義上完全に排他。
-         ※entropy/axis_sum ゲートは掛けない（掛けると件数が足りず月次変動も悪化する。
-           根拠は src/strategy_wt.py の7Bセクション参照）
+         ∧ order_disagree is False（モデルのpred_win最上位 == WT◎ ＝市場と完全合意）
+         ∧ race_type == "準決勝"（**完全一致**。チャレンジ準決勝等は対象外）
+         ※7SS/7S/7A（wt_overlap_n∈{0,1}）とは定義上完全に排他＝純増。
+         ※entropy/axis_sum ゲートは掛けない
   買い目 = 三連複 軸2車 + 相手（残り5車から WT△(ana) を除外し pred_prob 上位
            RANK_7B_LEGS 車）＝ 3点。7S/7A の5点総流しとは異なる。
 
@@ -129,6 +135,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         date_map = dict(c.execute(
             "SELECT race_key, race_date FROM wt_races WHERE race_date BETWEEN ? AND ?",
             (date_from, date_to)))
+        # race_type は新7B（準決勝限定・2026-08-05〜）のゲートに必須。
+        # 欠けると rank_7b_daily_select が**黙って0件を返す**ので必ず取る。
+        rt_map = dict(c.execute(
+            "SELECT race_key, race_type FROM wt_races WHERE race_date BETWEEN ? AND ?",
+            (date_from, date_to)))
         rksN = [rk for rk, ne in ne_map.items() if ne and int(ne) == N_CAR]
         fins: dict[str, list[tuple[int, int]]] = {}
         marks: dict[str, dict[int, int]] = {}
@@ -195,8 +206,9 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
             "others": others, "trio": trio, "actual_top3": actual_top3,
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
-            # 7B用: 順序不一致ゲートと相手絞りに必要な情報
+            # 7B用: 順序ゲート（2026-08-05〜は「一致」側）と相手絞りに必要な情報
             "order_disagree": rank_7b_order_disagree(win_probs, wt_honmei),
+            "race_type": rt_map.get(rk),
             "wt_ana": wt_ana, "top3_probs": top3_probs,
         })
 

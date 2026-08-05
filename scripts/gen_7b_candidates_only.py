@@ -75,10 +75,13 @@ def build(target_date: str, model_name: str, win_model_name: str,
         return []
 
     with get_connection() as c:
+        # race_type は新7B（準決勝限定・2026-08-05〜）のゲートに必須。
+        # 欠けると rank_7b_daily_select が**黙って0件を返す**ので必ず取る。
         meta = {
-            rk: {"n_entries": ne, "venue_id": vid, "race_no": rno, "start_at": st}
-            for rk, ne, vid, rno, st in c.execute(
-                "SELECT race_key, n_entries, venue_id, race_no, start_at "
+            rk: {"n_entries": ne, "venue_id": vid, "race_no": rno, "start_at": st,
+                 "race_type": rt}
+            for rk, ne, vid, rno, st, rt in c.execute(
+                "SELECT race_key, n_entries, venue_id, race_no, start_at, race_type "
                 "FROM wt_races WHERE race_date = ?", (target_date,))
         }
         rks7 = [rk for rk, m in meta.items() if m["n_entries"] and int(m["n_entries"]) == N_CAR]
@@ -153,6 +156,7 @@ def build(target_date: str, model_name: str, win_model_name: str,
             "wt_mark3_overlap_n": rank_7s_wt_mark3_overlap_n(
                 axis1, axis2, wt_honmei, wt_taikou, wt_ana),
             "order_disagree": rank_7b_order_disagree(win_probs, wt_honmei),
+            "race_type": m.get("race_type"),
             "wt_ana": wt_ana,
             "others": others,
             "top3_probs": {str(k): round(v, 6) for k, v in top3_probs.items()},
@@ -162,7 +166,15 @@ def build(target_date: str, model_name: str, win_model_name: str,
     if future_only and n_started:
         print(f"[gen-7b] 発走済みのため除外: {n_started}レース")
     selected = rank_7b_daily_select(raw)
+    # 0件のとき原因を切り分けられるよう母集団の内訳を出す（race_type 欠損で
+    # 黙って0件になる事故を検知するため。src/cli/main.py 側と同じ方針）。
+    _n_ov2 = sum(1 for c in raw if c.get("wt_overlap_n") == 2)
+    _n_agree = sum(1 for c in raw
+                   if c.get("wt_overlap_n") == 2 and c.get("order_disagree") is False)
+    _n_rt_missing = sum(1 for c in raw if c.get("race_type") is None)
     print(f"[gen-7b] 7B候補 {len(selected)}件 / 生候補 {len(raw)}件中")
+    print(f"[gen-7b] 母集団: overlap2={_n_ov2} → 順序一致={_n_agree} → 準決勝="
+          f"{len(selected)}  (race_type欠損 {_n_rt_missing}件)")
     return selected
 
 

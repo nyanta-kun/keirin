@@ -1867,9 +1867,12 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                 _class_map_s4 = {int(r.frame_no): r.player_class
                                   for r in grp_sorted.itertuples(index=False)}
 
-                # 7B（2026-08-03導入）用: 順序不一致と相手選択に必要な情報を持たせる。
+                # 7B用: 順序一致判定と相手選択に必要な情報を持たせる。
                 # others は軸2車を除いた残り車（通常5車）。盤面（オッズ掲載車）の
                 # 確定は発走前judgeで行うため、ここでは出走表ベースで良い。
+                # ⚠️ 2026-08-05に7Bは中身を入れ替えた。旧7Bは order_disagree=True
+                # （順序**不一致**）を取っていたが、新7Bは False（**一致**）∧ 準決勝。
+                # `order_disagree` の計算自体は共通なのでそのまま使う。
                 others_7b = sorted(set(top3_probs) - {axis1, axis2})
                 order_disagree = rank_7b_order_disagree(win_probs, wt_honmei)
 
@@ -1894,6 +1897,11 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     "axis2_class": _class_map_s4.get(axis2),
                     # ↓ 7B用
                     "order_disagree": order_disagree,
+                    # race_type は新7B（準決勝限定）のゲートに必須。**欠けると
+                    # rank_7b_daily_select が黙って0件を返す**ため、取得できなかった
+                    # 場合も None を明示的に入れて後段で気づけるようにする
+                    # （wt_races 由来。7A/7SS は使わない）。
+                    "race_type": race_type_map.get(race_key),
                     "wt_ana": wt_ana,
                     "others": others_7b,
                     "top3_probs": {str(k): round(v, 6) for k, v in top3_probs.items()},
@@ -1944,17 +1952,25 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         click.echo(f"[保存先] {rank_7a_path}  (7A候補 {len(rank_7a_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・境界ランク/ペーパー検証)")
 
-        # ── 7B候補（◎◯一致だが順序・相手で不一致・三連複3点・2026-08-03導入）──
-        # 7S/7A が wt_overlap_n∈{0,1} なのに対し 7B は wt_overlap_n==2 のみを取る
-        # ため論理的に排他（重複選出は起こり得ない）。詳細は
+        # ── 7B候補（◎◯一致 × 順序も一致 × 準決勝・三連複3点・2026-08-05 定義入替）──
+        # 7SS/7S/7A が wt_overlap_n∈{0,1} なのに対し 7B は wt_overlap_n==2 のみを取る
+        # ため論理的に排他（重複選出は起こり得ない＝純増）。詳細は
         # strategy_wt.rank_7b_daily_select のセクションコメント参照。
         rank_7b_candidates = rank_7b_daily_select(rank_7s_raw_candidates)
         rank_7b_suffix = "_night_s7b_candidates.json" if is_night else "_s7b_candidates.json"
         rank_7b_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7b_suffix}"
         with open(rank_7b_path, "w", encoding="utf-8") as f:
             json.dump(rank_7b_candidates, f, ensure_ascii=False, indent=2)
+        # race_type 欠損は「黙って0件」を招くため、母集団の内訳をログに出して
+        # 事故（wt_races 未取込・列名変更など）に気づけるようにする。
+        _n_ov2 = sum(1 for c in rank_7s_raw_candidates if c.get("wt_overlap_n") == 2)
+        _n_agree = sum(1 for c in rank_7s_raw_candidates
+                       if c.get("wt_overlap_n") == 2 and c.get("order_disagree") is False)
+        _n_rt_missing = sum(1 for c in rank_7s_raw_candidates if c.get("race_type") is None)
         click.echo(f"[保存先] {rank_7b_path}  (7B候補 {len(rank_7b_candidates)}件/{len(rank_7s_raw_candidates)}件中"
-                   f"・◎◯一致×順序/相手不一致/ペーパー検証)")
+                   f"・◎◯一致×順序一致×準決勝/ペーパー検証)")
+        click.echo(f"[wt] 7B母集団: overlap2={_n_ov2} → 順序一致={_n_agree} → 準決勝="
+                   f"{len(rank_7b_candidates)}  (race_type欠損 {_n_rt_missing}件)")
 
         # ── 7SS候補（entropy不合格 × 軸2車が同一ライン・2026-08-05新設）──
         # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは**無関係の別物**。

@@ -1,17 +1,24 @@
-"""7B（◎◯一致だが順序・相手で不一致・三連複3点）の選出・相手絞りの回帰テスト。
+"""7B（◎◯一致 × 順序も一致 × 準決勝・三連複3点）の選出・相手絞りの回帰テスト。
 
-7B は 2026-08-03 新設。7S/7A が構造的に枯渇（軸2車がWT公式印◎◯と完全一致する
-レース＝wt_overlap_n==2 が母集団の8割近くを占めるようになった）したことへの増枠で、
-「軸は市場と一致するが、順序（モデル1位≠◎）と相手（△を買い目から外す）で不一致」
-という部分的不一致だけを拾う。
+⚠️ **2026-08-05 に 7B は中身を全面的に入れ替えた。**
+  旧7B（2026-08-03〜08-05）: overlap==2 ∧ order**不一致**。全窓で控除率75%を越えず廃止
+  新7B（本テストの対象）  : overlap==2 ∧ order**一致** ∧ race_type=="準決勝"
+**order_disagree の向きが真逆**なので、picks_history の旧7B行と成績を合算してはいけない。
+
+新7Bは7車レースの被覆マップで見つけた「現行ランクがどこも触っていない空白」のうち、
+3窓（掃引・確認・未使用期間）を生き残った唯一の定義。ROI 82.8 / 83.0 / 81.7% と
+**水準が±0.7ptに収まる**ことが採用根拠。
 
 本テストが守る不変条件:
-  1. 7S/7A（wt_overlap_n∈{0,1}）と 7B（==2）が母集団として完全に排他であること
-     ＝同一レースが両方に選出されない（重複計上・二重入稿の防止）
-  2. order_disagree が None（WT◎欠損で判定不能）のときフェイルセーフで除外されること
-  3. 相手絞りが「△を除外してから上位K車」の順序で行われること
+  1. 7SS/7S/7A（wt_overlap_n∈{0,1}）と 7B（==2）が母集団として完全に排他であること
+     ＝同一レースが両方に選出されない（重複計上・二重入稿の防止／7Bは純増）
+  2. `race_type` が**完全一致**であること。「チャレンジ準決勝」「ガールズ準決勝」は
+     別値として実在し、部分一致にすると未検証の母集団が約30%混入する
+  3. order_disagree が True/None のときフェイルセーフで除外されること
+  4. race_type 欠損時も推奨を増やさない側に倒すこと
+  5. 相手絞りが「△を除外してから上位K車」の順序で行われること
      （先に上位K車を取ってから△を除くと点数が減り、設計と実績が乖離する）
-  4. judge_rank_7b が朝の候補JSONではなく発走前の盤面から相手を再計算すること
+  6. judge_rank_7b が朝の候補JSONではなく発走前の盤面から相手を再計算すること
 
 DBアクセスなし（純関数のみ）。
 """
@@ -27,95 +34,86 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
-import pytest
-
 import src.strategy_wt as sw
 from notify_prerace_wt import judge_rank_7b
 
 
-def _cand(rk, overlap, disagree, entropy=1.80, axis_sum=1.4):
+def _cand(rk, overlap, disagree, entropy=1.80, axis_sum=1.4, race_type="準決勝"):
     return {"race_key": rk, "wt_overlap_n": overlap, "order_disagree": disagree,
-            "entropy": entropy, "axis_sum": axis_sum}
+            "entropy": entropy, "axis_sum": axis_sum, "race_type": race_type}
 
 
-@pytest.fixture
-def gen_enabled(monkeypatch):
-    """候補生成の停止フラグを一時的に解除する（2026-08-05〜）。
+# ── 1. 選出ゲート ────────────────────────────────────────────────
 
-    7B は 2026-08-05 に候補生成を停止した（`RANK_7B_GENERATION_STOPPED`）が、
-    **判定ロジック自体は残す**方針のため、ロジックの回帰テストはフラグを外して行う。
-    フラグを外さずに書くと「常に空」を検証するだけの**素通りテスト**になり、
-    将来 False に戻したときにロジックの壊れを検出できない。
+
+def test_selects_only_overlap2_with_order_agreement_in_semifinal():
+    """新7B = overlap==2 ∧ order**一致** ∧ 準決勝（2026-08-05 定義入替）。
+
+    ⚠️ 旧7B（〜2026-08-05）は order**不一致**を取っていた＝向きが真逆。
     """
-    monkeypatch.setattr(sw, "RANK_7B_GENERATION_STOPPED", False)
-
-
-# ── 0. 候補生成の停止（2026-08-05 ユーザー判断）────────────────────
-
-
-def test_generation_is_stopped_by_default():
-    """既定では候補が1件も出ないこと（停止フラグが効いていること）。
-
-    ⚠️ このテストが落ちたら 7B が本番で再稼働している。
-    停止理由は strategy_wt.RANK_7B_GENERATION_STOPPED のコメント参照。
-    """
-    assert sw.RANK_7B_GENERATION_STOPPED is True
-    assert sw.rank_7b_daily_select([_cand("ok", 2, True)]) == []
-
-
-def test_reusable_parts_survive_the_stop():
-    """停止しても後継ランクが使う部品は残っていること。
-
-    `rank_7b_select_legs`（△除外3点）は空白3×準決勝など後継候補でも使うため、
-    7B の停止と一緒に消してはいけない。
-    """
-    assert sw.rank_7b_select_legs([2, 3, 4, 5, 6], PROBS, wt_ana=3) == [2, 4, 5]
-    assert sw.RANK_7B_STAKE > 0
-
-
-# ── 1. 選出ゲート（フラグを外してロジック本体を検証）──────────────
-
-
-def test_selects_only_overlap2_with_order_disagreement(gen_enabled):
     cands = [
-        _cand("ok", 2, True),
-        _cand("consensus", 2, False),      # 順序も一致＝完全コンセンサス
-        _cand("overlap1", 1, True),        # 7S/7A の母集団
-        _cand("overlap0", 0, True),
-        _cand("mark_missing", 2, None),    # ◎欠損＝判定不能
+        _cand("ok", 2, False),                        # ◎◯一致 ∧ 順序一致 ∧ 準決勝
+        _cand("order_disagree", 2, True),             # 旧7Bの母集団（今は対象外）
+        _cand("overlap1", 1, False),                  # 7SS/7S/7A の母集団
+        _cand("overlap0", 0, False),
+        _cand("mark_missing", 2, None),               # ◎欠損＝判定不能
+        _cand("heats", 2, False, race_type="予選"),    # 準決勝でない
     ]
     got = [c["race_key"] for c in sw.rank_7b_daily_select(cands)]
     assert got == ["ok"]
 
 
-def test_none_order_disagree_is_failsafe_excluded(gen_enabled):
-    """order_disagree=None（◎欠損）は「不一致でない」として扱い除外する。
+def test_race_type_must_match_exactly_not_substring():
+    """「チャレンジ準決勝」「ガールズ準決勝」を拾わないこと。
 
-    True 以外を全て弾く実装であること（`is True` 判定）。truthy 判定だと
-    None が False 扱いになるのは同じだが、将来 0/1 等が入った場合に
-    意図せず通るのを防ぐ。
+    ⚠️ これらは `race_type` の**別値として実在する**（掃引窓で
+    チャレンジ準決勝 915件・ガールズ準決勝 16件）。検証は `== "準決勝"` の完全一致
+    でしか行っておらず、`in` 判定にすると未検証の母集団が約30%混入して
+    掃引窓ですら ROI 82.8→81.7% に薄まる。
     """
+    for rt in ("チャレンジ準決勝", "ガールズ準決勝", "準決勝A", "準決"):
+        assert sw.rank_7b_daily_select([_cand("x", 2, False, race_type=rt)]) == [], rt
+    assert len(sw.rank_7b_daily_select([_cand("x", 2, False, race_type="準決勝")])) == 1
+
+
+def test_missing_race_type_is_failsafe_excluded():
+    """race_type 欠損（wt_races 未取込等）は推奨を増やさない側に倒す。"""
+    assert sw.rank_7b_daily_select([_cand("x", 2, False, race_type=None)]) == []
+    c = _cand("y", 2, False)
+    del c["race_type"]
+    assert sw.rank_7b_daily_select([c]) == []
+
+
+def test_order_disagree_true_and_none_are_both_excluded():
+    """`is False` 判定であること（`is not True` だと None が通ってしまう）。
+
+    overlap==2 は ◎◯ が両方存在しないと成立しないため None とは構造的に
+    両立しない（掃引窓 18,440件すべて False を実測確認）。だが overlap の定義が
+    将来変わったときに黙って通さないためのフェイルセーフとして明示的に弾く。
+    """
+    assert sw.rank_7b_daily_select([_cand("x", 2, True)]) == []
     assert sw.rank_7b_daily_select([_cand("x", 2, None)]) == []
-    assert sw.rank_7b_daily_select([_cand("x", 2, False)]) == []
 
 
-def test_mutually_exclusive_with_7s_and_7a(gen_enabled):
-    """同一候補集合に対し 7S / 7A / 7B の選出結果が互いに素であること。"""
+def test_mutually_exclusive_with_7ss_7s_and_7a():
+    """同一候補集合に対し 7SS / 7S / 7A / 7B の選出が互いに素であること。
+
+    7B は overlap==2、他は overlap∈{0,1} なので構造的に排他＝**純増**。
+    """
     cands = []
-    for i, (ov, dis) in enumerate([(0, True), (1, True), (2, True), (2, False), (1, False)]):
-        c = _cand(f"r{i}", ov, dis, entropy=1.70, axis_sum=1.2)
-        cands.append(c)
+    for i, (ov, dis) in enumerate([(0, False), (1, False), (2, False), (2, True), (1, True)]):
+        cands.append(_cand(f"r{i}", ov, dis, entropy=1.70, axis_sum=1.2))
     s7 = {c["race_key"] for c in sw.rank_7s_daily_select(cands)}
     s7a = {c["race_key"] for c in sw.rank_7a_daily_select(cands)}
+    s7ss = {c["race_key"] for c in sw.rank_7ss_daily_select(cands)}
     s7b = {c["race_key"] for c in sw.rank_7b_daily_select(cands)}
-    assert s7b, "フラグ解除時は選出されること（素通りテスト化の防止）"
-    assert s7.isdisjoint(s7b)
-    assert s7a.isdisjoint(s7b)
-    assert s7.isdisjoint(s7a)
+    assert s7b, "選出されること（素通りテスト化の防止）"
+    for other in (s7, s7a, s7ss):
+        assert other.isdisjoint(s7b)
 
 
-def test_selection_sorted_by_entropy_ascending(gen_enabled):
-    cands = [_cand("hi", 2, True, entropy=1.90), _cand("lo", 2, True, entropy=1.60)]
+def test_selection_sorted_by_entropy_ascending():
+    cands = [_cand("hi", 2, False, entropy=1.90), _cand("lo", 2, False, entropy=1.60)]
     assert [c["race_key"] for c in sw.rank_7b_daily_select(cands)] == ["lo", "hi"]
 
 
