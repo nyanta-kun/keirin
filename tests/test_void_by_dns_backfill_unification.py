@@ -203,7 +203,7 @@ def _make_field_df(race_key: str, n_car: int = 7,
 # axis1=1, axis2=2 は上記フィールドで rank_7s_select_axis から一意に選定される
 # （win_top3==place_top3=={1,2,3}, overlap>=2 → top3_probs降順上位2 = 1,2）。
 AXIS1, AXIS2 = 1, 2
-# axis_sum=0.55<=RANK_7S_AXIS_SUM_MAX(1.5)。entropy(7車)≈1.7607<=RANK_7S_ENTROPY_MAX(1.8329)。
+# axis_sum=0.55<=RANK_7S_AXIS_SUM_MAX(1.40・2026-08-05に1.5から引き下げ)。entropy(7車)≈1.7607<=RANK_7S_ENTROPY_MAX(1.8329)。
 assert 0.30 + 0.25 == pytest.approx(0.55)
 assert _field_entropy(_TOP3) < 1.8329
 
@@ -211,7 +211,7 @@ assert _field_entropy(_TOP3) < 1.8329
 _TOP3_9CAR = {1: 0.30, 2: 0.25, 3: 0.15, 4: 0.10, 5: 0.08, 6: 0.05, 7: 0.04, 8: 0.02, 9: 0.01}
 assert _field_entropy(_TOP3_9CAR) < 1.9938  # RANK_9S_ENTROPY_MAX
 
-# 7A用・axis_sum(=1.99)がRANK_7S_AXIS_SUM_MAX(1.5)を超えるがentropyは低い分布
+# 7A用・axis_sum(=1.99)がRANK_7S_AXIS_SUM_MAX(1.40)を超えるがentropyは低い分布
 # （2ゲートのうちちょうど1つ（axis_sum）だけ不合格＝7A対象）。
 _TOP3_7A_AXISFAIL = {1: 1.0, 2: 0.99, 3: 0.05, 4: 0.03, 5: 0.02, 6: 0.01, 7: 0.01}
 assert _TOP3_7A_AXISFAIL[1] + _TOP3_7A_AXISFAIL[2] > 1.5  # axis_sum gate: FAIL

@@ -385,3 +385,18 @@ class TestS1wGate:
                          axis_player_class="A2", entropy=1.5) is True
         assert s1w_gate(S1W_TOP3_GAP_MIN, axis_win_prob=0.3,
                          axis_player_class="A2", entropy=2.0) is False
+
+
+def test_rank_7s_axis_sum_max_value():
+    """7S の axis_sum 上限を 1.40 に固定する（2026-08-05・ユーザー承認）。
+
+    掃引窓(2025-07〜2026-07)で候補化し、**掃引に一度も使っていない確認窓
+    (2024-07〜2025-06)** で閾値を固定したまま一度きり検証して採用した値。
+    確認窓4つすべてで ROI>=75% かつ現行(1.50)を上回った（7S: 82.3→84.4%）。
+
+    ⚠️ 7S+7A の合計では +0.5pt しか変わらない（1.40〜1.50 の帯は消えるのではなく
+       大半が 7A へ移るため）。この値を動かすときは 7S だけでなく 7A と合計も
+       必ず測ること。詳細は strategy_wt.RANK_7S_AXIS_SUM_MAX のコメント参照。
+    """
+    from src.strategy_wt import RANK_7S_AXIS_SUM_MAX
+    assert RANK_7S_AXIS_SUM_MAX == 1.40
