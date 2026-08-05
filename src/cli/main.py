@@ -1048,9 +1048,11 @@ def status_wt():
                    "（H-1: holdout打切りモデルを本番配信しない）")
 @click.option("--promote/--no-promote", "promote", default=True,
               help="save-as≠lgbm_wt のとき lgbm_wt にも反映するか。--no-promote で評価runが本番を汚さない")
-@click.option("--target", "target_kind", default="top3", type=click.Choice(["top3", "win"]),
+@click.option("--target", "target_kind", default="top3",
+              type=click.Choice(["top3", "win", "bad"]),
               help="学習ターゲット。top3=3着内（既定・配信モデル）、"
-                   "win=1着のみ（Phase B・軸信頼度/相手選定シグナル用）")
+                   "win=1着のみ（Phase B・軸信頼度/相手選定シグナル用）、"
+                   "bad=6着以下（3ヘッド軸選定の第2項・lgbm_wt_bad 系）")
 @click.option("--force-overwrite-vintage", "force_overwrite_vintage", is_flag=True, default=False,
               help="凍結vintage命名規則（_q9999/_w9/_m999999形式）に一致する --save-as を"
                    "意図的に上書きする場合のみ指定する。通常は不要（既定は上書き拒否）。")
@@ -1065,16 +1067,18 @@ def train_wt(from_date: str, to_date: str | None, test_from: str | None, test_to
         python -m src.cli.main train-wt --from 2022-12-01 --target win --save-as lgbm_wt_win --no-promote
     """
     from src.preprocessing.feature_wt import (
-        load_raw_data_wt, build_features_wt, FEATURE_COLS_WT, TARGET_COL_WT,
-        WIN_TARGET_COL_WT, prepare_X,
+        load_raw_data_wt, build_features_wt, BAD_TARGET_COL_WT, FEATURE_COLS_WT,
+        TARGET_COL_WT, WIN_TARGET_COL_WT, prepare_X,
     )
     from src.models.trainer import train_lgbm, save_model
 
-    target_col = WIN_TARGET_COL_WT if target_kind == "win" else TARGET_COL_WT
-    if target_kind == "win" and promote:
-        # 1着モデルが誤って配信用3着内モデル(lgbm_wt)を上書きしないための安全弁
+    target_col = {"win": WIN_TARGET_COL_WT,
+                  "bad": BAD_TARGET_COL_WT}.get(target_kind, TARGET_COL_WT)
+    if target_kind in ("win", "bad") and promote:
+        # 1着/大敗モデルが誤って配信用3着内モデル(lgbm_wt)を上書きしないための安全弁
         # （--no-promote 付け忘れ対策）。
-        click.echo("[guard] --target win では --promote は無視します（lgbm_wt を汚染しないため）", err=True)
+        click.echo(f"[guard] --target {target_kind} では --promote は無視します"
+                   "（lgbm_wt を汚染しないため）", err=True)
         promote = False
 
     load_max = test_to if test_from else to_date

@@ -5,6 +5,7 @@ wt_entries + wt_races + venue_info から学習用データセットを構築す
 """
 import os
 from collections import defaultdict
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from ..database import get_connection
@@ -120,6 +121,20 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # 1着モデル用ターゲット（Phase B・2026-07-19〜。win_flag=1着のみ、DNF/2着以下は0）
     df["win_flag"] = (df["finish_order"].notna()
                       & (df["finish_order"] == 1)).astype(int)
+    # 大敗モデル用ターゲット（3ヘッド軸選定・2026-08-04〜／列の追加は 2026-08-05）。
+    # 軸2 = argmax( z(3着内率) − 0.3×z(大敗率) ) の第2項に使う。
+    #
+    # ⚠️ **この列は本番モデル lgbm_wt_bad が既に使っている定義を後から明文化したもの**。
+    # lgbm_wt_bad.meta.json は target="bad6_flag" と記録しているが、その列を作る
+    # コードがリポジトリに存在せず（全git履歴を検索して0件）、本番モデルは
+    # 再現不能な経路で学習されていた。2026-08-05 に実測で定義を同定した:
+    #   本番モデルの平均予測 0.2795 に対し
+    #     (finish_order >= 6)          → 実測率 0.2829（差 0.0034・AUC 0.768）✅
+    #     (finish_order >= 6 or DNF=0) → 実測率 0.2941（差 0.0146・AUC 0.759）
+    #   前者が一致。**DNF(finish_order=0) は「大敗」に含めない。**
+    # exp系スクリプト（軸選定の検証に使用）の bad6 定義とも一致する。
+    df["bad6_flag"] = (df["finish_order"].notna()
+                       & (df["finish_order"] >= 6)).astype(int)
 
     # レート正規化（winticket は % 表記、0-1 スケールへ変換）
     df["first_rate_norm"]  = df["first_rate"].fillna(0.0) / 100.0
@@ -932,6 +947,7 @@ FEATURE_COLS_WT = [
 
 TARGET_COL_WT = "top3_flag"
 WIN_TARGET_COL_WT = "win_flag"
+BAD_TARGET_COL_WT = "bad6_flag"
 
 
 def prepare_X(df: pd.DataFrame) -> pd.DataFrame:
@@ -942,3 +958,93 @@ def prepare_X(df: pd.DataFrame) -> pd.DataFrame:
     全推論経路がこの関数を通ることで「dropna vs fillna」の不整合を構造的に排除する。
     """
     return df.reindex(columns=FEATURE_COLS_WT).fillna(0)
+
+
+# ---------------------------------------------------------------------------
+# 特徴量キャッシュ（2026-08-05 新設）
+#
+# 【なぜ必要か】`build_features_wt(load_raw_data_wt(...))` の実測内訳（6ヶ月分）:
+#     load_raw_data_wt (SQL+ネットワーク)  54.5秒  19%
+#     build_features_wt (特徴量計算)      227.6秒  81%
+# **ボトルネックはネットワークではなく Mac 上の特徴量計算**。したがってローカルDB
+# ミラーを作っても 19% しか縮まない（当初その案を検討したが測定して棄却した）。
+# 効くのは特徴量そのもののキャッシュ。exp/検証スクリプト群は全て同じ期間を読むため、
+# 1日に何本も回すと読み込みだけで累計1時間規模を消費していた。
+#
+# 【⚠️ なぜ期間ごとに持つのか — 切り出しは安全でない】
+# 広い期間で1回作って日付で切り出す方式は**使えない**ことを実測で確認した
+# （2022-12-01〜2024-06-30 を直接構築 vs 〜2024-12-31 から切り出しで比較）:
+#     60列中7列が不一致 → race_point, score_rank, score_z,
+#                          line_rp_sum, line_rp_max, line_rp_mean, line_rp_gap_top
+# 原因は得点補完 `med_rp = df["race_point"].median()`（本モジュール上部）が
+# **読み込み範囲全体の中央値**を使っていること。副作用として、これは軽微な
+# look-ahead でもある（2024年のレースの欠損得点が2026年を含む中央値で埋まる）。
+#
+# ただし実害は無い: 補完対象は全行の **0.34%**（714,441行中2,452行）で、
+# 中央値の振れも 85.66→85.55（**0.11点・約0.13%**）。修正すれば切り出しが安全になり
+# キャッシュ効率は上がるが、0.34%の行の値が変わる＝既存の eval/win vintage 64本と
+# 整合しなくなり96本の再学習が要る。**割に合わないので直さない**（2026-08-05判断）。
+#
+# 【鮮度検証は必須・スキップ経路を作らない】
+# キャッシュキーに VPS 側の (MAX(race_date), COUNT(*)) を含める。この問い合わせは
+# ミリ秒で終わる。黙って古い特徴量で学習する経路は作らない——廃止されたローカル
+# SQLite が起こした事故（picks_history 消失・2026-07-20）と同じ形になるため。
+# ---------------------------------------------------------------------------
+
+FEATURE_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "feature_cache"
+_FEATURE_CACHE_ENV = "KEIRIN_FEATURE_CACHE"
+
+
+def _wt_data_fingerprint(min_date: str, max_date: str | None) -> str:
+    """対象期間のデータ指紋 (MAX(race_date), COUNT(*)) を VPS から取る（ミリ秒）。"""
+    from src.database import get_connection
+
+    where = "WHERE r.race_date >= ?"
+    params: list = [min_date]
+    if max_date:
+        where += " AND r.race_date <= ?"
+        params.append(max_date)
+    with get_connection() as conn:
+        row = list(conn.execute(
+            f"SELECT COUNT(*), MAX(r.race_date) FROM wt_entries e "
+            f"JOIN wt_races r ON e.race_key = r.race_key {where}", params))[0]
+    n, mx = row[0], row[1]
+    return f"{n}_{str(mx).replace('-', '')}"
+
+
+def load_features_wt(min_date: str, max_date: str | None = None, *,
+                     use_cache: bool | None = None) -> pd.DataFrame:
+    """`build_features_wt(load_raw_data_wt(...))` のキャッシュ付きラッパー。
+
+    use_cache: None のとき環境変数 KEIRIN_FEATURE_CACHE=1 で有効。
+      True/False で明示指定もできる。
+
+    ⚠️ **キャッシュは期間ごと**。切り出して使い回してはいけない（上のコメント参照）。
+    ⚠️ 毎回 VPS へ指紋クエリを投げ、データが増えていれば自動で作り直す。
+    """
+    if use_cache is None:
+        use_cache = os.environ.get(_FEATURE_CACHE_ENV) == "1"
+    if not use_cache:
+        return build_features_wt(load_raw_data_wt(min_date=min_date, max_date=max_date))
+
+    fp = _wt_data_fingerprint(min_date, max_date)
+    tag = f"{min_date}_{max_date or 'latest'}".replace("-", "")
+    path = FEATURE_CACHE_DIR / f"wtfeat_{tag}_f{len(FEATURE_COLS_WT)}_{fp}.pkl"
+    if path.exists():
+        print(f"  [feature-cache] {path.name} を利用（再計算なし）", flush=True)
+        return pd.read_pickle(path)
+
+    df = build_features_wt(load_raw_data_wt(min_date=min_date, max_date=max_date))
+    FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # ⚠️ 保存失敗を握り潰してはいけない。キャッシュが書けないまま有効化されていると
+    # 「毎回フル計算 + 指紋クエリ」で**素の実行より遅くなる**（2026-08-05 に実際に踏んだ:
+    # pyarrow 未導入で parquet が書けず、握り潰した結果 54% 遅くなっていた）。
+    # 黙って効かないキャッシュは、遅いだけでなく「効いているつもり」を作るので有害。
+    # pickle にしているのは data/exp_cache/ の既存キャッシュと同方式で依存を増やさないため。
+    df.to_pickle(path)
+    print(f"  [feature-cache] {path.name} を保存", flush=True)
+    # 同一期間の古い指紋のキャッシュはデータが増えた時点で不要になるため削除する
+    for old in FEATURE_CACHE_DIR.glob(f"wtfeat_{tag}_f{len(FEATURE_COLS_WT)}_*.pkl"):
+        if old != path:
+            old.unlink(missing_ok=True)
+    return df

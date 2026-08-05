@@ -121,10 +121,19 @@ def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
 
 
 def build_rows(model_name: str, date_from: str, date_to: str,
-                win_model_name: str = "lgbm_wt_win") -> list[dict]:
-    """バックフィル対象の 7B(#7B) 行（採点済み）を構築する。"""
+                win_model_name: str = "lgbm_wt_win",
+                bad_model_name: str | None = "lgbm_wt_bad") -> list[dict]:
+    """バックフィル対象の 7B(#7B) 行（採点済み）を構築する。
+
+    bad_model_name: 大敗モデル名。**3ヘッド軸選定（2026-08-04〜の本番と同一）**で
+      軸2を選ぶために使う。None を渡すと旧2ヘッド軸になる。
+      walk-forward 再構築では月次vintage（lgbm_wt_bad_mYYMM）を渡すこと。
+      ⚠️ 本番モデル `lgbm_wt_bad` は full_refit=True でホールドアウト無しのため、
+      これを過去へ遡って使うと in-sample になる（vintage を渡す理由）。
+    """
     model = load_model(model_name)
     win_model = load_model(win_model_name)
+    bad_model = load_model(bad_model_name) if bad_model_name else None
     df = build_features_wt(load_raw_data_wt(min_date=date_from, max_date=date_to))
     if df.empty:
         return []
@@ -158,6 +167,9 @@ def build_rows(model_name: str, date_from: str, date_to: str,
     X = prepare_X(df)
     df["pred_prob"] = model.predict_proba(X)[:, 1]
     df["pred_win"] = win_model.predict_proba(X)[:, 1]
+    # 3ヘッド軸選定（2026-08-04〜の本番と同一）。bad_model が無ければ None のままにし、
+    # rank_7s_select_axis 側で旧2ヘッド軸へフォールバックする。
+    df["pred_bad"] = bad_model.predict_proba(X)[:, 1] if bad_model is not None else None
     trio_bd = _load_trio_boards(df["race_key"].unique().tolist())
     board_map = _load_board_frames_wt(df["race_key"].unique().tolist())
     pm = _load_payouts_wt(df["race_key"].unique().tolist())
@@ -178,7 +190,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
         win_probs = {int(r.frame_no): float(r.pred_win) for r in g.itertuples(index=False)}
         top3_probs = {int(r.frame_no): float(r.pred_prob) for r in g.itertuples(index=False)}
-        sel = rank_7s_select_axis(win_probs, top3_probs)
+        # 3ヘッド軸: bad が1車でも欠けたら None にして旧軸へ倒す（部分適用は本番と
+        # 挙動が変わるため。src/cli/main.py の live 側と同じ扱い）。
+        bad_probs = None
+        if bad_model is not None and not g["pred_bad"].isna().any():
+            bad_probs = {int(r.frame_no): float(r.pred_bad) for r in g.itertuples(index=False)}
+        sel = rank_7s_select_axis(win_probs, top3_probs, bad_probs)
         if sel is None:
             continue
         axis1, axis2, axis_sum = sel
