@@ -187,3 +187,29 @@ def test_judge_returns_unknown_without_board(cand_7h1):
     """盤面が取れていないときは skip ではなく『不明』（次回再試行）。"""
     from scripts.notify_prerace_wt import judge_rank_7h1
     assert judge_rank_7h1(cand_7h1, {}, {})[0] == "不明"
+
+
+# ── 判定記録 → 採点の受け渡し ─────────────────────────────────────────
+
+
+def test_decision_payload_carries_everything_scoring_needs(cand_7h1):
+    """`_save_decision` へ渡す detail に採点必須キーが全て残ること。
+
+    採点（notify_results_wt の _slot=="seven_7h1"）は判定記録から
+    legs_trio / legs_tf / stake_trio / stake_tf / bet_amount を読む。
+    1つでも間引くと**黙って採点できなくなる**（実装時に legs_tf を
+    除外していて実際に踏んだ）。
+    """
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([1, 2, 3, 4, 5, 6, 7])
+    _decision, detail = judge_rank_7h1(cand_7h1, trio, tf)
+    for k in ("legs_trio", "legs_tf", "stake_trio", "stake_tf", "bet_amount"):
+        assert k in detail and detail[k], f"採点に必要な {k} が detail に無い"
+
+
+def test_7h1_suffix_is_registered_for_overwrite_protection():
+    """`#7H1` が picks_history 上書き保護のサフィックス集合に入っていること。"""
+    from scripts.notify_results_wt import _PAPER_SUFFIXES
+    assert "#7H1" in _PAPER_SUFFIXES
+    # 他ランクのサフィックスと取り違えないこと（キー切り出しは _key[:-4]）
+    assert "race_20260806_12_01#7H1"[:-4] == "race_20260806_12_01"

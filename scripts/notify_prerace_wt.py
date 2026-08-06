@@ -1955,10 +1955,13 @@ def _process_rank_7h1_candidates(today: str, now_unix: int,
             time.sleep(0.3)
             continue
 
+        # ⚠️ **detail は丸ごと保存する**。採点（notify_results_wt.py の
+        #    _slot=="seven_7h1"）が legs_trio / legs_tf / stake_trio / stake_tf /
+        #    bet_amount をここから読むため、1つでも間引くと黙って採点できなくなる。
         _save_decision(today, key, {
             "decision": decision, "rank": "RANK_7H1", "paper": True,
             "bust_prob": cand.get("bust_prob"), "gap12": cand.get("gap12"),
-            **{k: v for k, v in detail.items() if k != "legs_tf"},
+            **detail,
         })
         if decision == "buy":
             _insert_rank_7h1_pick(rk, today, detail)
