@@ -118,6 +118,20 @@ fi
   >> "$LOG_DIR/odds_snapshot_${TODAY}.log" 2>&1 \
   || echo "[$(date '+%H:%M:%S')] 夕方オッズ退避に失敗（継続）"
 
+# 1c. 7H1（穴推奨・本命バスト型）の候補を夕方の最新データで作り直す。
+#     ⚠️ **この早期 exit より前に置くこと。** 下の「朝に◎◯未公開だったレース」の
+#     抽出が0件だと 2. で exit 0 して以降が丸ごと走らないため、後ろに置くと
+#     7H1 が夕方に一度も再生成されない（既存ランクと同じ穴を踏む）。
+#     7H1 も軸1==◎ を母集団条件にするので、朝に印が無かったレースは朝の生成では
+#     拾えていない。夕方の全会場再収集（1.）でラインと印が揃った状態で作り直す。
+#     出力は _night 側。notify_prerace_wt.py は昼→夜の順に読み race_key で重複排除
+#     するので、**朝に出た分の買い目は上書きされない**（既に入稿済みのため正しい）。
+echo "[$(date '+%H:%M:%S')] 7H1（穴推奨）候補を夕方データで再生成..."
+.venv/bin/python3 scripts/build_7h1_candidates.py --date "$TODAY" \
+  --out "data/picks/wave_picks_wt_${TODAY}_night_s7h1_candidates.json" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 7H1候補の夕方再生成に失敗（他ランクには影響しないため継続）"
+
 # 2. 朝に情報不足だったレースだけを抽出（0件なら以降を行わず正常終了）
 echo "[$(date '+%H:%M:%S')] 朝8:00に◎◯未公開だったレースを抽出..."
 DEFERRED="data/picks/deferred_${TODAY}.txt"

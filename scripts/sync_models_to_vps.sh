@@ -105,6 +105,7 @@ PROD_FILES=(
   "lgbm_wt_bad.pkl" "lgbm_wt_bad.meta.json"
   "lgbm_wt_eval.pkl" "lgbm_wt_eval.meta.json"
   "lgbm_wt_win_eval.pkl" "lgbm_wt_win_eval.meta.json"
+  "lgbm_wt_favbust.pkl" "lgbm_wt_favbust.meta.json"
 )
 # CI（GitHub Actions）がデプロイ時に取得する最小セット。
 # GitHub Actions は Mac のローカルファイルへ到達できないため、
@@ -148,6 +149,11 @@ VINTAGE_FILES=(
   "$MODEL_DIR"/lgbm_wt_win_m[0-9][0-9][0-9][0-9].meta.json
   "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].pkl
   "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].meta.json
+  # 2026-08-06 追加: 穴推奨 RANK_7H1 のバスト予測モデル（レース単位・67特徴）。
+  # ⚠️ 「モデルの新しい"種類"を足したときに配布glob が取り残される」事故は
+  #    lgbm_wt_bad で一度踏んでいる（同日）。種別を増やしたら必ずここも見ること。
+  "$MODEL_DIR"/lgbm_wt_favbust_m[0-9][0-9][0-9][0-9].pkl
+  "$MODEL_DIR"/lgbm_wt_favbust_m[0-9][0-9][0-9][0-9].meta.json
 )
 shopt -u nullglob
 FILES+=("${VINTAGE_FILES[@]}")
@@ -199,9 +205,13 @@ fi
 log "検証(1/2) OK: 全ファイルのチェックサムが一致しました。"
 
 # (b) ファイル数照合: VPS側の対象パターンファイル数がローカルの想定数と一致するか
+# ⚠️ **転送 glob と この検証 regex は必ずセットで更新すること。**
+#    モデルの新しい"種類"を足すと、転送は成功しているのにここだけ取り残されて
+#    「VPS側ファイル数が下回っています」と誤報する。2026-08-06 に
+#    `lgbm_wt_bad`（差64）と `lgbm_wt_favbust`（差60）で2回踏んだ。
 log "検証(2/2): VPS側ファイル数を照合中..."
 REMOTE_COUNT=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE_HOST" \
-  "ls ${REMOTE_DIR} 2>/dev/null | grep -E '^(lgbm_wt(_train_only|_win|_bad|_eval|_win_eval)?\.(pkl|meta\.json)|lgbm_wt_(eval|win|bad)_m[0-9]{4}\.(pkl|meta\.json)|upset_cuts_wt\.json)$' | wc -l | tr -d ' '" \
+  "ls ${REMOTE_DIR} 2>/dev/null | grep -E '^(lgbm_wt(_train_only|_win|_bad|_eval|_win_eval|_favbust)?\.(pkl|meta\.json)|lgbm_wt_(eval|win|bad|favbust)_m[0-9]{4}\.(pkl|meta\.json)|upset_cuts_wt\.json)$' | wc -l | tr -d ' '" \
   2>>"$LOG" || echo "")
 if [[ -z "$REMOTE_COUNT" ]]; then
   notify_failure "VPS側ファイル数の取得に失敗しました（SSH到達不可の可能性）。転送自体は完了している可能性があります。"

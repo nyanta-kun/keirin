@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+from itertools import combinations as _combinations
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1194,6 +1195,152 @@ def rank_7ss_same_line(axis1: int, axis2: int,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# RANK_7H1 — 穴推奨「本命バスト型」（2026-08-06 新設・7車立て専用）
+#
+# 【命名体系】穴推奨モデルは `{車数}H{連番}` を表示ラベルとし、内部rank は
+#   "RANK_" + ラベル、suffix は "#" + ラベル とする（既存6ランクと同一規則）。
+#   H = Hole（穴）。既存の S/A/B（的中率重視・予想ベース系）とは系統を分ける。
+#     7H1 = 本命バスト型（本モジュール）
+#     7H2 = 三着穴型（1・2着は堅く3着だけ荒れる。未実装・予約）
+#
+# 【選別】3条件すべてを満たすレースだけを対象にする。
+#   (1) 7車ちょうど
+#   (2) 軸1（モデル1着率 pred_win 最上位）== WINTICKET公式印 ◎    …「市場と合意した本命」
+#   (3) 抜け度（モデル1着率の1位−2位差） >= RANK_7H1_GAP_MIN      …「確実に抜けている」
+#   (4) バスト確率（本命が4着以下になる確率）が当日の上位 RANK_7H1_TOP_FRAC
+#
+#   実測（honest walk-forward 38,085R・memory keirin_highpay_payout_ceiling_2026_08_06）:
+#     母集団(2)      38,085R / バスト基準率 19.50% / AUC 0.6848
+#     +(3) >=20pt    21,669R / バスト率 13.69%
+#     +(4) 上位10%    2,167R / **3.22件/日・実バスト率 28.66%（lift 2.09）**
+#     月次一貫性: 23/23ヶ月で基準超え（平均 +12.14pt・最悪 +5.14pt）
+#
+# 【買い目】本命が4着以下という前提なので3着以内は必ず残り6車で埋まる。
+#   さらに **本命が飛ぶときは番手も一緒に飛ぶ**（本命ライン番手の bust時 1着率7.79%・
+#   3着内率33.27% で全役割中最低）ため、**本命ラインを丸ごと落とす**。
+#
+#     プール = 別ライン勢 + 単騎（本命ラインを除いた車）をモデル3着内率順に r1..
+#     三連単 = 1着: 別ライン先頭(最強ライン)を固定
+#              2着: プールの r1・r2
+#              3着: 本命を除く全5車（総流し）          → 8点
+#     三連複 = プール上位5車BOX（最大10点）
+#
+#   実測（選別2,086R・100円単位の実購入）:
+#     的中 18.70%（三複17.11 / 三単5.90）/ ROI 99.1% / 平均払戻 49,778円 /
+#     30万円+ 16件（月0.8回）/ 平均購入額 9,388円
+#     窓別 ROI: 掃引窓 94.9%(n=1,344) / 確認窓 113.2%(n=681)
+#     ⚠️ 三連単側は裾依存（上位3本が回収の15.9%）。**ROIは80〜110%のレンジで読む**。
+#
+# 【9車は不採用】9車ではバスト予測 AUC 0.5967（7車0.6848・n=3,018で信頼できる）、
+#   ROI 36〜61% で壁を大きく割る。**抜け度条件は9車では逆効果**で7車と正反対だった。
+#   「7車の知見が9車へ移らない」事例（3ヘッド軸・9B・S9/9A再較正と同型）。
+#
+# 【検証済みの否定結果（再提案しない）】
+#   - 残り6車の力関係によるセグメント別の買い目出し分け（拮抗度/強い単騎/
+#     別ライン先頭の有無/本命ライン残存数の4次元）。標本3倍・自由度削減でも
+#     確認窓で「常に三連単」を超えない
+#   - 選別を緩めて標本を増やす（上位10%→30%で三連単ROIが 95→79% へ両窓一致で劣化）
+#   - 本命を買い目から完全に外す版（確認窓で反転。本命は飛ぶときも3着には残る）
+#   - 番手のみ除外（3番手以降も弱いので本命ラインは丸ごと落とすのが正しい）
+# ═══════════════════════════════════════════════════════════════════════════
+
+RANK_7H1_NE = 7                    # 対象車数（7車ちょうど）
+RANK_7H1_GAP_MIN = 0.20            # 抜け度（モデル1着率の1位−2位差）の下限
+# バスト確率の採用閾値。**日ごとの相対順位ではなく全体の絶対閾値**を使う。
+# 検証（honest walk-forward）が「抜け度>=20pt 母集団 21,673件の上位10%」＝
+# 90%点 0.2666 で切っており、日次の相対順位で切り直すと切り捨てにより
+# 系統的に少なくなる（実測 3.22件/日 → 1.6件/日）ため。
+# 絶対閾値なら開催規模がそのまま件数に反映される
+# （実測の日次件数: 中央3件・p25 2件・p75 4件・最大11件・0件の日が7%）。
+# ⚠️ この値はモデルの較正に依存する。モデルを再学習したら
+#    `scripts/check_7h1_threshold.py` 相当で分布を確認し、必要なら更新すること。
+RANK_7H1_BUST_PROB_MIN = 0.2666
+RANK_7H1_BUDGET_TF = 7500          # 三連単の予算枠（円/レース）
+RANK_7H1_BUDGET_TRIO = 2500        # 三連複の予算枠（円/レース）
+RANK_7H1_BUDGET_CAP = 10000        # 1レースの購入上限（円）
+RANK_7H1_UNIT = 100                # 最低賭け金単位（円）
+RANK_7H1_TRIO_POOL_MAX = 5         # 三連複BOXに使うプール上限車数（→最大10点）
+RANK_7H1_TF_SECOND_N = 2           # 三連単の2着に使うプール上位の車数
+
+
+def rank_7h1_pool(others: list[int], roles: dict[int, str]) -> list[int]:
+    """本命ラインを落とした購入プール（別ライン勢＋単騎）を返す。
+
+    others はモデル3着内率の降順で渡すこと（順序をそのまま引き継ぐ）。
+    """
+    from .preprocessing.favbust_features import FAV_LINE_ROLES
+    return [f for f in others if roles.get(f) not in FAV_LINE_ROLES]
+
+
+def rank_7h1_build_legs(others: list[int],
+                        roles: dict[int, str]) -> tuple[list[frozenset], list[str]]:
+    """(三連複の目, 三連単の目) を返す。組めない場合は空リスト。
+
+    Args:
+        others: 本命を除く6車を**モデル3着内率の降順**で並べたもの
+        roles:  `favbust_features.roles_of()` の戻り値
+    """
+    from .preprocessing.favbust_features import ROLE_LEAD_TOP
+
+    pool = rank_7h1_pool(others, roles)
+    if len(pool) < 3:
+        return [], []
+    trio = [frozenset(c)
+            for c in _combinations(pool[:RANK_7H1_TRIO_POOL_MAX], 3)]
+    lead = next((f for f in others if roles.get(f) == ROLE_LEAD_TOP), None)
+    if lead is None:
+        # 別ラインの先頭が存在しない（全員単騎など）レースは対象外にする。
+        # 検証では成立率96.3%で、残り3.7%は買い目が定義できない。
+        return trio, []
+    rest = [f for f in pool if f != lead]
+    tf = [f"{lead}-{a}-{c}" for a in rest[:RANK_7H1_TF_SECOND_N]
+          for c in others if c not in (lead, a)]
+    return trio, tf
+
+
+def rank_7h1_unit(budget: int, n_legs: int) -> int:
+    """枠内の100円単位・均等配分の1点あたり金額。100円未満なら0（買わない）。"""
+    if n_legs <= 0:
+        return 0
+    u = (budget // n_legs) // RANK_7H1_UNIT * RANK_7H1_UNIT
+    return u if u >= RANK_7H1_UNIT else 0
+
+
+def rank_7h1_stakes(n_trio: int, n_tf: int) -> tuple[int, int, int]:
+    """(三連複の1点あたり, 三連単の1点あたり, 合計購入額) を返す。
+
+    **合計は必ず RANK_7H1_BUDGET_CAP 以下**になる（枠を分けて切り捨てるため）。
+    """
+    ut = rank_7h1_unit(RANK_7H1_BUDGET_TRIO, n_trio)
+    uf = rank_7h1_unit(RANK_7H1_BUDGET_TF, n_tf)
+    total = ut * n_trio + uf * n_tf
+    if total > RANK_7H1_BUDGET_CAP:      # 到達しない想定だが不変条件として守る
+        raise ValueError(f"7H1 の購入額が上限を超えました: {total}円")
+    return ut, uf, total
+
+
+def rank_7h1_daily_select(candidates: list[dict]) -> list[dict]:
+    """当日の候補から 7H1 を選出する。
+
+    candidates の各要素に必要なキー:
+      `n_entries`(=7) / `gap12`（抜け度） / `bust_prob`（バスト確率） /
+      `legs_trio` / `legs_tf`（買い目。空なら除外）
+
+    **選別は `RANK_7H1_BUST_PROB_MIN` の絶対閾値で行う**（日ごとの相対順位ではない）。
+    理由は同定数のコメント参照。0件の日があるのは正常（実測で7%の日が0件）。
+    """
+    elig = [c for c in candidates
+            if c.get("n_entries") == RANK_7H1_NE
+            and c.get("gap12") is not None
+            and float(c["gap12"]) >= RANK_7H1_GAP_MIN
+            and c.get("bust_prob") is not None
+            and float(c["bust_prob"]) >= RANK_7H1_BUST_PROB_MIN
+            and c.get("legs_trio") and c.get("legs_tf")]
+    elig.sort(key=lambda c: -float(c["bust_prob"]))
+    return elig
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 集計対象ランクの単一正本（2026-07-31 新設・是正タスク B-6 + C-1）
 #
 # 背景: 「集計対象ランクのハードコードされたリスト」が
@@ -1259,6 +1406,9 @@ CURRENT_PAPER_RANKS: tuple[PaperRankSpec, ...] = (
     PaperRankSpec("RANK_7B",  "#7B",  "7B",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9S",  "#9S",  "9S",  in_header_total=False, in_live_report=True),
     PaperRankSpec("RANK_9A",  "#9A",  "9A",  in_header_total=False, in_live_report=True),
+    # 穴推奨系（2026-08-06〜）。既存6ランク（予想ベース・的中率重視）とは
+    # 目的が違うため in_header_total=False（ヘッダー合計に混ぜない）。
+    PaperRankSpec("RANK_7H1", "#7H1", "7H1", in_header_total=False, in_live_report=True),
 )
 
 # 旧名(2026-07-31改名前)→新名のマッピング（過去のCSVバックアップ・Discordログ・

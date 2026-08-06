@@ -197,6 +197,18 @@ echo "[$(date '+%H:%M:%S')] 予想生成（winticket・7+車専用 gami≥5倍+g
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 予想生成: 対象レース無し or 失敗（継続）"
 
+# --- 7H1（穴推奨・本命バスト型）候補生成（2026-08-06 新設）---
+# 7H1 は既存6ランクと**入口が違う**。既存は wave-picks-wt が作る選手単位の予測から
+# 軸2車を選ぶが、7H1 はレース単位のバスト予測モデル（lgbm_wt_favbust）を使うため
+# 独立したスクリプトで候補を作る。出力先は data/picks/ で、notify_prerace_wt.py が
+# 他ランクと同じように読む。
+# ⚠️ ここは本番モデル（全期間学習）を使う。当日のレースは未来なので honest。
+#    過去分の再構築で本番モデルを使うと in-sample になるので backfill 側は vintage を使うこと。
+# 0件でも継続する（絶対閾値による選別なので該当なしの日が約7%ある＝正常）。
+.venv/bin/python3 scripts/build_7h1_candidates.py --date "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 7H1候補生成に失敗（他ランクには影響しないため継続）"
+
 # 「朝夕の推奨」Discord通知（notify_picks.py）は2026-07-31にユーザー要望により廃止。
 # 発走15分前の個別通知（notify_prerace_wt.py）のみ残す。
 
