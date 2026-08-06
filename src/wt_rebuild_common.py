@@ -118,7 +118,13 @@ _INSERT_SQL = (
 
 # 3ヘッド軸選定で選ばれた live 記録を、旧軸の再構築で上書きしてはいけないランク。
 # 9車(RANK_9S/9A)は3ヘッドを適用していないため対象外。
-_THREE_HEAD_RANKS = frozenset({"RANK_7S", "RANK_7A", "RANK_7B"})
+# 3ヘッド軸（2026-08-04〜）で live が動いている＝旧軸で塗り潰してはいけないランク。
+# ⚠️ **7車のランクを新設したら必ずここへ足すこと。** 9車（RANK_9S/RANK_9A）は
+#    掃引で窓別に符号が反転したため3ヘッドを採用しておらず、対象外で正しい。
+#    2026-08-05 に 7SS を新設した際ここへの追加が漏れており、旧軸での tail 再構築が
+#    無警告で通る状態だった（2026-08-06 是正。同種の「ランク一覧の手書き二重管理」は
+#    netkeirin_submit_wt.py の RANK_ORDER でも同日に事故を起こしている）。
+_THREE_HEAD_RANKS = frozenset({"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B"})
 
 
 def rebuild_pg_atomic(

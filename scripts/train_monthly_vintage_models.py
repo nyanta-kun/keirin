@@ -45,6 +45,8 @@ vintage_manifest.jsonの履歴に残るため、どの重みが正しかった�
 import argparse
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -62,6 +64,9 @@ def _registered_model_names() -> set[str]:
     return set(vintage_manifest.load_manifest().get("models", {}))
 
 
+_PRINT_LOCK = threading.Lock()
+
+
 def run_train(test_from: str, test_to: str, save_as: str, target: str, dry_run: bool,
               force: bool = False) -> bool:
     """1モデルを学習する。
@@ -77,15 +82,18 @@ def run_train(test_from: str, test_to: str, save_as: str, target: str, dry_run: 
     ]
     if force:
         cmd.append("--force-overwrite-vintage")
-    print(f"[run] {' '.join(cmd)}", flush=True)
+    with _PRINT_LOCK:
+        print(f"[run] {' '.join(cmd)}", flush=True)
     if dry_run:
         return True
     result = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
-    print(result.stdout[-2000:], flush=True)
-    if result.returncode != 0:
-        print(f"[error] {save_as}: {result.stderr[-2000:]}", flush=True)
-        return False
-    return True
+    # 並列実行では複数モデルの出力が混ざるため、1モデル分をまとめて出す。
+    with _PRINT_LOCK:
+        print(f"----- {save_as} -----", flush=True)
+        print(result.stdout[-1200:], flush=True)
+        if result.returncode != 0:
+            print(f"[error] {save_as}: {result.stderr[-2000:]}", flush=True)
+    return result.returncode == 0
 
 
 def main():
@@ -97,6 +105,12 @@ def main():
                      help="凍結vintageの書き込み保護を突破して全月を再学習する。"
                           "特徴量セット変更時のみ使用。旧重みは失われる（ハッシュは"
                           "vintage_manifest.jsonのgit履歴に残る）")
+    ap.add_argument("--jobs", type=int, default=1, metavar="N",
+                     help="同時に学習するモデル数（既定1=逐次）。"
+                          "学習は約95%%CPU＝**1コアしか使わず**、データ読み込みは"
+                          "リモートPG(VPS)待ちでほぼCPUを使わないため、並列化が効く。"
+                          "⚠️ 1プロセスのピークメモリが約1.4GBあるので、16GB機では"
+                          "3程度が上限（超えるとスワップして逆に遅くなる）。")
     ap.add_argument("--months", default=None, metavar="YYMM-YYMM",
                      help="対象月を範囲で絞る（例: 2509-2607）。特徴量セット変更で"
                           "一部の月だけ作り直したいときに使う。省略時は全月。")
@@ -143,7 +157,9 @@ def main():
                   "再現性は失われます）", file=sys.stderr)
             raise SystemExit(1)
 
+    # --- 学習タスクの列挙（並列実行のため先に全部作る）---
     ok, skipped, failed = 0, 0, 0
+    jobs: list[tuple[str, str, str, str, str]] = []   # (tag, test_from, test_to, name, target)
     for test_from, test_to, eval_name, win_name in windows:
         tag = eval_name.replace("lgbm_wt_eval_", "")
 
@@ -164,17 +180,33 @@ def main():
                 skipped += 1
                 continue
 
-        print(f"\n=== {tag}: test_from={test_from} test_to={test_to} "
+        print(f"=== {tag}: test_from={test_from} test_to={test_to} "
               f"({', '.join(t for _, t in targets)}) ===", flush=True)
-        results = [run_train(test_from, test_to, name, target, args.dry_run,
-                             force=args.force_retrain_all)
-                   for name, target in targets]
-        if all(results):
-            ok += 1
-        else:
-            failed += 1
+        jobs.extend((tag, test_from, test_to, name, target) for name, target in targets)
 
-    print(f"\n完了: ok={ok} skipped={skipped} failed={failed} / 合計{len(windows)}ヶ月")
+    # --- 実行（--jobs 1 なら従来どおり逐次）---
+    print(f"\n学習対象 {len(jobs)} モデル / 並列度 {args.jobs}", flush=True)
+    failed_names: list[str] = []
+    if args.jobs <= 1:
+        for _tag, tf, tt, name, target in jobs:
+            if not run_train(tf, tt, name, target, args.dry_run,
+                             force=args.force_retrain_all):
+                failed_names.append(name)
+    else:
+        with ThreadPoolExecutor(max_workers=args.jobs) as ex:
+            futs = {ex.submit(run_train, tf, tt, name, target, args.dry_run,
+                              force=args.force_retrain_all): name
+                    for _tag, tf, tt, name, target in jobs}
+            for fut, name in futs.items():
+                if not fut.result():
+                    failed_names.append(name)
+    ok = len(jobs) - len(failed_names)
+    failed = len(failed_names)
+    if failed_names:
+        print(f"\n[failed] {', '.join(sorted(failed_names))}")
+
+    print(f"\n完了: ok={ok}モデル failed={failed}モデル "
+          f"skipped={skipped}ヶ月 / 対象{len(windows)}ヶ月")
 
     # 2026-08-01 F-4対応: 従来は failed>0 でも常に exit 0 していたため、
     # このスクリプトを呼び出す自動化ラッパー（scripts/ensure_monthly_vintage.sh）が

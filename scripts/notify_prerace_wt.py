@@ -1378,9 +1378,9 @@ def _load_rank_7ss_candidates(today: str) -> list[dict]:
 
 
 def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_combos: int) -> None:
-    """7A（境界ランク・ペーパー）の記録行 {base}#7SS を picks_history に即時反映する。
+    """7SS（entropy不合格×同一ライン・ペーパー）の記録行 {base}#7SS を picks_history に即時反映する。
 
-    _insert_rank_7s_pick の7SS版（rank='RANK_7A'・race_key末尾#7SS・RANK_7SS_STAKE・gate_labelなし）。
+    _insert_rank_7s_pick の7SS版（rank='RANK_7SS'・race_key末尾#7SS・RANK_7SS_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#7SS"
     bet = n_combos * RANK_7SS_STAKE

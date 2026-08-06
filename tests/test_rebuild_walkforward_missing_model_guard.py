@@ -1,11 +1,11 @@
-"""scripts/rebuild_{7s,7a,9s,9a}_walkforward_pg.py の月初モデル不足ガードの回帰テスト
+"""scripts/rebuild_{7s,7a,7ss,7b,9s,9a}_walkforward_pg.py の月初モデル不足ガードの回帰テスト
 （2026-08-01・F-4対応）。
 
 背景: 日付が月初に変わった直後、当月のvintageモデル(lgbm_wt_eval_mYYMM等)が
 まだ存在しないと、従来は全期間・全窓を計算し終えた最後の窓でFileNotFoundErrorが
 発生し、それまでの計算(約40分規模)が丸ごと失われていた。
 
-本テストは4スクリプトすべてについて、以下を実DB・実モデルファイル・実
+本テストは6スクリプトすべてについて、以下を実DB・実モデルファイル・実
 build_rows(重い計算)に一切触れずに検証する:
   1. モデル不足を検出した場合、`--skip-missing-models`未指定なら
      build_rows()を一切呼ばずに(＝計算を始めずに)SystemExit(1)で終了すること。
@@ -31,9 +31,15 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
+# 3ヘッド軸で再構築するランク（split_by_model_availability に require_bad=True、
+# build_rows に bad_model_name を渡す）も必ず含めること。2026-08-05 に 7B を
+# 3ヘッド化した際、このリストへ追加しなかったためフェイクが require_bad を
+# 受け取れず、7B のガードが一度も検査されていなかった。
 _MODULE_NAMES = [
     "rebuild_7s_walkforward_pg",
     "rebuild_7a_walkforward_pg",
+    "rebuild_7ss_walkforward_pg",
+    "rebuild_7b_walkforward_pg",
     "rebuild_9s_walkforward_pg",
     "rebuild_9a_walkforward_pg",
 ]
@@ -42,9 +48,13 @@ _WINDOW_OK = ("2026-07-01", "2026-07-31", "lgbm_wt_eval_m2607", "lgbm_wt_win_m26
 _WINDOW_MISSING = ("2026-08-01", "2026-08-01", "lgbm_wt_eval_m2608", "lgbm_wt_win_m2608")
 
 
-def _fake_split_by_model_availability(windows):
+def _fake_split_by_model_availability(windows, require_bad: bool = False):
     """実MODEL_DIR/実ファイルシステムに一切触れないsplit_by_model_availability代替。
-    テストが渡す `_WINDOW_OK` / `_WINDOW_MISSING` の等価性だけで仕分ける。"""
+    テストが渡す `_WINDOW_OK` / `_WINDOW_MISSING` の等価性だけで仕分ける。
+
+    require_bad: 3ヘッド軸のランク（7A/7SS/7B）が渡してくる。仕分け結果自体は
+      窓の等価性だけで決まるので挙動には影響しないが、**受け取れないと
+      TypeError でガードそのものが検査できなくなる**ため明示的に受ける。"""
     available = [w for w in windows if w == _WINDOW_OK]
     missing = [(w, ["dummy_missing_eval", "dummy_missing_win"])
                for w in windows if w == _WINDOW_MISSING]
@@ -61,7 +71,9 @@ def rebuild_module(request, monkeypatch):
 
     build_rows_calls: list[tuple] = []
 
-    def fake_build_rows(eval_model, date_from, date_to, win_model_name):
+    # bad_model_name: 3ヘッド軸のランクが渡してくる（既定 None で2ヘッドのランクも通す）。
+    def fake_build_rows(eval_model, date_from, date_to, win_model_name,
+                        bad_model_name=None):
         build_rows_calls.append((eval_model, date_from, date_to, win_model_name))
         return []  # 行の中身自体は本テストの関心事ではない
 
