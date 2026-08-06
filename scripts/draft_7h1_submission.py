@@ -33,6 +33,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from src.bet_display import (  # noqa: E402
+    fold_trifecta_formation, fold_trio_box,
+)
 from src.database import get_connection  # noqa: E402
 
 JST = timezone(timedelta(hours=9))
@@ -127,9 +130,13 @@ def main() -> None:
               f"{d['excluded_fav']['name']}"
               f"（抜け度 {d['gap12_pt']}pt / バスト確率 {d['bust_prob_pct']}%）")
         print(f"  三連単 {d['trifecta']['n']}点 × {d['trifecta']['stake']:,}円")
-        print("    " + "  ".join(d["trifecta"]["legs"]))
+        # 全目の列挙は読めないのでフォーメーション表記へ畳む（畳めなければ元の列挙）。
+        # JSON 側（保存ファイル）は生の legs のままにする＝入稿の正本はあくまで全目。
+        print("    " + (fold_trifecta_formation(d["trifecta"]["legs"])
+                        or "  ".join(d["trifecta"]["legs"])))
         print(f"  三連複 {d['trio']['n']}点 × {d['trio']['stake']:,}円")
-        print("    " + "  ".join(d["trio"]["legs"]))
+        print("    " + (fold_trio_box(d["trio"]["legs"])
+                        or "  ".join(d["trio"]["legs"])))
         print(f"  合計 {d['bet_amount']:,}円")
     if drafts:
         print("─" * 66)
