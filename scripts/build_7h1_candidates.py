@@ -166,8 +166,9 @@ def main() -> None:
     d_to = args.date_to or args.date
     cands = build(args.date, d_to, args.eval_model, args.win_model,
                   args.bad_model, args.favbust_model)
+    # 既存ランクと同じ data/picks/ 配下へ出す（notify_prerace_wt.py が読む場所）
     out = Path(args.out) if args.out else (
-        REPO / "data" / f"wave_picks_wt_{args.date}_s7h1_candidates.json")
+        REPO / "data" / "picks" / f"wave_picks_wt_{args.date}_s7h1_candidates.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(cands, ensure_ascii=False, indent=2), encoding="utf-8")

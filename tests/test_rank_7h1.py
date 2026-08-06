@@ -128,3 +128,62 @@ def test_fav_features_returns_none_when_axis1_is_not_honmei(board):
     board[3]["prediction_mark"] = 1            # ◎も4番 → 一致
     got = ff.fav_features(board, preds)
     assert got is not None and got["_fav"] == 4
+
+
+# ── 発走前のライブ判定（盤面・欠車の扱い）───────────────────────────────
+
+
+def _lookup(perm_cars):
+    """指定車で作れる全順列/組合せのオッズ辞書（盤面のダミー）。"""
+    from itertools import combinations, permutations
+
+    from scripts.notify_prerace_wt import _parse_combo_key
+    tf = {_parse_combo_key("-".join(map(str, p)), True): 100.0
+          for p in permutations(perm_cars, 3)}
+    trio = {_parse_combo_key("=".join(map(str, sorted(c))), False): 10.0
+            for c in combinations(perm_cars, 3)}
+    return trio, tf
+
+
+@pytest.fixture
+def cand_7h1():
+    return {"fav": 1, "venue_name": "T", "race_no": 1, "fav_name": "X",
+            "gap12": 0.25, "bust_prob": 0.35,
+            "legs_trio": ["2=4=5", "2=4=6", "2=5=6", "4=5=6"],
+            "legs_tf": [f"4-{a}-{c}" for a in (2, 5)
+                        for c in (2, 3, 5, 6, 7) if c != a][:8]}
+
+
+def test_judge_buys_when_board_is_complete(cand_7h1):
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([1, 2, 3, 4, 5, 6, 7])
+    decision, detail = judge_rank_7h1(cand_7h1, trio, tf)
+    assert decision == "buy"
+    assert detail["bet_amount"] <= sw.RANK_7H1_BUDGET_CAP
+    assert detail["dropped_trio"] == 0 and detail["dropped_tf"] == 0
+
+
+def test_judge_skips_when_first_place_car_is_scratched(cand_7h1):
+    """三連単の1着固定車が盤面に無い＝レース無効（見送り）。"""
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([1, 2, 3, 5, 6, 7])          # 4番が欠車
+    decision, detail = judge_rank_7h1(cand_7h1, trio, tf)
+    assert decision == "skip"
+    assert "1着固定" in (detail["skip_reason"] or "")
+
+
+def test_judge_drops_scratched_partners_and_restakes(cand_7h1):
+    """相手が欠けた目だけ落とし、残った点数で賭け金を張り直す。"""
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([1, 2, 3, 4, 5, 6])          # 7番が欠車
+    decision, detail = judge_rank_7h1(cand_7h1, trio, tf)
+    assert decision == "buy"
+    assert detail["dropped_tf"] > 0
+    assert detail["stake_tf"] * len(detail["legs_tf"]) <= sw.RANK_7H1_BUDGET_TF
+    assert detail["bet_amount"] <= sw.RANK_7H1_BUDGET_CAP
+
+
+def test_judge_returns_unknown_without_board(cand_7h1):
+    """盤面が取れていないときは skip ではなく『不明』（次回再試行）。"""
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    assert judge_rank_7h1(cand_7h1, {}, {})[0] == "不明"
