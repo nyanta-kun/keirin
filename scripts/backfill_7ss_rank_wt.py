@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""7A（axis_sum だけ不合格＝軸2車が堅い群・RANK_7A）の過去分バックフィル。
+"""7SS（entropy だけ不合格 × 軸2車が同一ライン・RANK_7SS）の過去分バックフィル。
 
-7A の検証期間実績を picks_history（VPS PG）に構築する。
+7SS の検証期間実績を picks_history（VPS PG）に構築する。
+
+⚠️ **この 7SS は 2026-08-02 に全廃した旧 RANK_7SS（波乱軸選出・モデル非依存）とは
+   無関係の別物**。名前だけを引き継いだ（2026-08-05 新設・keirin PR#10）。
+   旧 backfill_7ss_rank_wt.py は全廃時に削除済みで、本ファイルは新7SS用の新規実装。
 
   7車ちょうど ∧ 盤面(trio)7車
   軸2車 = pred_win(単勝指数)上位3 ∩ pred_prob(複勝指数)上位3 の重なりから
@@ -9,17 +13,19 @@
           （bad_model_name を渡すと 2026-08-04〜の本番と同じ**3ヘッド軸**になる）
   波乱度指数(axis_sum) = 軸2車のpred_prob合計
   entropy = strategy_wt.rank_7s_field_entropy()
-  選出 = strategy_wt.rank_7a_daily_select():
-         wt_overlap_n∈{0,1} ∧ axis_sum>RANK_7S_AXIS_SUM_MAX ∧ entropy<=RANK_7S_ENTROPY_MAX
-         （詳細はsrc/strategy_wt.py参照）
-         【2026-07-31改定】旧来はmark3も含む3条件だったが、S7自体がmark3ゲートを
-         撤廃したことに伴い2条件化した（新S7との重複選出防止）。
-         【2026-08-05改定】旧来は「2ゲート中ちょうど1つ不合格」だったため、
-         axis_sum だけ不合格のA群（堅い・的中52-53%/低配当）と entropy だけ
-         不合格のE群（荒れ・的中30-32%/高配当）という**性質が正反対の2群の
-         混合**になっていた。E群は 7SS（同一ライン条件付き）へ分離したため、
-         7A は A群のみを指す。
-  買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし）
+  同一ライン = strategy_wt.rank_7ss_same_line()（wt_entries.line_group の一致）
+  選出 = strategy_wt.rank_7ss_daily_select():
+         wt_overlap_n∈{0,1} ∧ axis_sum<=RANK_7S_AXIS_SUM_MAX ∧ entropy>RANK_7S_ENTROPY_MAX
+         ∧ same_line（詳細はsrc/strategy_wt.py参照）
+  買い目 = 三連複 軸2車 + 残り5車のいずれか1車（5点・オッズ下限なし。7S/7Aと同一）
+
+## 7A から分離した経緯（2026-08-05）
+
+旧 7A は「2ゲート中ちょうど1つ不合格」だったため、axis_sum だけ不合格のA群
+（堅い・的中52-53%/低配当）と entropy だけ不合格のE群（荒れ・的中30-32%/高配当）
+という**性質が正反対の2群の混合**になっていた。E群のうち**軸2車が同一ライン**の
+ものを 7SS として分離し、7A は A群のみに再定義した。
+別ラインのE群（確認窓 5.44件/日・ROI 75.0%）はどのランクにも入らない。
 
 採点は実精算方式: 盤面7車レースのみ対象・返還処理なし。
 払戻 = 的中時 trio 最終オッズ×100。
@@ -45,11 +51,11 @@ odds_value フィルタなし）。軸/相手の欠車判定は `void_by_dns()`�
   (0.02%)・盤面データなし=1,683件(1.97%)。「盤面データなし」レースは従来通り
   対象外のまま（`if not board: continue`）。
 
-  7A(`rank_7a_daily_select`)自体は日次capを持たない独立per-race判定のため、
+  7SS(`rank_7ss_daily_select`)自体は日次capを持たない独立per-race判定のため、
   S7本体（`rank_7s_evening_reselect`の日次capトリム）のような連鎖リスクはない。
 
 使い方:
-    PYTHONPATH=. .venv/bin/python scripts/backfill_7a_rank_wt.py \
+    PYTHONPATH=. .venv/bin/python scripts/backfill_7ss_rank_wt.py \
         --start 2024-01-01 --end 2026-07-25 [--model lgbm_wt_eval] \
         [--wipe] [--dry-run]
 """
@@ -70,8 +76,8 @@ from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    RANK_7A_STAKE, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
-    rank_7s_wt_overlap_n, rank_7a_daily_select,
+    RANK_7SS_STAKE, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
+    rank_7s_wt_overlap_n, rank_7ss_daily_select, rank_7ss_same_line,
 )
 
 N_CAR = 7
@@ -135,7 +141,7 @@ def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
 def build_rows(model_name: str, date_from: str, date_to: str,
                 win_model_name: str = "lgbm_wt_win",
                 bad_model_name: str | None = "lgbm_wt_bad") -> list[dict]:
-    """バックフィル対象の 7A(#7A) 行（採点済み）を構築する。
+    """バックフィル対象の 7SS(#7SS) 行（採点済み）を構築する。
 
     bad_model_name: 大敗モデル名。**3ヘッド軸選定（2026-08-04〜の本番と同一）**で
       軸2を選ぶために使う。None を渡すと旧2ヘッド軸になる。
@@ -225,15 +231,23 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         wt_overlap_n = rank_7s_wt_overlap_n(axis1, axis2, wt_honmei, wt_taikou)
         wt_mark3_overlap_n = rank_7s_wt_mark3_overlap_n(axis1, axis2, wt_honmei, wt_taikou, wt_ana)
 
+        # 7SS 判定用: 軸1と軸2が同一ラインか。live（src/cli/main.py）と同じく
+        # 特徴量DFの line_group をそのまま渡す。**未取得は False 側に倒る**
+        # （rank_7ss_same_line の仕様。推奨を増やさない）。
+        line_groups = {int(r.frame_no): getattr(r, "line_group", None)
+                       for r in g.itertuples(index=False)}
+        same_line = rank_7ss_same_line(axis1, axis2, line_groups)
+
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
             "others": others, "trio": trio, "actual_top3": actual_top3,
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
+            "same_line": same_line,
         })
 
     rows: list[dict] = []
-    for c_ in rank_7a_daily_select(candidates):
+    for c_ in rank_7ss_daily_select(candidates):
         axis1, axis2 = c_["axis1"], c_["axis2"]
         trio = c_["trio"]
         # combos/bought_thirds を同期して構築（pred_combo は実際に買った目のみを
@@ -249,11 +263,11 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         rk = c_["race_key"]
         hit = c_["actual_top3"] in combos
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-        pay = trio_pay * RANK_7A_STAKE // 100 if hit else 0
-        bet = len(combos) * RANK_7A_STAKE
+        pay = trio_pay * RANK_7SS_STAKE // 100 if hit else 0
+        bet = len(combos) * RANK_7SS_STAKE
         rows.append({
             "race_date": c_["race_date"],
-            "race_key": f"{rk}#7A", "rank": "RANK_7A",
+            "race_key": f"{rk}#7SS", "rank": "RANK_7SS",
             "pred_combo": f"{axis1}={axis2}-" + ",".join(str(x) for x in bought_thirds)
                           + f" (axis_sum={c_['axis_sum']:.1f})",
             "n_combos": len(combos), "hit": int(hit), "payout": pay,
@@ -263,12 +277,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
 
 
 def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='RANK_7A' AND race_key LIKE '%#7A' AND race_date BETWEEN ? AND ?"
+    cond = "rank='RANK_7SS' AND race_key LIKE '%#7SS' AND race_date BETWEEN ? AND ?"
     with get_connection() as conn:
         n = conn.execute(
             f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
             (date_from, date_to)).fetchone()[0]
-        print(f"[backfill-7a] 既存 #7A 行（{date_from}〜{date_to}）: {n}件 → 削除"
+        print(f"[backfill-7ss] 既存 #7SS 行（{date_from}〜{date_to}）: {n}件 → 削除"
               f"{'（dry-run）' if dry_run else ''}")
         if not dry_run and n:
             conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
@@ -278,16 +292,16 @@ def wipe_rows(date_from: str, date_to: str, dry_run: bool) -> None:
     if not db_url:
         return
     import psycopg2
-    cond_pg = "rank='RANK_7A' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
+    cond_pg = "rank='RANK_7SS' AND race_key LIKE %s AND race_date BETWEEN %s AND %s"
     with psycopg2.connect(db_url) as pg:
         with pg.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM keirin.picks_history WHERE {cond_pg}",
-                        ("%#7A", date_from, date_to))
+                        ("%#7SS", date_from, date_to))
             n = cur.fetchone()[0]
-            print(f"[backfill-7a] VPS PG 既存 #7A 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
+            print(f"[backfill-7ss] VPS PG 既存 #7SS 行: {n}件 → 削除{'（dry-run）' if dry_run else ''}")
             if not dry_run and n:
                 cur.execute(f"DELETE FROM keirin.picks_history WHERE {cond_pg}",
-                            ("%#7A", date_from, date_to))
+                            ("%#7SS", date_from, date_to))
 
 
 def insert_rows(rows: list[dict], dry_run: bool) -> None:
@@ -303,11 +317,11 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
             " :payout,:trio_payout,:bet_amount,'wt',:miwokuri,:gate_label)",
             rows_ins)
         conn.commit()
-    print(f"[backfill-7a] get_connection先 {len(rows)}件 書き込み完了")
+    print(f"[backfill-7ss] get_connection先 {len(rows)}件 書き込み完了")
 
     db_url = os.environ.get("KEIRIN_DB_URL")
     if not db_url:
-        print("[backfill-7a] KEIRIN_DB_URL 未設定 → VPS PG ミラーはスキップ")
+        print("[backfill-7ss] KEIRIN_DB_URL 未設定 → VPS PG ミラーはスキップ")
         return
     import psycopg2
     from psycopg2.extras import execute_batch
@@ -328,7 +342,7 @@ def insert_rows(rows: list[dict], dry_run: bool) -> None:
                   bet_amount=EXCLUDED.bet_amount, miwokuri=FALSE,
                   gate_label=EXCLUDED.gate_label
             """, rows, page_size=200)
-    print(f"[backfill-7a] VPS PG {len(rows)}件 書き込み完了")
+    print(f"[backfill-7ss] VPS PG {len(rows)}件 書き込み完了")
 
 
 def main() -> None:
@@ -338,13 +352,13 @@ def main() -> None:
     ap.add_argument("--model", default="lgbm_wt_eval")
     ap.add_argument("--win-model", default="lgbm_wt_win")
     ap.add_argument("--wipe", action="store_true",
-                    help="書き込み前に対象期間の既存 #7A 行を削除")
+                    help="書き込み前に対象期間の既存 #7SS 行を削除")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     from datetime import date
     end = args.end or date.today().strftime("%Y-%m-%d")
-    print(f"[backfill-7a] model={args.model} win_model={args.win_model} {args.start}〜{end}", flush=True)
+    print(f"[backfill-7ss] model={args.model} win_model={args.win_model} {args.start}〜{end}", flush=True)
 
     if args.wipe:
         wipe_rows(args.start, end, args.dry_run)
@@ -355,12 +369,12 @@ def main() -> None:
     bet = sum(r["bet_amount"] for r in rows)
     ret = sum(r["payout"] for r in rows)
     roi = ret / bet * 100 if bet else 0
-    print(f"[backfill-7a] 7A(境界ランク): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
+    print(f"[backfill-7ss] 7SS(entropy不合格×同一ライン): {n}R 的中{hits} ({hits/n*100 if n else 0:.1f}%) "
           f"投資{bet:,} → 回収{ret:,} ROI {roi:.1f}%", flush=True)
 
     insert_rows(rows, args.dry_run)
     if args.dry_run:
-        print("[backfill-7a] DRY RUN（書き込みなし）")
+        print("[backfill-7ss] DRY RUN（書き込みなし）")
 
 
 if __name__ == "__main__":

@@ -1,18 +1,32 @@
 #!/bin/bash
-# 毎日00:50実行: S7/S9の直近ウィンドウ（2026-04-13〜昨日）のみを
-# 現行eval model（lgbm_wt_eval/lgbm_wt_win_eval）でhonestに再構築する。
+# 毎日 08:30 実行: 7車4ランク（7SS/7S/7A/7B）と9車（9S/9A）の直近ウィンドウ
+# （当月）のみを月次凍結vintageモデルで honest に再構築する。
 #
-# 背景: daily_picks_wt.sh/evening_picks_wt.sh が書き込む当日の候補行
-# （write_candidates_wt.py・gap12条件のみの広い候補プール）は、
-# rebuild_7s_walkforward_pg.py/rebuild_9s_walkforward_pg.py が計算する最終選出後の honest な
-# picks（axis選定・entropy/日次capゲート適用済み）より件数が多い。
-# 放置すると「直近日だけ候補数が多い」状態が積み上がり、四半期vintage
-# モデルで再構築済みの過去期間と条件が食い違う（2026-07-27 ユーザー指摘）。
+# 背景1（当初の目的・2026-07-27 ユーザー指摘）:
+#   daily_picks_wt.sh / evening_picks_wt.sh が書き込む当日の候補行
+#   （write_candidates_wt.py・gap12条件のみの広い候補プール）は、
+#   rebuild_*_walkforward_pg.py が計算する最終選出後の honest な picks
+#   （axis選定・entropy/日次capゲート適用済み）より件数が多い。放置すると
+#   「直近日だけ候補数が多い」状態が積み上がり、過去期間と条件が食い違う。
 #
-# 四半期分のvintageモデルは確定済みで結果が変わらないため毎日再計算する
-# 必要はなく、--tail-only で末尾ウィンドウのみ再構築すれば足りる
-# （backfill_missing_prerace_wt.py の 00:40 実行の後、daily_picks_wt.sh の
-# 08:00 より前に完了させる）。
+# 背景2（実行時刻を 00:50 → 08:30 へ変更した理由・2026-08-06）:
+#   daily_picks_wt.sh の 08:03「結果バックフィル（T-2〜T-4）」が
+#   `notify_results_wt.py <過去日> --silent` を走らせ、**その日の候補JSONから
+#   live 行を作り直す**。この後に走らないと、tail 再構築が消した live 行が
+#   同じ朝のうちに復活し、rebuild 行と live 行が混在する。
+#   実際 2026-08-06 に 7A(rebuild 18 / live 26)・7B(25 / 14) で混在が発生し、
+#   バックフィルより後にコミットした 7S だけが無傷(16 / 0)だった。
+#   → **必ず 08:03 のバックフィルより後に実行すること。**
+#
+# 背景3（2026-07-27〜2026-08-06 停止していた理由と解除）:
+#   3ヘッド軸（2026-08-04〜）を旧2ヘッド軸の再構築で塗り潰す危険があったため
+#   停止していた（レジスタ I-2）。2026-08-06 に 7S/7A/7SS を3ヘッド化し、
+#   7車4ランクすべてが vintage の大敗モデルで3ヘッド軸で再構築するようになった
+#   ためこの阻害要因は解消した。9車は3ヘッドを採用していない（掃引で窓別に
+#   符号が反転したため）ので従来どおり2ヘッド軸で正しい。
+#
+# 当月以外のvintageモデルは確定済みで結果が変わらないため毎日再計算する必要はなく、
+# --tail-only で末尾ウィンドウ（当月）のみ再構築すれば足りる。
 set -e
 set -o pipefail
 export PATH="/usr/sbin:/sbin:$PATH"
@@ -35,10 +49,17 @@ echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a 
 # rebuild_s1_walkforward_pg.py本体は過去日再採点・分析用に残置し、手動実行
 # 専用とする（同スクリプトのdocstring参照）。
 
-.venv/bin/python3 scripts/rebuild_7s_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
-  || echo "[$(date '+%H:%M:%S')] S7 tail再構築 失敗（継続）" | tee -a "$LOG"
-
-.venv/bin/python3 scripts/rebuild_9s_walkforward_pg.py --tail-only 2>&1 | tee -a "$LOG" \
-  || echo "[$(date '+%H:%M:%S')] S9 tail再構築 失敗（継続）" | tee -a "$LOG"
+# 7車4ランク（すべて3ヘッド軸）+ 9車2ランク（2ヘッド軸）。
+# 1本失敗しても残りは続行する（失敗はログに残す）。
+# ⚠️ **ランクを新設したらここへも足すこと。** 抜けると当該ランクだけ tail が
+#    live 行のまま取り残され、過去期間と条件が食い違う（＝本スクリプトが
+#    防ごうとしている状態そのもの）。2026-08-06 時点の一覧は
+#    strategy_wt.CURRENT_PAPER_RANKS と一致している。
+for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "9s:9S" "9a:9A"; do
+  script="${spec%%:*}"
+  label="${spec##*:}"
+  .venv/bin/python3 "scripts/rebuild_${script}_walkforward_pg.py" --tail-only 2>&1 | tee -a "$LOG" \
+    || echo "[$(date '+%H:%M:%S')] ${label} tail再構築 失敗（継続）" | tee -a "$LOG"
+done
 
 echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 完了 ===" | tee -a "$LOG"
