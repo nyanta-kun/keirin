@@ -129,16 +129,25 @@ for name in "${PROD_FILES[@]}" "${EXTRA_FILES[@]}"; do
   fi
 done
 
-# 2) 月次vintageモデル（命名規則: lgbm_wt_eval_mYYMM.{pkl,meta.json} /
-#    lgbm_wt_win_mYYMM.{pkl,meta.json}。docs/vintage_model_policy.md参照）。
-#    ファイル名パターンでの動的検出のため、新しい月が増えてもこのスクリプトの
-#    変更は不要。
+# 2) 月次vintageモデル（命名規則: lgbm_wt_{eval,win,bad}_mYYMM.{pkl,meta.json}。
+#    docs/vintage_model_policy.md参照）。ファイル名パターンでの動的検出のため、
+#    新しい「月」が増えてもこのスクリプトの変更は不要。
+#
+#    ⚠️ **新しい「種類」を増やしたらここへ足すこと。** 2026-08-05 に大敗モデルの
+#    月次vintage（lgbm_wt_bad_mYYMM）を新設した際にここへの追加が漏れ、VPSへ
+#    1本も配布されていなかった。結果、2026-08-06 に再開した tail 再構築が
+#    7車4ランクすべて「lgbm_wt_bad_m2608 が無い」で中断した
+#    （ガードが計算前に止めたので実害はゼロ。設計どおり）。
+#    同種の「一覧の手書き二重管理」は同日 netkeirin の RANK_ORDER・
+#    _THREE_HEAD_RANKS・ガードテストの対象リストでも事故を起こしている。
 shopt -s nullglob
 VINTAGE_FILES=(
   "$MODEL_DIR"/lgbm_wt_eval_m[0-9][0-9][0-9][0-9].pkl
   "$MODEL_DIR"/lgbm_wt_eval_m[0-9][0-9][0-9][0-9].meta.json
   "$MODEL_DIR"/lgbm_wt_win_m[0-9][0-9][0-9][0-9].pkl
   "$MODEL_DIR"/lgbm_wt_win_m[0-9][0-9][0-9][0-9].meta.json
+  "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].pkl
+  "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].meta.json
 )
 shopt -u nullglob
 FILES+=("${VINTAGE_FILES[@]}")
@@ -192,7 +201,7 @@ log "検証(1/2) OK: 全ファイルのチェックサムが一致しました�
 # (b) ファイル数照合: VPS側の対象パターンファイル数がローカルの想定数と一致するか
 log "検証(2/2): VPS側ファイル数を照合中..."
 REMOTE_COUNT=$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$REMOTE_HOST" \
-  "ls ${REMOTE_DIR} 2>/dev/null | grep -E '^(lgbm_wt(_train_only|_win|_bad|_eval|_win_eval)?\.(pkl|meta\.json)|lgbm_wt_(eval|win)_m[0-9]{4}\.(pkl|meta\.json)|upset_cuts_wt\.json)$' | wc -l | tr -d ' '" \
+  "ls ${REMOTE_DIR} 2>/dev/null | grep -E '^(lgbm_wt(_train_only|_win|_bad|_eval|_win_eval)?\.(pkl|meta\.json)|lgbm_wt_(eval|win|bad)_m[0-9]{4}\.(pkl|meta\.json)|upset_cuts_wt\.json)$' | wc -l | tr -d ' '" \
   2>>"$LOG" || echo "")
 if [[ -z "$REMOTE_COUNT" ]]; then
   notify_failure "VPS側ファイル数の取得に失敗しました（SSH到達不可の可能性）。転送自体は完了している可能性があります。"
