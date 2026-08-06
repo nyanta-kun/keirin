@@ -213,3 +213,20 @@ def test_7h1_suffix_is_registered_for_overwrite_protection():
     assert "#7H1" in _PAPER_SUFFIXES
     # 他ランクのサフィックスと取り違えないこと（キー切り出しは _key[:-4]）
     assert "race_20260806_12_01#7H1"[:-4] == "race_20260806_12_01"
+
+
+def test_reconcile_covers_7h1_once_rebuild_exists():
+    """`rebuild_7h1_walkforward_pg.py` を作ったら tail reconcile へ登録すること。
+
+    登録漏れがあると当月の picks_history が rebuild行 と live行 の混在になる
+    （2026-08-06 に 7A/7B で実際に発生）。逆に rebuild が無いうちに登録すると
+    cron が毎朝失敗するため、**存在するのに未登録**のときだけ落とす。
+    """
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    rebuild = repo / "scripts" / "rebuild_7h1_walkforward_pg.py"
+    sh = (repo / "scripts" / "reconcile_walkforward_tail.sh").read_text(encoding="utf-8")
+    if rebuild.exists():
+        assert '"7h1:7H1"' in sh, (
+            "rebuild_7h1_walkforward_pg.py があるのに "
+            "reconcile_walkforward_tail.sh へ未登録（当月が新旧混在になる）")

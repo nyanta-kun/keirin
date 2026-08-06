@@ -55,6 +55,12 @@ echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a 
 #    live 行のまま取り残され、過去期間と条件が食い違う（＝本スクリプトが
 #    防ごうとしている状態そのもの）。2026-08-06 時点の一覧は
 #    strategy_wt.CURRENT_PAPER_RANKS と一致している。
+# ⚠️ RANK_7H1（穴推奨・本命バスト型・2026-08-06新設）は **まだここに入れない**。
+#    rebuild_7h1_walkforward_pg.py が未実装のため、追加するとこのcronが
+#    「スクリプトが無い」で毎朝失敗する。バックフィル実装と同時に
+#    "7h1:7H1" を下のリストへ足すこと。
+#    忘れ防止に tests/test_rank_7h1.py::test_reconcile_covers_7h1_once_rebuild_exists が
+#    「rebuild スクリプトが存在するのにここへ未登録」を検出して落ちる。
 for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "9s:9S" "9a:9A"; do
   script="${spec%%:*}"
   label="${spec##*:}"
