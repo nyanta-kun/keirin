@@ -105,6 +105,7 @@ PROD_FILES=(
   "lgbm_wt_bad.pkl" "lgbm_wt_bad.meta.json"
   "lgbm_wt_eval.pkl" "lgbm_wt_eval.meta.json"
   "lgbm_wt_win_eval.pkl" "lgbm_wt_win_eval.meta.json"
+  "lgbm_wt_favbust.pkl" "lgbm_wt_favbust.meta.json"
 )
 # CI（GitHub Actions）がデプロイ時に取得する最小セット。
 # GitHub Actions は Mac のローカルファイルへ到達できないため、
@@ -148,6 +149,11 @@ VINTAGE_FILES=(
   "$MODEL_DIR"/lgbm_wt_win_m[0-9][0-9][0-9][0-9].meta.json
   "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].pkl
   "$MODEL_DIR"/lgbm_wt_bad_m[0-9][0-9][0-9][0-9].meta.json
+  # 2026-08-06 追加: 穴推奨 RANK_7H1 のバスト予測モデル（レース単位・67特徴）。
+  # ⚠️ 「モデルの新しい"種類"を足したときに配布glob が取り残される」事故は
+  #    lgbm_wt_bad で一度踏んでいる（同日）。種別を増やしたら必ずここも見ること。
+  "$MODEL_DIR"/lgbm_wt_favbust_m[0-9][0-9][0-9][0-9].pkl
+  "$MODEL_DIR"/lgbm_wt_favbust_m[0-9][0-9][0-9][0-9].meta.json
 )
 shopt -u nullglob
 FILES+=("${VINTAGE_FILES[@]}")

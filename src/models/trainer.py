@@ -213,12 +213,25 @@ def load_model(name: str):
         model = pickle.load(f)
 
     if name.startswith("lgbm_wt"):
-        from ..preprocessing.feature_wt import FEATURE_COLS_WT
+        # 2026-08-06: 穴推奨 RANK_7H1 のバスト予測モデル（lgbm_wt_favbust*）は
+        # **レース単位**の別特徴量セット（67列）を使う。選手単位の FEATURE_COLS_WT
+        # と照合すると必ず落ちるため、モデル種別ごとに正しい正本と突き合わせる。
+        # 照合そのものを外してはいけない（「通ったのに実は別物を見ていた」型の
+        # 事故を防ぐのがこの検証の目的）。
+        if name.startswith("lgbm_wt_favbust"):
+            from ..preprocessing.favbust_features import FAVBUST_FEATURE_COLS
+            expected = list(FAVBUST_FEATURE_COLS)
+        else:
+            from ..preprocessing.feature_wt import FEATURE_COLS_WT
+            expected = list(FEATURE_COLS_WT)
 
         cols = getattr(model, "feature_name_", None)
-        if cols is not None and list(cols) != list(FEATURE_COLS_WT):
-            missing = [c for c in FEATURE_COLS_WT if c not in cols]
-            extra = [c for c in cols if c not in FEATURE_COLS_WT]
+        if cols is None and hasattr(model, "feature_name"):
+            cols = model.feature_name()          # lgb.Booster（train() の戻り値）
+        if cols is not None and list(cols) != expected:
+            FEATURE_COLS_WT = expected           # 下のメッセージ生成で使う
+            missing = [c for c in expected if c not in cols]
+            extra = [c for c in cols if c not in expected]
             raise ValueError(
                 f"モデル '{name}' の特徴量セットが現在の FEATURE_COLS_WT と一致しません"
                 f"（モデル{len(cols)}列 / 現在{len(FEATURE_COLS_WT)}列）。"

@@ -42,7 +42,10 @@ import live_report_wt as lr
 #    **同じ名前を別戦略（entropy不合格 × 軸2車が同一ライン）へ充てて再新設**した。
 #    したがって CURRENT 側に存在する。旧定義の成績（picks_history 16,298行）は
 #    削除済みでDBには0件、バックアップCSVは旧定義なので新7SSと合算してはいけない。
-CURRENT_RANK_NAMES = {"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S", "RANK_9A"}
+# 2026-08-06: 穴推奨系 RANK_7H1（本命バスト型）を新設。命名は {車数}H{連番} で、
+# 既存の予想ベース系（S/A/B）とは系統を分ける（7H2 以降は予約）。
+CURRENT_RANK_NAMES = {"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S",
+                      "RANK_9A", "RANK_7H1"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
@@ -54,7 +57,7 @@ ABOLISHED_RANK_NAMES = {
 
 
 def test_current_paper_ranks_has_all_current_ranks():
-    """CURRENT_PAPER_RANKS に現行5ランクが全て含まれること。"""
+    """CURRENT_PAPER_RANKS に現行ランクが全て含まれること。"""
     ranks = {spec.rank for spec in sw.CURRENT_PAPER_RANKS}
     assert ranks == CURRENT_RANK_NAMES
 
