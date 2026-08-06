@@ -230,3 +230,20 @@ def test_reconcile_covers_7h1_once_rebuild_exists():
         assert '"7h1:7H1"' in sh, (
             "rebuild_7h1_walkforward_pg.py があるのに "
             "reconcile_walkforward_tail.sh へ未登録（当月が新旧混在になる）")
+
+
+def test_evening_pass_rebuilds_7h1_before_early_exit():
+    """夕方の第2パスで 7H1 再生成が **早期 exit より前**にあること。
+
+    `evening_picks_wt.sh` は「朝に◎◯未公開だったレースが0件」なら
+    `exit 0` して以降を丸ごと飛ばす（実際 2026-08-06 は0件だった）。
+    7H1 の再生成をその後ろに置くと**夕方に一度も走らない**。
+    """
+    from pathlib import Path
+    sh = (Path(__file__).resolve().parent.parent / "scripts"
+          / "evening_picks_wt.sh").read_text(encoding="utf-8")
+    i_build = sh.find("build_7h1_candidates.py")
+    i_exit = sh.find("再算出の対象なし")
+    assert i_build != -1, "evening_picks_wt.sh に 7H1 の再生成が無い"
+    assert i_exit != -1
+    assert i_build < i_exit, "7H1 の再生成が早期exitより後ろにある（夕方に走らない）"
