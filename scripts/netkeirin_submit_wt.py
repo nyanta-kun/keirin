@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""予想ランク（7S/7A/9S/9A）をnetkeirin「ウマい車券」へ下書き自動入稿する。
+"""予想ランク（7SS/7S/7A/7B/9S/9A/7H1）をnetkeirin「ウマい車券」へ下書き自動入稿する。
 
 2026-07-23に旧7SS/7S専用スクリプトとして新設、2026-07-28に全ランク対応へ全面再構成、
 2026-08-01に旧7SS/旧9SS（gate_label='SS' 分岐・e994758で廃止済み）を削除して
@@ -51,10 +51,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.netkeirin_client import (
+    ACT_TYPE_DEFAULT,
+    ACT_TYPE_LONGSHOT,
     BET_KIND_TRIFECTA_AXIS1,
+    BET_KIND_TRIFECTA_FORMATION,
     BET_KIND_TRIO_AXIS2,
+    BET_KIND_TRIO_BOX,
+    BetLeg,
     NetkeirinClient,
     RACE_AUTH_URL,
+    expand_bet,
 )
 from src.notify.discord import send
 from src.strategy_wt import rank_7s_gate_label
@@ -117,6 +123,25 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             )},
     "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
     "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
+    # 7H1（2026-08-06新設・穴推奨「本命バスト型」）。**唯一の2券種ランク**で、
+    # 三連単フォーメーション（1着1車×2着2車×3着5車＝8点）と
+    # 三連複BOX（プール上位5車＝最大10点）を **1商品にまとめて** 入稿する
+    # （netkeirin の kaime は配列なので submit は1回。2回送ると上書きになる）。
+    # 買い目は候補JSONの legs_tf / legs_trio を**正**として復元する（下記
+    # _normalize_multi_candidate）。stake も候補JSON側（予算枠から算出済み）を使う
+    # ため stake_per_line は持たない。
+    "7H1": {"file_key": "s7h1", "n_cars": 7, "multi_bet": True, "gate_filter": None,
+            "act_type": ACT_TYPE_LONGSHOT,   # 勝負アイコン「穴狙い」
+            "default_comment": (
+                "本日の穴狙いをお届けします。\n\n"
+                "当方の指数で頭ひとつ抜けた1車が、それでも4着以下に沈むと読んだレースだけを"
+                "選んでいます。抜けた1番手が消えれば、配当は跳ねます。\n\n"
+                "その1車と、同じラインの選手は買い目から外しました。"
+                "本命が飛ぶときは番手も一緒に飛ぶ傾向があるためです。\n\n"
+                "買い目は三連単と三連複の併せ買い。"
+                "三連単で大きな配当を狙い、三連複で的中を拾う組み立てにしています。\n\n"
+                "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
+            )},
 }
 # 入稿の処理順。**RANK_CONFIGS から導出する**（上位ランクから順に並べてあるため
 # 定義順がそのまま優先順位になる）。
@@ -326,12 +351,104 @@ def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], di
 
 
 # ---------------------------------------------------------------------------
+# 7H1（2券種ランク）— 候補JSONの買い目から入稿用の車番グループを復元する
+#
+# 🔴 **推測でフォーメーション/BOXを組み立てないこと。** 候補JSONが持つ
+#    legs_tf / legs_trio（strategy_wt.rank_7h1_build_legs が生成した実際の買い目）を
+#    唯一の正とし、復元したグループを expand_bet() で展開し直して
+#    **元の目集合と完全一致すること**を毎回検証してから入稿する。
+#    一致しなければ ValueError で落とし、そのレースは入稿しない
+#    （誤った買い目を外部へ出さないため、握り潰さない）。
+# ---------------------------------------------------------------------------
+
+def _trifecta_formation_groups(legs_tf: list[str]) -> list[list[int]]:
+    """['3-4-1', '3-4-2', …] から (1着列, 2着列, 3着列) を復元する。"""
+    legs = set()
+    for s in legs_tf:
+        parts = [int(x) for x in str(s).split("-")]
+        if len(parts) != 3:
+            raise ValueError(f"三連単の目の形式が不正です: {s!r}")
+        legs.add(tuple(parts))
+    if not legs:
+        raise ValueError("三連単の目が空です")
+    groups = [sorted({leg[i] for leg in legs}) for i in range(3)]
+    expanded = expand_bet(BET_KIND_TRIFECTA_FORMATION, groups)
+    if expanded != legs:
+        raise ValueError(
+            f"フォーメーション復元が一致しません（元{len(legs)}点 / 復元{len(expanded)}点）: "
+            f"{groups}")
+    return groups
+
+
+def _trio_box_group(legs_trio: list[str]) -> list[int]:
+    """['1=2=4', '1=2=5', …] から BOX の車群を復元する。"""
+    legs = set()
+    for s in legs_trio:
+        parts = [int(x) for x in str(s).split("=")]
+        if len(parts) != 3:
+            raise ValueError(f"三連複の目の形式が不正です: {s!r}")
+        legs.add(frozenset(parts))
+    if not legs:
+        raise ValueError("三連複の目が空です")
+    cars = sorted({c for leg in legs for c in leg})
+    expanded = expand_bet(BET_KIND_TRIO_BOX, [cars])
+    if expanded != legs:
+        raise ValueError(
+            f"BOX復元が一致しません（元{len(legs)}点 / 復元{len(expanded)}点）: {cars}")
+    return cars
+
+
+def _normalize_multi_candidate(
+    cand: dict, cfg: dict,
+) -> tuple[list[BetLeg], dict[int, str], int, int]:
+    """7H1 候補から (買い目行, 印, ◎車番, ○車番) を返す。
+
+    印（ユーザー確定・2026-08-06）:
+      ◎ = 三連単の1着固定車 / ○ = 2着列の1番手 / ▲ = 2着列の2番手 /
+      △ = 3着列の残り（3着だけで買っている車）/ 除外した本命は印なし(--)
+    """
+    tf_groups = _trifecta_formation_groups(cand.get("legs_tf") or [])
+    trio_cars = _trio_box_group(cand.get("legs_trio") or [])
+
+    stake_tf, stake_trio = int(cand["stake_tf"]), int(cand["stake_trio"])
+    if stake_tf <= 0 or stake_trio <= 0:
+        raise ValueError(f"賭け金が不正です（三連単{stake_tf}円 / 三連複{stake_trio}円）")
+
+    first, second, third = tf_groups
+    if len(first) != 1:
+        raise ValueError(f"7H1 の1着は1車固定のはずです: {first}")
+    # 2着列は候補生成側で「プール上位2車」の順序を持つが、bet_id は昇順に
+    # 正規化される。印の ○/▲ は候補JSONの others（モデル3着内率の降順）の
+    # 並びに従う＝表示上の序列を買い目の順序に依存させない。
+    order = [int(x) for x in (cand.get("others") or [])]
+    ranked_second = sorted(second, key=lambda c: order.index(c) if c in order else 99)
+
+    marks: dict[int, str] = {first[0]: "◎"}
+    if ranked_second:
+        marks[ranked_second[0]] = "○"
+    if len(ranked_second) > 1:
+        marks[ranked_second[1]] = "▲"
+    for c in third:
+        marks.setdefault(c, "△")
+    for c in trio_cars:          # BOXだけで買っている車も買い目に入っている
+        marks.setdefault(c, "△")
+
+    legs = [
+        BetLeg(BET_KIND_TRIFECTA_FORMATION, tf_groups, stake_tf),
+        BetLeg(BET_KIND_TRIO_BOX, [trio_cars], stake_trio),
+    ]
+    axis2 = ranked_second[0] if ranked_second else first[0]
+    return legs, marks, first[0], axis2
+
+
+# ---------------------------------------------------------------------------
 # メイン処理
 # ---------------------------------------------------------------------------
 
 def _process_rank(
     rank_key: str, target_date: str, session: str, race_date, settings: dict[str, dict],
     already: set[tuple[str, str]], dry_run: bool, race_key_filter: str | None = None,
+    claimed_races: set[str] | None = None,
 ) -> tuple[int, list[str]]:
     cfg = RANK_CONFIGS[rank_key]
     if not _is_enabled(settings, rank_key):
@@ -355,7 +472,19 @@ def _process_rank(
         return 0, []
 
     pending = [(c, g) for c, g in targets if (c["race_key"], rank_key) not in already]
-    if not pending:
+    # 【2026-08-06】netkeirin は1レース1商品（同じ race_id へ action=add すると
+    # 前の商品を上書きする）。ランク同士は設計上ほぼ排他だが（picks_history も
+    # race_key を主キーにしており1レース1ランクを前提としている）、7H1 は
+    # 「本命を買い目から外す」という**他ランクと真逆の**買い方をするため、
+    # 万一同じレースが両方に該当すると先に入稿した予想が黙って消える。
+    # 別ランクが既に押さえているレースはスキップし、失敗として可視化する。
+    other_rank_races = {rk for rk, other in already if other != rank_key}
+    if claimed_races:
+        other_rank_races |= claimed_races
+    conflicts = [c for c, _ in pending if c["race_key"] in other_rank_races]
+    if conflicts:
+        pending = [(c, g) for c, g in pending if c["race_key"] not in other_rank_races]
+    if not pending and not conflicts:
         return 0, []
 
     setting = settings.get(rank_key)
@@ -369,18 +498,31 @@ def _process_rank(
     client = NetkeirinClient() if not dry_run else None
     n_submitted = 0
     failures: list[str] = []
+    is_multi = bool(cfg.get("multi_bet"))
+
+    for cand in conflicts:
+        msg = (f"{cand.get('venue_name', '?')}{cand.get('race_no', '?')}R({rank_key}): "
+               f"別ランクが同じレースを入稿済みのためスキップ")
+        failures.append(msg)
+        print(f"[netkeirin_submit] {msg}", flush=True)
 
     for cand, gate_label in pending:
         race_key = cand["race_key"]
         venue_name = cand.get("venue_name", "?")
         race_no = int(cand["race_no"])
         # 相手絞りランク（partners_key あり）は候補JSONが絞り込み結果を持たないと
-        # 相手を決められず ValueError になる。ここで捕まえないと RANK_ORDER の
+        # 相手を決められず ValueError になる。7H1 は買い目の復元検証に失敗すると
+        # 同じく ValueError になる。ここで捕まえないと RANK_ORDER の
         # ループごと落ち、**他ランクの入稿まで巻き添えで止まる**（本ループは
         # main() 側でも try されていない）。1レース分の失敗として記録し継続する。
+        legs: list[BetLeg] = []
+        partners: list[int] = []
         try:
-            axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
-        except (ValueError, KeyError, TypeError) as e:
+            if is_multi:
+                legs, marks, axis1, axis2_or_p1 = _normalize_multi_candidate(cand, cfg)
+            else:
+                axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
+        except (ValueError, KeyError, TypeError, IndexError) as e:
             failures.append(f"{race_key} ({rank_key}): 候補情報不正 - {e}")
             print(f"[netkeirin_submit] スキップ {venue_name}{race_no}R ({rank_key}): {e}",
                   flush=True)
@@ -399,9 +541,15 @@ def _process_rank(
             comment = f"{comment}\n\n{entry_table}"
 
         if dry_run:
+            detail = (
+                "\n".join(f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
+                          for leg in legs)
+                if is_multi else
+                f"  軸={axis1} 相手={partners} 賭け金={cfg['stake_per_line']}円/点"
+            )
             print(
-                f"[dry-run] {venue_name}{race_no}R ({rank_key}) "
-                f"軸={axis1} 相手={partners} 賭け金={cfg['stake_per_line']}円/点\n"
+                f"[dry-run] {venue_name}{race_no}R ({rank_key}) 印={marks}\n"
+                f"{detail}\n"
                 f"  タイトル: {title}\n"
                 f"  コメント:\n{comment}\n",
                 flush=True,
@@ -411,17 +559,25 @@ def _process_rank(
 
         try:
             assert client is not None
-            ok, msg = client.submit_pick(
-                race_date=race_date, venue_name=venue_name, race_no=race_no,
-                n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
-                axis1=axis1,
-                axis2=(axis2_or_p1 if cfg["bet_kind"] == BET_KIND_TRIO_AXIS2 else None),
-                partners=partners, stake_per_line=cfg["stake_per_line"],
-                title=title, comment=comment,
-                # 「自信あり」は最上位の 7SS のみ（2026-08-05・ユーザー指示）。
-                # 上限に当たれば client 側が type=0 で自動リトライする。
-                confident=(rank_key == "7SS"),
-            )
+            if is_multi:
+                ok, msg = client.submit_pick_multi(
+                    race_date=race_date, venue_name=venue_name, race_no=race_no,
+                    n_cars=cfg["n_cars"], legs=legs, marks=marks,
+                    title=title, comment=comment,
+                    act_type=cfg.get("act_type", ACT_TYPE_DEFAULT),
+                )
+            else:
+                ok, msg = client.submit_pick(
+                    race_date=race_date, venue_name=venue_name, race_no=race_no,
+                    n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
+                    axis1=axis1,
+                    axis2=(axis2_or_p1 if cfg["bet_kind"] == BET_KIND_TRIO_AXIS2 else None),
+                    partners=partners, stake_per_line=cfg["stake_per_line"],
+                    title=title, comment=comment,
+                    # 「自信あり」は最上位の 7SS のみ（2026-08-05・ユーザー指示）。
+                    # 上限に当たれば client 側が type=0 で自動リトライする。
+                    confident=(rank_key == "7SS"),
+                )
         except Exception as e:
             ok, msg = False, f"例外: {e}"
 
@@ -429,6 +585,8 @@ def _process_rank(
             _record_submission(
                 race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2_or_p1, msg,
             )
+            if claimed_races is not None:
+                claimed_races.add(race_key)
             n_submitted += 1
             print(f"[netkeirin_submit] 入稿成功 {venue_name}{race_no}R ({rank_key}) → {msg}", flush=True)
         else:
@@ -444,6 +602,8 @@ def _process_rank(
 
 # S1は全廃済み、旧7SS/旧9SSは2026-08-01に削除済み（RANK_CONFIGS のコメント参照）
 # のためいずれも対象外。kiseki 側 _MANUAL_RANK_KEYS も ("7S","7A","9S","9A") で一致。
+# 7H1 も対象外。手動入稿は「軸2車を選んで総流し」というUIで、7H1 の買い目
+# （バスト予測モデルが決めるフォーメーション+BOX）は軸2車では表現できないため。
 MANUAL_ALLOWED_RANKS = ("7S", "7A", "7B", "9S", "9A")
 
 
@@ -612,12 +772,15 @@ def main() -> None:
 
     submitted_counts: dict[str, int] = {r: 0 for r in RANK_ORDER}
     all_failures: list[str] = []
+    # 同一実行内で入稿済みのレース。netkeirin は1レース1商品なので、後続ランクが
+    # 同じレースへ入稿すると先の商品を上書きしてしまう（_process_rank 参照）。
+    claimed_races: set[str] = set()
     for rank_key in RANK_ORDER:
         if rank_key not in per_rank_raw:
             continue
         n, failures = _process_rank(
             rank_key, target_date, session, race_date, settings, already, args.dry_run,
-            race_key_filter=args.race_key,
+            race_key_filter=args.race_key, claimed_races=claimed_races,
         )
         submitted_counts[rank_key] = n
         all_failures.extend(failures)

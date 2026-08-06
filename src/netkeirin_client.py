@@ -2,9 +2,12 @@
 下書き自動入稿クライアント。
 
 仕様の根拠は docs/netkeirin-input-api-spec.md（2026-07-23実機検証で確定・
-2026-07-28に3連単1着ながし(S1)・9車waku_checkを追加実測 — 詳細はdocs参照）。
-「二軸探偵」方式（軸1=◎・軸2=○、三連複2軸ながし）と、S1方式（軸=◎・1着固定、
-三連単1着ながし）の2種類の買い目構造に対応する。汎用の全券種対応は意図していない。
+2026-07-28に3連単1着ながし(S1)・9車waku_checkを追加実測・2026-08-06に
+3連単フォーメーション/3連複ボックス(7H1)を追加実測 — 詳細はdocs参照）。
+対応する買い目構造は次の4つで、汎用の全券種対応は意図していない:
+  - 三連複・軸2頭ながし  … 「二軸探偵」方式（7SS/7S/7A/7B/9S/9A）
+  - 三連単・1着ながし    … S1方式（全廃済みだが形式は保持）
+  - 三連単・フォーメーション / 三連複・ボックス … 7H1（2券種を1商品で入稿）
 """
 from __future__ import annotations
 
@@ -12,7 +15,9 @@ import json
 import os
 import re
 from datetime import date
+from itertools import combinations as _combinations
 from pathlib import Path
+from typing import NamedTuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -34,9 +39,36 @@ VENUE_CACHE_FILE = DATA_DIR / "netkeirin_venue_codes.json"
 # 買い目構造（bet_kind）。式別(shikibetu)・方式(houshiki)はdocs 2.3節で実機確定済み。
 BET_KIND_TRIO_AXIS2 = "trio_axis2"          # 3連複・軸2頭ながし（7SS/7S/7A/9SS/9S/9A）
 BET_KIND_TRIFECTA_AXIS1 = "trifecta_axis1"  # 3連単・1着ながし（S1）
+BET_KIND_TRIFECTA_FORMATION = "trifecta_formation"  # 3連単・フォーメーション（7H1）
+BET_KIND_TRIO_BOX = "trio_box"              # 3連複・ボックス（7H1）
 
-_SHIKIBETU = {BET_KIND_TRIO_AXIS2: "8", BET_KIND_TRIFECTA_AXIS1: "9"}
-_HOUSHIKI = {BET_KIND_TRIO_AXIS2: "6", BET_KIND_TRIFECTA_AXIS1: "3"}
+_SHIKIBETU = {
+    BET_KIND_TRIO_AXIS2: "8",
+    BET_KIND_TRIFECTA_AXIS1: "9",
+    BET_KIND_TRIFECTA_FORMATION: "9",
+    BET_KIND_TRIO_BOX: "8",
+}
+_HOUSHIKI = {
+    BET_KIND_TRIO_AXIS2: "6",
+    BET_KIND_TRIFECTA_AXIS1: "3",
+    BET_KIND_TRIFECTA_FORMATION: "1",
+    BET_KIND_TRIO_BOX: "2",
+}
+
+# bet_kind ごとの車番グループ数（bet_id の `_` 区切りスロット数）。
+_N_GROUPS = {
+    BET_KIND_TRIO_AXIS2: 3,          # 軸1 / 軸2 / 相手
+    BET_KIND_TRIFECTA_AXIS1: 2,      # 1着軸 / 相手
+    BET_KIND_TRIFECTA_FORMATION: 3,  # 1着列 / 2着列 / 3着列
+    BET_KIND_TRIO_BOX: 1,            # BOXの車群
+}
+
+# 印（表示記号）→ mark_code。docs/netkeirin-input-api-spec.md 2.2節。
+# 印が付かない車は "0"（--）。表示用の印マップをそのまま入稿へ渡せるようにする
+# （**表示と入稿で印を二重管理しないため**。7B の「買っていない車まで △」不具合と
+# 同型の食い違いを構造的に防ぐ）。
+MARK_CODE = {"◎": "1", "○": "2", "▲": "3", "△": "4", "☆": "5"}
+MARK_CODE_NONE = "0"
 
 # 車数ごとの枠割当（keirin固有の固定ルール・車数のみに依存しレース非依存。
 # 7車=[6]は2026-07-23佐世保1R、9車=[4,5,6]は2026-07-28豊橋4R/5Rで実測確定）。
@@ -47,6 +79,7 @@ _WAKU_CHECK = {7: [6], 9: [4, 5, 6]}
 # （販売価格）。旧ドキュメントの「type=式別・point=ポイント数」という推測は誤りだった
 # ため訂正済み。式別/方式は kaime[].bet_id 文字列にのみ含まれる。
 ACT_TYPE_CONFIDENT = "1"
+ACT_TYPE_LONGSHOT = "2"   # 勝負アイコン「穴狙い」（7H1）
 ACT_TYPE_DEFAULT = "0"
 SALE_PRICE_DEFAULT = "300"
 CONFIDENT_GATE_LABELS = {"SS"}  # 勝負アイコン「自信あり」対象（SS+は2026-07-27にSSへ統合・廃止）
@@ -66,6 +99,16 @@ def _env(key: str) -> str:
     return os.environ.get(key, "")
 
 
+class BetLeg(NamedTuple):
+    """1商品に含める買い目行（`kaime` の1要素に対応）。
+
+    groups は bet_kind ごとの車番グループ（`build_bet_id_groups` 参照）。
+    """
+    bet_kind: str
+    groups: list[list[int]]
+    stake_per_line: int
+
+
 def waku_check_for(n_cars: int) -> list[int]:
     """車数から waku_check（同一枠に2車以上入る枠のリスト）を返す。"""
     if n_cars not in _WAKU_CHECK:
@@ -73,34 +116,91 @@ def waku_check_for(n_cars: int) -> list[int]:
     return _WAKU_CHECK[n_cars]
 
 
-def build_bet_id(
+def build_bet_id_groups(
     race_date: date, venue_code: str, race_no: int, bet_kind: str,
-    axis1: int, axis2: int | None, partners: list[int],
+    groups: list[list[int]],
 ) -> str:
-    """bet_idを組み立てる。
+    """車番グループ列から bet_id を組み立てる（全 bet_kind 共通の低レベルAPI）。
 
-    trio_axis2（3連複・軸2頭ながし）実データ確認済み（2026-07-23・佐世保1R）:
-        "a5-85-1_b8_c6_1_2_3-4-5-6-7"  （軸1=1・軸2=2・相手=3,4,5,6,7）
-        → a{曜日}-{場}-{R}_b{式別}_c{方式}_{軸1}_{軸2}_{相手(ハイフン区切り)}
+    bet_id は例外なく次の形をとる（4形式すべてを実データで確認済み・docs 2.3節）:
 
-    trifecta_axis1（3連単・1着ながし）実データ確認済み（2026-07-28・取手1R）:
-        "a2-23-1_b9_c3_1_2-3"  （1着軸=1・相手=2,3・マルチOFF）
-        → a{曜日}-{場}-{R}_b{式別}_c{方式}_{1着軸}_{相手(ハイフン区切り)}
-        （軸2頭ながしと異なり軸スロットは1つのみ。マルチはOFFにすること
-        ＝ONだと1着固定を無視した全順序展開＝ボックス相当になる）
+        a{曜日}-{場}-{R}_b{式別}_c{方式}_{グループ1}_{グループ2}_…
+        グループ内の車番はハイフン区切り・昇順
+
+    | bet_kind            | b  | c  | グループ                          |
+    |---------------------|----|----|-----------------------------------|
+    | trio_axis2          | 8  | 6  | 軸1 / 軸2 / 相手                  |
+    | trifecta_axis1      | 9  | 3  | 1着軸 / 相手（マルチOFF）         |
+    | trifecta_formation  | 9  | 1  | 1着列 / 2着列 / 3着列             |
+    | trio_box            | 8  | 2  | BOXの車群                         |
 
     曜日コードは isoweekday()%7（月=1…土=6・日=0）。日曜のみ要目視確認（未検証・docs 3節）。
     レース番号はrace_id内ではゼロ埋めだが、bet_id内はゼロ埋めなし。
     """
+    if bet_kind not in _N_GROUPS:
+        raise ValueError(f"未対応のbet_kind: {bet_kind}")
+    if len(groups) != _N_GROUPS[bet_kind]:
+        raise ValueError(
+            f"{bet_kind} のグループ数は {_N_GROUPS[bet_kind]} 必須（実際={len(groups)}）")
+    if any(not g for g in groups):
+        raise ValueError(f"{bet_kind} に空のグループが含まれています: {groups}")
     weekday = race_date.isoweekday() % 7
-    shikibetu = _SHIKIBETU[bet_kind]
-    houshiki = _HOUSHIKI[bet_kind]
-    partners_str = "-".join(str(p) for p in sorted(partners))
-    prefix = f"a{weekday}-{venue_code}-{race_no}_b{shikibetu}_c{houshiki}"
+    prefix = (f"a{weekday}-{venue_code}-{race_no}"
+              f"_b{_SHIKIBETU[bet_kind]}_c{_HOUSHIKI[bet_kind]}")
+    body = "_".join("-".join(str(c) for c in sorted(g)) for g in groups)
+    return f"{prefix}_{body}"
+
+
+def build_bet_id(
+    race_date: date, venue_code: str, race_no: int, bet_kind: str,
+    axis1: int, axis2: int | None, partners: list[int],
+) -> str:
+    """軸ながし系（trio_axis2 / trifecta_axis1）の bet_id を組み立てる。
+
+    trio_axis2（3連複・軸2頭ながし）実データ確認済み（2026-07-23・佐世保1R）:
+        "a5-85-1_b8_c6_1_2_3-4-5-6-7"  （軸1=1・軸2=2・相手=3,4,5,6,7）
+
+    trifecta_axis1（3連単・1着ながし）実データ確認済み（2026-07-28・取手1R）:
+        "a2-23-1_b9_c3_1_2-3"  （1着軸=1・相手=2,3・マルチOFF）
+        （軸2頭ながしと異なり軸スロットは1つのみ。マルチはOFFにすること
+        ＝ONだと1着固定を無視した全順序展開＝ボックス相当になる）
+
+    フォーメーション/ボックスは軸という概念を持たないため
+    `build_bet_id_groups()` を直接使う。
+    """
     if bet_kind == BET_KIND_TRIO_AXIS2:
-        return f"{prefix}_{axis1}_{axis2}_{partners_str}"
+        if axis2 is None:
+            raise ValueError("trio_axis2にはaxis2が必須です")
+        groups = [[axis1], [axis2], list(partners)]
+    elif bet_kind == BET_KIND_TRIFECTA_AXIS1:
+        groups = [[axis1], list(partners)]
+    else:
+        raise ValueError(f"未対応のbet_kind: {bet_kind}")
+    return build_bet_id_groups(race_date, venue_code, race_no, bet_kind, groups)
+
+
+def expand_bet(bet_kind: str, groups: list[list[int]]) -> set:
+    """bet_id が表す買い目を展開する（何点・どの目になるかの単一正本）。
+
+    **推測で買い目を組み立てないための検算に使う。** 呼び出し側が持っている
+    「買うつもりの目」と本関数の戻り値が一致しなければ、その bet_id は
+    意図と違うものを外部へ入稿する。
+
+    戻り値の要素は着順を持つ券種（3連単系）が `tuple`、持たない券種
+    （3連複系）が `frozenset`。
+    """
+    if bet_kind == BET_KIND_TRIFECTA_FORMATION:
+        c1, c2, c3 = groups
+        return {(a, b, c) for a in c1 for b in c2 for c in c3
+                if len({a, b, c}) == 3}
+    if bet_kind == BET_KIND_TRIO_BOX:
+        return {frozenset(t) for t in _combinations(sorted(groups[0]), 3)}
     if bet_kind == BET_KIND_TRIFECTA_AXIS1:
-        return f"{prefix}_{axis1}_{partners_str}"
+        axis, partners = groups[0][0], groups[1]
+        return {(axis, a, b) for a in partners for b in partners if a != b}
+    if bet_kind == BET_KIND_TRIO_AXIS2:
+        a1, a2, partners = groups[0][0], groups[1][0], groups[2]
+        return {frozenset((a1, a2, p)) for p in partners if p not in (a1, a2)}
     raise ValueError(f"未対応のbet_kind: {bet_kind}")
 
 
@@ -301,8 +401,66 @@ class NetkeirinClient:
                 continue
             mark[str(c)] = "4" if c in partner_set else "0"
 
-        waku_check = waku_check_for(n_cars)
+        return self._post_goods(
+            race_id=race_id, n_cars=n_cars, mark=mark, title=title, comment=comment,
+            kaime=[{"bet_id": bet_id, "bet_money": stake_per_line}],
+            act_type=(ACT_TYPE_CONFIDENT if confident else ACT_TYPE_DEFAULT),
+        )
 
+    def submit_pick_multi(
+        self, *, race_date: date, venue_name: str, race_no: int, n_cars: int,
+        legs: list[BetLeg], marks: dict[int, str],
+        title: str, comment: str = DEFAULT_COMMENT,
+        act_type: str = ACT_TYPE_DEFAULT,
+    ) -> tuple[bool, str]:
+        """複数券種を1件の商品として入稿する（7H1＝三連単F + 三連複BOX）。
+
+        netkeirin の `kaime` は配列で、1レース1商品に**複数の買い目行**を持てる
+        （入稿ツールUIの「投票内容」が複数行になるのと同じ。2026-08-06に
+        3行＝三連単F+三連複BOX×2 を実機で確認済み）。したがって2券種でも
+        submit は1回でよく、2回送ると同一 race_id の商品を上書きしてしまう。
+
+        Args:
+            legs:  買い目行。bet_kind ごとの車番グループと1点あたり金額。
+            marks: 車番 → 表示印（"◎"/"○"/"▲"/"△"）。ここに無い車は印なし(--)。
+                   **表示用の印マップをそのまま渡す**（表示と入稿の二重管理を避ける）。
+
+        戻り値: (成功したか, メッセージ)
+        """
+        if n_cars not in _WAKU_CHECK:
+            return False, f"対象外(n_cars={n_cars}、7/9車のみ対応)"
+        if not legs:
+            return False, "買い目が空です"
+        if not comment:
+            comment = DEFAULT_COMMENT
+
+        if not self.login():
+            return False, "ログイン失敗"
+
+        venue_code = self.resolve_venue_code(race_date, venue_name)
+        if venue_code is None:
+            return False, f"場コード解決失敗: {venue_name}"
+
+        race_id = f"{race_date.strftime('%Y%m%d')}{venue_code}{race_no:02d}"
+        kaime = []
+        for leg in legs:
+            bet_id = build_bet_id_groups(
+                race_date, venue_code, race_no, leg.bet_kind, leg.groups)
+            kaime.append({"bet_id": bet_id, "bet_money": leg.stake_per_line})
+
+        mark = {str(c): MARK_CODE.get(marks.get(c, ""), MARK_CODE_NONE)
+                for c in range(1, n_cars + 1)}
+
+        return self._post_goods(
+            race_id=race_id, n_cars=n_cars, mark=mark, title=title, comment=comment,
+            kaime=kaime, act_type=act_type,
+        )
+
+    def _post_goods(
+        self, *, race_id: str, n_cars: int, mark: dict[str, str],
+        title: str, comment: str, kaime: list[dict], act_type: str,
+    ) -> tuple[bool, str]:
+        """api_post_goods.html への POST（action=add）本体。"""
         payload = {
             "output": "json",
             "action": "add",
@@ -316,25 +474,25 @@ class NetkeirinClient:
             # 不明なため自動付与を停止していた（2件目以降が yoso_tag_over で拒否
             # された実測あり。上限は1件/日の可能性が高い）。
             # 2026-08-05〜: **7SS（最上位ランク・実測1.9件/日）にのみ**付与を再開。
-            # 上限に当たった場合は呼び出し側(submit_pick)が type=0 で自動リトライ
-            # するため、拒否されても入稿自体は失われない。
-            "type": ACT_TYPE_CONFIDENT if confident else ACT_TYPE_DEFAULT,
+            # 2026-08-06〜: 7H1 に「穴狙い」(type=2)。上限の有無は未確認だが、
+            # 下の yoso_tag_over フォールバックが type を問わず効くので入稿は落ちない。
+            "type": act_type,
             "point": SALE_PRICE_DEFAULT,
-            "waku_check": json.dumps(waku_check),
-            "kaime": json.dumps(
-                [{"bet_id": bet_id, "bet_money": stake_per_line}], ensure_ascii=False,
-            ),
+            "waku_check": json.dumps(waku_check_for(n_cars)),
+            "kaime": json.dumps(kaime, ensure_ascii=False),
         }
 
         try:
             r = self.session.post(POST_GOODS_URL, data=payload, timeout=15)
             r.raise_for_status()
             resp = r.json()
-            # 「自信あり」の1日上限（yoso_tag_over）に当たったら、タグ無しで
+            # 勝負アイコンの1日上限（yoso_tag_over）に当たったら、タグ無しで
             # もう一度だけ送る。**入稿そのものを落とさないため**の措置。
-            # 上限が1件/日と推定されるため 7SS が同日2件以上ある日は必ず起きる。
-            if confident and not resp.get("result") \
+            # 「自信あり」は上限が1件/日と推定され、同日2件以上ある日は必ず起きる。
+            if act_type != ACT_TYPE_DEFAULT and not resp.get("result") \
                     and "yoso_tag_over" in str(resp):
+                print(f"[netkeirin] 勝負アイコン(type={act_type})が上限のため"
+                      f"タグ無しで再送します: {race_id}")
                 payload["type"] = ACT_TYPE_DEFAULT
                 r = self.session.post(POST_GOODS_URL, data=payload, timeout=15)
                 r.raise_for_status()

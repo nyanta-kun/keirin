@@ -5,8 +5,12 @@ import pytest
 
 from src.netkeirin_client import (
     BET_KIND_TRIFECTA_AXIS1,
+    BET_KIND_TRIFECTA_FORMATION,
     BET_KIND_TRIO_AXIS2,
+    BET_KIND_TRIO_BOX,
     build_bet_id,
+    build_bet_id_groups,
+    expand_bet,
     waku_check_for,
 )
 
@@ -92,6 +96,87 @@ def test_build_bet_id_trifecta_axis1_no_axis2_slot():
         partners=[3, 7],
     )
     assert bet_id == "a2-23-1_b9_c3_5_3-7"
+
+
+# ── 7H1（三連単フォーメーション / 三連複ボックス）─────────────────────────
+# 2026-08-06 実機検証。佐世保7R（2026-08-07=金曜・場コード85）の買い目入力画面で
+# 実際に組み、`localStorage['ndi::umaibet_202608078507']` を読み取って確定した:
+#   3連単F  1着[3] × 2着[4,5] × 3着[1,2,4,5,6] = 8点  → a5-85-7_b9_c1_3_4-5_1-2-4-5-6
+#   3連複BOX [2,4,5,6]            = 4点  → a5-85-7_b8_c2_2-4-5-6
+#   3連複BOX [1,2,4,5,6]          = 10点 → a5-85-7_b8_c2_1-2-4-5-6
+# 点数は画面表示（8点/4点/10点）でも確認済み。フォーメーションには
+# trifecta_axis1 のようなマルチ相当のフラグは存在しない。
+
+
+def test_build_bet_id_trifecta_formation_matches_real_capture():
+    bet_id = build_bet_id_groups(
+        race_date=date(2026, 8, 7),
+        venue_code="85",
+        race_no=7,
+        bet_kind=BET_KIND_TRIFECTA_FORMATION,
+        groups=[[3], [4, 5], [1, 2, 4, 5, 6]],
+    )
+    assert bet_id == "a5-85-7_b9_c1_3_4-5_1-2-4-5-6"
+
+
+def test_build_bet_id_trio_box_matches_real_capture():
+    assert build_bet_id_groups(
+        race_date=date(2026, 8, 7), venue_code="85", race_no=7,
+        bet_kind=BET_KIND_TRIO_BOX, groups=[[2, 4, 5, 6]],
+    ) == "a5-85-7_b8_c2_2-4-5-6"
+    # 車数が変わっても形式は同じ（BOXは車群の羅列のみ）
+    assert build_bet_id_groups(
+        race_date=date(2026, 8, 7), venue_code="85", race_no=7,
+        bet_kind=BET_KIND_TRIO_BOX, groups=[[1, 2, 4, 5, 6]],
+    ) == "a5-85-7_b8_c2_1-2-4-5-6"
+
+
+def test_build_bet_id_groups_sorts_within_group():
+    """グループ内は昇順に正規化される（実機の出力が昇順だったため）。"""
+    assert build_bet_id_groups(
+        race_date=date(2026, 8, 7), venue_code="85", race_no=7,
+        bet_kind=BET_KIND_TRIO_BOX, groups=[[6, 2, 5, 4]],
+    ) == "a5-85-7_b8_c2_2-4-5-6"
+
+
+def test_build_bet_id_groups_rejects_wrong_group_count():
+    with pytest.raises(ValueError):
+        build_bet_id_groups(
+            race_date=date(2026, 8, 7), venue_code="85", race_no=7,
+            bet_kind=BET_KIND_TRIFECTA_FORMATION, groups=[[3], [4, 5]],
+        )
+
+
+def test_build_bet_id_groups_rejects_empty_group():
+    with pytest.raises(ValueError):
+        build_bet_id_groups(
+            race_date=date(2026, 8, 7), venue_code="85", race_no=7,
+            bet_kind=BET_KIND_TRIFECTA_FORMATION, groups=[[3], [], [1, 2]],
+        )
+
+
+def test_expand_trifecta_formation_is_8_points():
+    """実機で「8点」と表示された組み合わせが、展開でも8点になること。
+
+    7H1 の三連単は 1着1車 × 2着2車 × 3着5車 で、2着と3着が重なる2通りが
+    落ちて 2×5-2 = 8点になる。
+    """
+    legs = expand_bet(BET_KIND_TRIFECTA_FORMATION, [[3], [4, 5], [1, 2, 4, 5, 6]])
+    assert len(legs) == 8
+    assert (3, 4, 4) not in legs and (3, 5, 5) not in legs
+    assert (3, 4, 5) in legs and (3, 5, 4) in legs
+    assert all(a == 3 for a, _, _ in legs)
+
+
+def test_expand_trio_box_point_counts():
+    assert len(expand_bet(BET_KIND_TRIO_BOX, [[2, 4, 5, 6]])) == 4
+    assert len(expand_bet(BET_KIND_TRIO_BOX, [[1, 2, 4, 5, 6]])) == 10
+
+
+def test_expand_matches_existing_kinds():
+    """既存2形式の展開も点数が仕様どおりであること（回帰）。"""
+    assert len(expand_bet(BET_KIND_TRIO_AXIS2, [[1], [2], [3, 4, 5, 6, 7]])) == 5
+    assert expand_bet(BET_KIND_TRIFECTA_AXIS1, [[1], [2, 3]]) == {(1, 2, 3), (1, 3, 2)}
 
 
 def test_waku_check_7car():
