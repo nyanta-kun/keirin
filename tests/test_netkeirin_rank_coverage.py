@@ -69,12 +69,10 @@ def test_current_paper_ranks_are_submittable():
     （例: 7B は 2026-08-05 に無効化）。本テストが見るのは**定義の存在**であって
     有効/無効ではない。
     """
-    # 2026-08-06: RANK_7H1（穴推奨・本命バスト型）は **三連単+三連複の2券種**を
-    # フォーメーションで買う初のランクで、入稿側の bet_kind（軸2車総流しの
-    # 三連複のみ）では表現できない。入稿対応は別タスクとし、それまでは
-    # 明示的に除外する。**「なぜ除外されているか」をここに書かずに集合から
-    # 落とすと、7SS のときと同じ「無警告で一度も入稿されない」事故になる。**
-    NOT_YET_SUBMITTABLE = {"7H1"}
+    # 2026-08-06: RANK_7H1（穴推奨・本命バスト型）の入稿に対応し、除外集合は空に
+    # なった。**「なぜ除外されているか」をここに書かずに集合から落とすと、
+    # 7SS のときと同じ「無警告で一度も入稿されない」事故になる。**
+    NOT_YET_SUBMITTABLE: set[str] = set()
     missing = [spec.label for spec in CURRENT_PAPER_RANKS
                if spec.label not in RANK_CONFIGS
                and spec.label not in NOT_YET_SUBMITTABLE]
