@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.bet_display import fold_trifecta_formation, fold_trio_box
 from src.database import get_connection
 from src.scraper.winticket import WinticketScraper
 from src.notify.discord import send
@@ -1895,9 +1896,11 @@ def _build_rank_7h1_message(cand: dict, ri: dict, detail: dict) -> str:
         f"バスト確率 {float(cand.get('bust_prob') or 0) * 100:.1f}%",
         "",
         f"三連複 {len(detail['legs_trio'])}点 × {detail['stake_trio']}円",
-        "　" + " ".join(detail["legs_trio"]),
+        # 全目の列挙は読めないのでフォーメーション表記へ畳む。畳めない構造
+        # （欠車でBOXが崩れた等）は元の列挙にフォールバックする（src/bet_display.py）。
+        "　" + (fold_trio_box(detail["legs_trio"]) or " ".join(detail["legs_trio"])),
         f"三連単 {len(detail['legs_tf'])}点 × {detail['stake_tf']}円",
-        "　" + " ".join(detail["legs_tf"]),
+        "　" + (fold_trifecta_formation(detail["legs_tf"]) or " ".join(detail["legs_tf"])),
         f"合計 {detail['bet_amount']:,}円",
     ]
     if detail["dropped_trio"] or detail["dropped_tf"]:
