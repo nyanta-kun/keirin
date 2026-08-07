@@ -43,6 +43,12 @@ OLD_SNIPPETS = (
     "買い目は三連複・軸2車流し（均等買い）でお届けします。",
 )
 
+# 7B は買い目構造が「相手3点」で共通文と違うため専用に扱う（2026-08-07 に
+# 7B も傾斜配分の対象へ変えたので「均等買い」の記述を差し替える）。
+OLD_7B = "買い目は三連複・軸2車から相手3点の均等買いです。"
+NEW_7B = ("買い目は三連複・軸2車から相手3点。金額は均等ではなく、"
+          "当方が想定する発走時オッズに応じて配分しています。")
+
 NEW_SENTENCE = (
     "買い目は三連複・軸2車流しです。金額は均等ではなく、"
     "当方が想定する発走時オッズに応じて配分しています。"
@@ -83,7 +89,11 @@ def _normalize(cur: str) -> str | None:
 
     買い目の一文がどちらの形でも見つからない場合は None（＝触らない）。
     """
-    if any(s in cur for s in OLD_SNIPPETS):
+    if OLD_7B in cur:
+        new = cur.replace(OLD_7B, NEW_7B)
+    elif NEW_7B in cur:
+        new = cur
+    elif any(s in cur for s in OLD_SNIPPETS):
         new = cur
         for s in OLD_SNIPPETS:
             new = new.replace(s, NEW_SENTENCE)

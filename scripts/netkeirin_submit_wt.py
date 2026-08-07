@@ -153,8 +153,11 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
     # netkeirin の的中率は**ガミを不的中として数える**ため、5点均等では
     # 5.0倍未満の的中が全部「不的中」表示になる（実測: 的中の51.8%がガミ）。
     # 詳細と実測値は src/stake_allocation.py のモジュール docstring。
-    # ⚠️ **7B には付けない**。3点買いなので境界が3.0倍でガミ率4.9%＝ほぼ無害であり、
-    #    「相手3点の均等買い」という商品説明とも整合している。
+    # ⚠️ 当初は 7B を対象外にしていた（3点買いで境界が3.0倍＝ガミが少ない）。
+    #    ユーザー指摘「7Bも的中してガミだと的中扱いにならない」を受けて測り直し、
+    #    **実質的中 +1.05pt [+0.66, +1.43] P=100%**（ROI −1.34pt は有意でない）
+    #    だったので全ランク一律で対象にした。7B の伸びしろは**的中率30.5%が上限**
+    #    なので構造的に +2.3pt しかなく、そのうち +1.05pt を回収する形になる。
     "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_budget": RACE_BUDGET, "gate_filter": None, "tilt_stakes": True},
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S", "tilt_stakes": True},
     "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None, "tilt_stakes": True},
@@ -164,7 +167,7 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
     #    ため、導入時に enabled=false の行を明示投入してある。ユーザーが
     #    /keirin/settings で明示的にONにするまで入稿されない。
     "7B":  {"file_key": "s7b", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None,
-            "partners_key": "legs_7b",
+            "partners_key": "legs_7b", "tilt_stakes": True,
             # ⚠️ 2026-08-05 の PR#12 で 7B は「◎○一致 × **順序一致** × 準決勝」へ
             #    全面入替した。旧7Bは順序**不一致**が条件だったため、旧文面の
             #    「1番手評価が異なり」は現行条件と正反対になっていた（2026-08-06 是正）。
@@ -174,7 +177,8 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
                 "本日の二軸をお届けします。\n\n"
                 "準決勝の中から、当方の指数で軸2車が明確に絞り込めたレースだけを"
                 "お届けしています。相手も3点に絞りました。\n"
-                "買い目は三連複・軸2車から相手3点の均等買いです。\n\n"
+                "買い目は三連複・軸2車から相手3点。金額は均等ではなく、当方が想定する"
+                "発走時オッズに応じて配分しています。\n\n"
                 "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
             )},
     # 9車は相手7点＝ガミ境界が7.0倍で7車より条件が悪いので傾斜配分の対象。
