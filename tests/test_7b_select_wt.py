@@ -59,7 +59,7 @@ def test_selects_only_overlap2_with_order_agreement_in_semifinal():
         _cand("mark_missing", 2, None),               # ◎欠損＝判定不能
         _cand("heats", 2, False, race_type="予選"),    # 準決勝でない
     ]
-    got = [c["race_key"] for c in sw.rank_7b_daily_select(cands)]
+    got = [c["race_key"] for c in sw.rank_7b_select_pool(cands)]
     assert got == ["ok"]
 
 
@@ -72,16 +72,16 @@ def test_race_type_must_match_exactly_not_substring():
     掃引窓ですら ROI 82.8→81.7% に薄まる。
     """
     for rt in ("チャレンジ準決勝", "ガールズ準決勝", "準決勝A", "準決"):
-        assert sw.rank_7b_daily_select([_cand("x", 2, False, race_type=rt)]) == [], rt
-    assert len(sw.rank_7b_daily_select([_cand("x", 2, False, race_type="準決勝")])) == 1
+        assert sw.rank_7b_select_pool([_cand("x", 2, False, race_type=rt)]) == [], rt
+    assert len(sw.rank_7b_select_pool([_cand("x", 2, False, race_type="準決勝")])) == 1
 
 
 def test_missing_race_type_is_failsafe_excluded():
     """race_type 欠損（wt_races 未取込等）は推奨を増やさない側に倒す。"""
-    assert sw.rank_7b_daily_select([_cand("x", 2, False, race_type=None)]) == []
+    assert sw.rank_7b_select_pool([_cand("x", 2, False, race_type=None)]) == []
     c = _cand("y", 2, False)
     del c["race_type"]
-    assert sw.rank_7b_daily_select([c]) == []
+    assert sw.rank_7b_select_pool([c]) == []
 
 
 def test_order_disagree_true_and_none_are_both_excluded():
@@ -91,8 +91,8 @@ def test_order_disagree_true_and_none_are_both_excluded():
     両立しない（掃引窓 18,440件すべて False を実測確認）。だが overlap の定義が
     将来変わったときに黙って通さないためのフェイルセーフとして明示的に弾く。
     """
-    assert sw.rank_7b_daily_select([_cand("x", 2, True)]) == []
-    assert sw.rank_7b_daily_select([_cand("x", 2, None)]) == []
+    assert sw.rank_7b_select_pool([_cand("x", 2, True)]) == []
+    assert sw.rank_7b_select_pool([_cand("x", 2, None)]) == []
 
 
 def test_mutually_exclusive_with_7ss_7s_and_7a():
@@ -106,7 +106,7 @@ def test_mutually_exclusive_with_7ss_7s_and_7a():
     s7 = {c["race_key"] for c in sw.rank_7s_daily_select(cands)}
     s7a = {c["race_key"] for c in sw.rank_7a_daily_select(cands)}
     s7ss = {c["race_key"] for c in sw.rank_7ss_daily_select(cands)}
-    s7b = {c["race_key"] for c in sw.rank_7b_daily_select(cands)}
+    s7b = {c["race_key"] for c in sw.rank_7b_select_pool(cands)}
     assert s7b, "選出されること（素通りテスト化の防止）"
     for other in (s7, s7a, s7ss):
         assert other.isdisjoint(s7b)
@@ -114,7 +114,7 @@ def test_mutually_exclusive_with_7ss_7s_and_7a():
 
 def test_selection_sorted_by_entropy_ascending():
     cands = [_cand("hi", 2, False, entropy=1.90), _cand("lo", 2, False, entropy=1.60)]
-    assert [c["race_key"] for c in sw.rank_7b_daily_select(cands)] == ["lo", "hi"]
+    assert [c["race_key"] for c in sw.rank_7b_select_pool(cands)] == ["lo", "hi"]
 
 
 # ── 2. 相手絞り ──────────────────────────────────────────────────
@@ -216,3 +216,18 @@ def test_judge_ignores_placeholder_odds():
     """未確定プレースホルダ(9999.9等)は盤面構築から除外される。"""
     trio = {k: 9999.9 for k in _full_trio([1, 2, 3, 4, 5, 6, 7])}
     assert judge_rank_7b(_live_cand(), trio)[0] == "不明"
+
+
+# ── 廃止（2026-08-07・ユーザー判断）────────────────────────────────
+
+def test_7bは廃止されており候補を返さない():
+    """7C との比較で、**両方に傾斜配分をかけた公平な条件**でも 7C が
+    実質的中率で上回ったため廃止（同一母集団 2,203R: 7B 31.6% / 7C 39.0%）。
+
+    ⚠️ ゲートのロジック自体は `rank_7b_select_pool` に残してあり、上のテスト群が
+       引き続き守っている。再開は `RANK_7B_STOPPED = False` の1行。
+    """
+    assert sw.RANK_7B_STOPPED is True
+    ok = _cand("ok", 2, False)
+    assert sw.rank_7b_select_pool([ok]) != []      # ロジックは生きている
+    assert sw.rank_7b_daily_select([ok]) == []     # が、選出はされない

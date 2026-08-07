@@ -1110,6 +1110,11 @@ def rank_7b_select_legs(
 RANK_7B_RACE_TYPES = ("準決勝",)
 
 
+# 🔴 7B は 2026-08-07 にユーザー判断で廃止（`rank_7b_daily_select` の docstring 参照）。
+# 再開はこの1行を False にするだけ。判定ロジック・picks_history・Web の集計は残置。
+RANK_7B_STOPPED = True
+
+
 def rank_7b_daily_select(candidates: list[dict]) -> list[dict]:
     """7Bの選出: ◎◯完全一致 ∧ 順序も一致（市場と完全合意）∧ 準決勝。
 
@@ -1126,6 +1131,28 @@ def rank_7b_daily_select(candidates: list[dict]) -> list[dict]:
     - `race_type` が RANK_7B_RACE_TYPES に**完全一致**すること
 
     returns 採用された候補のリスト（entropy昇順・表示用の並び順のみ）。
+
+    🔴 **2026-08-07 廃止（ユーザー判断）。常に空リストを返す。**
+       7C（ベースモデル）との比較で、**両方に傾斜配分をかけた公平な条件**でも
+       7C が実質的中率で上回った（同一母集団 2,203R: 7B 31.6% / 7C 39.0%）。
+       7B は 3点買いで元返し境界が 3.0倍と低く、**実質的中率の上限が的中率
+       30.5% そのもの**＝伸びしろが構造的に +2.3pt しかない。一方 7C は
+       的中 58.3% に対し伸びしろ +31.6pt で、傾斜配分の恩恵がまるで違う。
+       ⚠️ ROI は 7B が 1.2pt 上、7C が拾わない 3.14件/日 も失うが、
+          netkeirin の表示的中率を優先するユーザー判断で廃止した。
+
+       **判定ロジック・定数・picks_history・Web の表示と集計はすべて残す**
+       （2026-08-05 に一度畳んだときと同じ方針）。再開はこの early return を
+       外すだけ。過去行を消さないのは成績の連続性を保つため。
+    """
+    return [] if RANK_7B_STOPPED else rank_7b_select_pool(candidates)
+
+
+def rank_7b_select_pool(candidates: list[dict]) -> list[dict]:
+    """7B の選出ゲート本体（廃止中も**検査は生かしておく**）。
+
+    `rank_7b_daily_select` から切り出したのは、廃止で到達不能になったコードを
+    そのまま置くとテストが当てられず、再開したときに壊れているのに気づけないため。
     """
     pool = [
         c for c in candidates
