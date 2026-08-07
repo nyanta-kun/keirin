@@ -333,3 +333,36 @@ def test_daily_pipeline_generates_9h1_candidates():
         assert "build_9h1_candidates.py" in text, f"{name} が 9H1 候補を作っていない"
     ev = (root / "scripts" / "evening_picks_wt.sh").read_text(encoding="utf-8")
     assert "_night_s9h1_candidates.json" in ev, "夕方分の出力先が _night になっていない"
+
+
+def test_build_9h1_candidates_refuses_production_models_for_past():
+    """過去日を本番モデルでスコアしようとしたら落ちること。
+
+    既定値が本番モデル名なので、`--screen-model` の指定を忘れると**無言で**
+    in-sample な数字が出る。7H1 側と同じく機械的に止める。
+    """
+    import inspect
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts import build_9h1_candidates as b9
+    from src.wt_vintage_config import assert_vintage_for_past
+
+    src = inspect.getsource(b9.main)
+    assert "assert_vintage_for_past(" in src, "vintage ガードを呼んでいない"
+    # 波乱スコアのモデルも検査対象に入っていること（3着内率だけでは片手落ち）
+    assert '"screen": args.screen_model' in src
+
+    from datetime import date
+    with pytest.raises(ValueError, match="本番モデル"):
+        assert_vintage_for_past(
+            "2026-07-31",
+            {"eval": "lgbm_wt_eval", "screen": "lgbm_upset_screen"},
+            today=date(2026, 8, 8))
+    # vintage を渡せば通る
+    assert_vintage_for_past(
+        "2026-07-31",
+        {"eval": "lgbm_wt_eval_m2607", "screen": "lgbm_upset_screen_m2607"},
+        today=date(2026, 8, 8))

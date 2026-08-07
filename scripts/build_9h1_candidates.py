@@ -56,6 +56,7 @@ from src.preprocessing.feature_wt import (  # noqa: E402
 from src.preprocessing.upset_features import (  # noqa: E402
     build_upset_row, feature_vector,
 )
+from src.wt_vintage_config import assert_vintage_for_past  # noqa: E402
 from src.strategy_wt import (  # noqa: E402
     RANK_9H1_NE, RANK_9H1_SCORE_MIN, rank_9h1_build_legs, rank_9h1_daily_select,
     rank_9h1_stakes,
@@ -100,6 +101,12 @@ def main() -> None:
     ap.add_argument("--score-min", type=float, default=RANK_9H1_SCORE_MIN,
                     help="波乱スコアの採用閾値。**vintage を使うときは必ず併せて渡す**")
     args = ap.parse_args()
+
+    # 🔴 過去日を本番モデル（全期間学習）でスコアすると model-vintage look-ahead に
+    #    なる。既定値が本番モデル名なので、指定を忘れると**無言で**そうなっていた
+    #    （2026-08-08 に 7H1 側で機械的に止める仕組みが入ったので追随する）。
+    assert_vintage_for_past(
+        args.date, {"eval": args.eval_model, "screen": args.screen_model})
 
     by_race = _load_day(args.date)
     if not by_race:
