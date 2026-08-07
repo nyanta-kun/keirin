@@ -54,6 +54,11 @@ _DELETE_COND = "rank='RANK_7S' AND race_key LIKE '%#7S' AND race_date BETWEEN ? 
 _SCRIPT_NAME = "rebuild_7s_walkforward_pg.py"
 
 
+def _parse_upto(v: str | None):
+    """`--upto` を date へ。未指定なら None（＝当日まで）。"""
+    return date.fromisoformat(v) if v else None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -70,11 +75,16 @@ def main() -> None:
                           "指定しない場合、モデル不足を検出した時点で計算を一切開始せず"
                           "即座にエラー終了する（全期間計算後に失敗して結果を失うのを防ぐ・"
                           "2026-08-01のm2608不足によるFileNotFoundError実害を踏まえた対応）。")
+    ap.add_argument("--upto", metavar="YYYY-MM-DD", default=None,
+                    help="この日までを再構築する（当日を含めたくないときに使う）。\n"
+                         "monthly_windows は既定で当日を含み、結果未確定のレースは\n"
+                         "再構築で戻せないため、実行すると当日の行が消える。")
     args = ap.parse_args()
 
     # --tail-only は当日を含めない（tail_windows の docstring 参照）。
     # 当日分を削除すると再構築では戻せず、Web から推奨が消えるため。
-    windows = tail_windows() if args.tail_only else monthly_windows()
+    windows = (tail_windows() if args.tail_only
+               else monthly_windows(_parse_upto(args.upto)))
 
     # --- 事前チェック: build_rows(重い計算)を始める前に全窓のモデル存在を検証 ---
     # 7S は 3ヘッド軸（軸2 = argmax z(3着内率) − 0.3×z(大敗率)）で再構築するため、

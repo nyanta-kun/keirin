@@ -44,6 +44,11 @@ _DELETE_COND = "rank='RANK_7H1' AND race_key LIKE '%#7H1' AND race_date BETWEEN 
 _SCRIPT_NAME = "rebuild_7h1_walkforward_pg.py"
 
 
+def _parse_upto(v: str | None):
+    """`--upto` を date へ。未指定なら None（＝当日まで）。"""
+    return date.fromisoformat(v) if v else None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -53,9 +58,13 @@ def main() -> None:
                     help="vintageモデルpklが存在しない月をスキップして続行する。"
                          "**7H1 では 2024-01〜03 が必ず不足する**（favbustのvintageが"
                          "2024-04以降しか無いため）ので、通常は指定して流す。")
+    ap.add_argument("--upto", metavar="YYYY-MM-DD", default=None,
+                    help="この日までを再構築する（当日を含めたくないときに使う）。\n"
+                         "monthly_windows は既定で当日を含み、結果未確定のレースは\n"
+                         "再構築で戻せないため、実行すると当日の行が消える。")
     args = ap.parse_args()
 
-    windows = monthly_windows()
+    windows = monthly_windows(_parse_upto(args.upto))
     if args.tail_only:
         windows = windows[-1:]
 
