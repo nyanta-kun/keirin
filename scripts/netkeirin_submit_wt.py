@@ -354,6 +354,35 @@ def _load_meeting_waves(target_date: str) -> dict[str, str]:
     return waves
 
 
+def _load_started_races(target_date: str) -> set[str]:
+    """**すでに発走した**レースの race_key。
+
+    🔴 入稿は「まだ売れるレース」にしか意味がない。従来は入稿が朝の1回だけで
+       第1レースより前に必ず終わっていたため誰も見ていなかったが、2026-08-07 に
+       開催単位の波（昼13:00・夕18:00）と手動再実行が入ったことで、
+       **終わったレースへ商品を出しうる**ようになった。
+       実際 2026-08-07 17時の再入稿で、朝の波に 岐阜4R(09:32)・6R(10:14) が
+       未入稿のまま残っており、ガードが無ければそのまま出していた。
+
+    発走時刻が取れないレースは**発走していない扱い**にする（安全側＝出す）。
+    情報が無いことを理由に商品を落とすと、黙って商品が消える。
+    """
+    now = datetime.now().timestamp()
+    started: set[str] = set()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT race_key, start_at FROM wt_races WHERE race_date = ?",
+            (target_date,),
+        ).fetchall()
+    for r in rows:
+        try:
+            if r["start_at"] and int(r["start_at"]) <= now:
+                started.add(r["race_key"])
+        except (TypeError, ValueError):
+            continue
+    return started
+
+
 def _load_candidates(target_date: str, session: str, file_key: str) -> list[dict]:
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
     # 波ごとの再生成ファイルがあればそれを使い、無ければ朝の生成物へ落とす。
@@ -651,6 +680,7 @@ def _process_rank(
     rank_key: str, target_date: str, session: str, race_date, settings: dict[str, dict],
     already: set[tuple[str, str]], dry_run: bool, race_key_filter: str | None = None,
     claimed_races: set[str] | None = None, waves: dict[str, str] | None = None,
+    started: set[str] | None = None,
 ) -> tuple[int, list[str]]:
     cfg = RANK_CONFIGS[rank_key]
     if not _is_enabled(settings, rank_key):
@@ -666,6 +696,13 @@ def _process_rank(
         want = SESSION_WAVE.get(session)
         raw = [c for c in raw
                if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want]
+    # 発走済みのレースへは出さない（売れないので商品にならない）。
+    if started is not None:
+        n_before = len(raw)
+        raw = [c for c in raw if str(c.get("race_key", "")).split("#")[0] not in started]
+        if len(raw) < n_before:
+            print(f"[netkeirin_submit] {rank_key}: 発走済み {n_before - len(raw)}件を除外",
+                  flush=True)
     if not raw:
         return 0, []
 
@@ -1039,6 +1076,7 @@ def main() -> None:
         return
 
     waves = _load_meeting_waves(target_date)
+    started = _load_started_races(target_date)
     want_wave = SESSION_WAVE[session]
     n_wave = sum(1 for w in waves.values() if w == want_wave)
     print(f"[netkeirin_submit] {target_date} {session}: "
@@ -1055,7 +1093,8 @@ def main() -> None:
         if args.race_key:
             raw = [c for c in raw if c.get("race_key") == args.race_key]
         raw = [c for c in raw
-               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want_wave]
+               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want_wave
+               and str(c.get("race_key", "")).split("#")[0] not in started]
         per_rank_raw[rank_key] = raw
         all_race_keys.update(c["race_key"] for c in raw)
 
@@ -1072,6 +1111,7 @@ def main() -> None:
         n, failures = _process_rank(
             rank_key, target_date, session, race_date, settings, already, args.dry_run,
             race_key_filter=args.race_key, claimed_races=claimed_races, waves=waves,
+            started=started,
         )
         submitted_counts[rank_key] = n
         all_failures.extend(failures)
