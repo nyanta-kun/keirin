@@ -68,6 +68,11 @@ def insert_rows_pg(rows: list[dict], dry_run: bool) -> None:
     print(f"[rebuild-s1-pg] {len(rows)}件 書き込み完了（VPS PG）")
 
 
+def _parse_upto(v: str | None):
+    """`--upto` を date へ。未指定なら None（＝当日まで）。"""
+    return date.fromisoformat(v) if v else None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -75,9 +80,13 @@ def main() -> None:
                      help="直近月（今月）の窓のみ再構築する日次軽量運用向けオプション。"
                           "確定済み過去月は結果が変わらないため毎日再計算する必要がなく、"
                           "これのみ再実行すれば直近日をhonestな状態に保てる。")
+    ap.add_argument("--upto", metavar="YYYY-MM-DD", default=None,
+                    help="この日までを再構築する（当日を含めたくないときに使う）。\n"
+                         "monthly_windows は既定で当日を含み、結果未確定のレースは\n"
+                         "再構築で戻せないため、実行すると当日の行が消える。")
     args = ap.parse_args()
 
-    windows = monthly_windows()
+    windows = monthly_windows(_parse_upto(args.upto))
     if args.tail_only:
         windows = windows[-1:]
     wipe_from = windows[0][0]

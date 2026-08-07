@@ -102,7 +102,7 @@ def test_missing_model_without_skip_flag_aborts_before_any_computation(rebuild_m
     SystemExit(1)で終了すること（全期間計算後に失われる事故の再発防止の核心）。
     """
     mod = rebuild_module
-    monkeypatch.setattr(mod, "monthly_windows", lambda: [_WINDOW_OK, _WINDOW_MISSING])
+    monkeypatch.setattr(mod, "monthly_windows", lambda upto=None: [_WINDOW_OK, _WINDOW_MISSING])
     monkeypatch.setattr(sys, "argv", [mod.__file__])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -118,7 +118,7 @@ def test_skip_missing_models_flag_excludes_missing_window_and_continues(rebuild_
     """--skip-missing-models指定時は、不足していない窓のみbuild_rows()を呼び、
     不足窓は除外して処理を続行すること。"""
     mod = rebuild_module
-    monkeypatch.setattr(mod, "monthly_windows", lambda: [_WINDOW_OK, _WINDOW_MISSING])
+    monkeypatch.setattr(mod, "monthly_windows", lambda upto=None: [_WINDOW_OK, _WINDOW_MISSING])
     monkeypatch.setattr(sys, "argv", [mod.__file__, "--skip-missing-models"])
 
     mod.main()  # SystemExitを送出せず正常終了すること
@@ -134,7 +134,7 @@ def test_all_windows_missing_with_skip_flag_aborts_without_db_write(rebuild_modu
     """--skip-missing-models指定でも全窓が不足なら、処理対象0件でSystemExit(1)、
     rebuild_pg_atomic()は呼ばれないこと（空のDB書き込みで安全側に倒す）。"""
     mod = rebuild_module
-    monkeypatch.setattr(mod, "monthly_windows", lambda: [_WINDOW_MISSING])
+    monkeypatch.setattr(mod, "monthly_windows", lambda upto=None: [_WINDOW_MISSING])
     monkeypatch.setattr(sys, "argv", [mod.__file__, "--skip-missing-models"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -148,7 +148,7 @@ def test_all_windows_missing_with_skip_flag_aborts_without_db_write(rebuild_modu
 def test_no_missing_models_runs_normally(rebuild_module, monkeypatch):
     """モデルが全窓揃っている通常ケースでは、警告なしに全窓が計算されること。"""
     mod = rebuild_module
-    monkeypatch.setattr(mod, "monthly_windows", lambda: [_WINDOW_OK])
+    monkeypatch.setattr(mod, "monthly_windows", lambda upto=None: [_WINDOW_OK])
     monkeypatch.setattr(sys, "argv", [mod.__file__])
 
     mod.main()
