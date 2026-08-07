@@ -790,6 +790,13 @@ def _process_rank(
                 f"  コメント:\n{comment}\n",
                 flush=True,
             )
+            # 🔴 dry-run でも**レースを確保する**。netkeirin は1レース1商品なので
+            #    本番では先に入稿したランクが取り、後続ランクは衝突としてスキップされる。
+            #    ここで確保しないと dry-run だけ同じレースが複数ランクで出力され、
+            #    「本番で何が出るか」を確かめる道具として嘘をつく
+            #    （2026-08-07 実測: 伊東9R が 7B と 7C の両方に出ていた）。
+            if claimed_races is not None:
+                claimed_races.add(race_key)
             n_submitted += 1
             continue
 
