@@ -1277,6 +1277,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
+        rank_7c_is_lowpay_pattern,
         RANK_7C_P3_SUM_MIN, RANK_7C_LEGS_MIN,
         rank_7ss_daily_select, rank_7ss_same_line,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
@@ -1891,6 +1892,9 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     legs_7c = rank_7c_select_legs(others_7c, top3_probs)
                 else:
                     legs_7c = []
+                # 低配当パターン（上位3車が抜けている ∧ その3車が同一ライン）は見送る。
+                # `_lg` は 7SS 判定でも使っている line_group の辞書。
+                lowpay_7c = rank_7c_is_lowpay_pattern(top3_probs, _lg)
 
                 # 7SS（2026-08-05新設）判定用。軸2車が同一ラインか。
                 # line_group は wt_entries 由来で build_features_wt が引き回している。
@@ -1928,6 +1932,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     "axis2_7c": sel_7c[1] if sel_7c else None,
                     "p3_sum_top2": round(sel_7c[2], 6) if sel_7c else None,
                     "legs_7c": legs_7c,
+                    "lowpay_pattern": lowpay_7c,
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
@@ -2027,9 +2032,11 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         click.echo(f"[保存先] {rank_7c_path}  (7C候補 {len(rank_7c_candidates)}件/"
                    f"{len(rank_7s_raw_candidates)}件中・上位2車の3着内率合計>="
                    f"{RANK_7C_P3_SUM_MIN} ∧ 相手{RANK_7C_LEGS_MIN}点以上/ペーパー検証)")
+        _n_lowpay = sum(1 for c in rank_7s_raw_candidates if c.get("lowpay_pattern"))
         click.echo(f"[wt] 7C母集団: 合計条件通過={_n_sum_ok} → 相手"
-                   f"{RANK_7C_LEGS_MIN}点以上={len(rank_7c_candidates)}  "
-                   f"(p3欠損 {_n_no_p3}件)")
+                   f"{RANK_7C_LEGS_MIN}点以上 ∧ 低配当パターン除外"
+                   f"={len(rank_7c_candidates)}  "
+                   f"(低配当パターン該当 {_n_lowpay}件 / p3欠損 {_n_no_p3}件)")
         if _n_no_p3:
             click.echo(f"[wt][警告] 7C: p3_sum_top2 が算出できない候補が {_n_no_p3}件 "
                        f"あります（pred_top3 の欠損）。", err=True)
