@@ -220,14 +220,17 @@ def test_judge_ignores_placeholder_odds():
 
 # ── 廃止（2026-08-07・ユーザー判断）────────────────────────────────
 
-def test_7bは廃止されており候補を返さない():
-    """7C との比較で、**両方に傾斜配分をかけた公平な条件**でも 7C が
-    実質的中率で上回ったため廃止（同一母集団 2,203R: 7B 31.6% / 7C 39.0%）。
+def test_7bは稼働しており7Cより後ろで入稿される():
+    """2026-08-07: 一度は廃止したが、同日中に**「7C の下に置き、重複は 7C・
+    独自レースだけ 7B」**へユーザー判断が変わった。
 
-    ⚠️ ゲートのロジック自体は `rank_7b_select_pool` に残してあり、上のテスト群が
-       引き続き守っている。再開は `RANK_7B_STOPPED = False` の1行。
+    7C との重複では 7C が実質的中率で上回る（39.0% vs 31.6%）一方、
+    7B は 7C が拾わないレースを 3.14件/日 持つ。優先順位だけでこれを実現する。
     """
-    assert sw.RANK_7B_STOPPED is True
+    from scripts.netkeirin_submit_wt import RANK_ORDER
+
+    assert sw.RANK_7B_STOPPED is False
     ok = _cand("ok", 2, False)
-    assert sw.rank_7b_select_pool([ok]) != []      # ロジックは生きている
-    assert sw.rank_7b_daily_select([ok]) == []     # が、選出はされない
+    assert sw.rank_7b_daily_select([ok]) != []
+    # netkeirin は1レース1商品。**7C より後ろ**に置くことで重複は 7C が取る。
+    assert RANK_ORDER.index("7B") > RANK_ORDER.index("7C")
