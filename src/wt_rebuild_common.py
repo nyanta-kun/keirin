@@ -42,7 +42,7 @@ from src.database import get_connection
 from src.models.trainer import MODEL_DIR
 from src.notify.discord import send as _discord_send
 from src.strategy_wt import THREE_HEAD_AXIS_SINCE
-from src.wt_vintage_config import bad_model_name
+from src.wt_vintage_config import bad_model_name, favbust_model_name
 
 # (date_from, date_to, eval_model_name, win_model_name)
 Window = tuple[str, str, str, str]
@@ -52,6 +52,7 @@ MissingWindow = tuple[Window, list[str]]
 
 def split_by_model_availability(
     windows: list[Window], require_bad: bool = False,
+    require_favbust: bool = False,
 ) -> tuple[list[Window], list[MissingWindow]]:
     """各窓のeval/winモデルpklが存在するか事前チェックする。
 
@@ -76,6 +77,8 @@ def split_by_model_availability(
         required = [eval_model, win_model]
         if require_bad:
             required.append(bad_model_name(eval_model))
+        if require_favbust:
+            required.append(favbust_model_name(eval_model))
         missing_names = [
             name for name in required
             if not (MODEL_DIR / f"{name}.pkl").exists()
@@ -107,13 +110,19 @@ def notify_discord_warning(content: str) -> None:
         print(f"[wt_rebuild_common] Discord通知で例外が発生しました: {exc}\n内容: {content}")
 
 
+# 2026-08-06: 7H1（唯一の2券種ランク）のため trifecta_payout を追加した。
+# 三連複のみのランク（7SS/7S/7A/7B/9S/9A）は rows に持たないので、挿入時に
+# 0 を補う（下記 _row_defaults）。gate_label も 7H1 は持たないため同様に補う。
 _INSERT_SQL = (
     "INSERT OR REPLACE INTO picks_history "
     "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
-    " trio_payout,bet_amount,route,miwokuri,gate_label) "
+    " trio_payout,trifecta_payout,bet_amount,route,miwokuri,gate_label) "
     "VALUES (:race_date,:race_key,:rank,:pred_combo,:n_combos,:hit,"
-    " :payout,:trio_payout,:bet_amount,'wt',:miwokuri,:gate_label)"
+    " :payout,:trio_payout,:trifecta_payout,:bet_amount,'wt',:miwokuri,:gate_label)"
 )
+
+#: ランクごとに持たない列を補う既定値（**行側の値が常に優先される**）。
+_ROW_DEFAULTS = {"trifecta_payout": 0, "gate_label": None}
 
 
 # 3ヘッド軸選定で選ばれた live 記録を、旧軸の再構築で上書きしてはいけないランク。
@@ -124,7 +133,7 @@ _INSERT_SQL = (
 #    2026-08-05 に 7SS を新設した際ここへの追加が漏れており、旧軸での tail 再構築が
 #    無警告で通る状態だった（2026-08-06 是正。同種の「ランク一覧の手書き二重管理」は
 #    netkeirin_submit_wt.py の RANK_ORDER でも同日に事故を起こしている）。
-_THREE_HEAD_RANKS = frozenset({"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B"})
+_THREE_HEAD_RANKS = frozenset({"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_7H1"})
 
 
 def rebuild_pg_atomic(
@@ -223,7 +232,7 @@ def rebuild_pg_atomic(
                 f"DELETE FROM picks_history WHERE {delete_cond_sql}",
                 (date_from, date_to),
             )
-            rows_ins = [{**r, "miwokuri": False} for r in rows]
+            rows_ins = [{**_ROW_DEFAULTS, **r, "miwokuri": False} for r in rows]
             conn.executemany(_INSERT_SQL, rows_ins)
             print(f"[{rank_label}] {date_from}〜{date_to}: {len(rows)}件 挿入（未コミット）")
             n_windows_written += 1

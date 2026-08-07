@@ -42,6 +42,19 @@ def bad_model_name(eval_model_name: str) -> str:
     return eval_model_name.replace("lgbm_wt_eval_", "lgbm_wt_bad_", 1)
 
 
+def favbust_model_name(eval_model_name: str) -> str:
+    """eval の vintage 名から、対応するバスト予測モデルの vintage 名を導く。
+
+    例: "lgbm_wt_eval_m2404" → "lgbm_wt_favbust_m2404"
+
+    7H1（穴推奨・本命バスト型）専用。`bad_model_name()` と同じ理由で
+    `monthly_windows()` のタプルは広げず、必要な呼び出し側だけが本関数で導く。
+    ⚠️ favbust の vintage は **2024-04 以降のみ**存在する（それ以前は学習に
+    必要な履歴が足りない）。2024-01〜03 の窓は `--skip-missing-models` で除外される。
+    """
+    return eval_model_name.replace("lgbm_wt_eval_", "lgbm_wt_favbust_", 1)
+
+
 def month_bounds(y: int, m: int, upto: date | None = None) -> tuple[str, str]:
     """月(y,m)の(test_from, test_to)を返す。upto指定時は当月分をuptoで打ち切る。"""
     first = date(y, m, 1)
