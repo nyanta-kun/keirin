@@ -96,8 +96,34 @@ _DEFAULT_COMMENT_TEMPLATE = (
 # entropy不合格 × 軸2車が同一ライン）は、ここで削除した旧7SS（波乱軸選出）とは
 # 無関係の別ランク**で名前のみ継承している。現行7SSは 7S/7A と同じ候補プールから
 # 選ばれ朝の候補JSON（file_key='s7ss'）を持つため、通常どおり本スクリプトで入稿できる。
+# 🔴 **この dict の定義順がそのまま入稿の優先順位**（RANK_ORDER が list(RANK_CONFIGS)）。
+#    netkeirin は1レース1商品なので、同じレースに複数ランクが該当したときは
+#    先に来たランクが取り、後続はスキップする。
+#    優先順位（2026-08-07 ユーザー指定）: **7H1 > 7SS > 7S > 7A > 7B > 7C**。
+#    ⚠️ 2026-08-07 以前は 7H1 が dict の末尾にあり **最下位**だった。7H1 を先頭へ
+#      移したのはこのとき（穴狙いを最優先で出す、というユーザー判断）。
+#    9S/9A は9車立て専用なので7車ランクとは衝突しない（位置は成績に影響しない）。
 RANK_CONFIGS: dict[str, dict[str, Any]] = {
-    # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。最上位ランク。
+    # 7H1（2026-08-06新設・穴推奨「本命バスト型」）。**唯一の2券種ランク**で、
+    # 三連単フォーメーション（1着1車×2着2車×3着5車＝8点）と
+    # 三連複BOX（プール上位5車＝最大10点）を **1商品にまとめて** 入稿する
+    # （netkeirin の kaime は配列なので submit は1回。2回送ると上書きになる）。
+    # 買い目は候補JSONの legs_tf / legs_trio を**正**として復元する（下記
+    # _normalize_multi_candidate）。stake も候補JSON側（予算枠から算出済み）を使う
+    # ため stake_per_line は持たない。
+    "7H1": {"file_key": "s7h1", "n_cars": 7, "multi_bet": True, "gate_filter": None,
+            "act_type": ACT_TYPE_LONGSHOT,   # 勝負アイコン「穴狙い」
+            "default_comment": (
+                "本日の穴狙いをお届けします。\n\n"
+                "当方の指数で頭ひとつ抜けた1車が、それでも4着以下に沈むと読んだレースだけを"
+                "選んでいます。抜けた1番手が消えれば、配当は跳ねます。\n\n"
+                "その1車と、同じラインの選手は買い目から外しました。"
+                "本命が飛ぶときは番手も一緒に飛ぶ傾向があるためです。\n\n"
+                "買い目は三連単と三連複の併せ買い。"
+                "三連単で大きな配当を狙い、三連複で的中を拾う組み立てにしています。\n\n"
+                "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
+            )},
+    # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
     # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物で名前のみ継承。
     "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_per_line": 2000, "gate_filter": None},
     "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
@@ -123,23 +149,31 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             )},
     "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
     "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
-    # 7H1（2026-08-06新設・穴推奨「本命バスト型」）。**唯一の2券種ランク**で、
-    # 三連単フォーメーション（1着1車×2着2車×3着5車＝8点）と
-    # 三連複BOX（プール上位5車＝最大10点）を **1商品にまとめて** 入稿する
-    # （netkeirin の kaime は配列なので submit は1回。2回送ると上書きになる）。
-    # 買い目は候補JSONの legs_tf / legs_trio を**正**として復元する（下記
-    # _normalize_multi_candidate）。stake も候補JSON側（予算枠から算出済み）を使う
-    # ため stake_per_line は持たない。
-    "7H1": {"file_key": "s7h1", "n_cars": 7, "multi_bet": True, "gate_filter": None,
-            "act_type": ACT_TYPE_LONGSHOT,   # 勝負アイコン「穴狙い」
+    # 7C（2026-08-07新設・ベースモデル「終日の二軸」）。**必ず最下位に置くこと**。
+    # 母集団が全7車レースで他ランクと排他ではないため、上位ランクが取った
+    # レースは 7C が降りる。この衝突は**想定内**なので `overlap_expected` で
+    # 失敗集計から外す（本物の失敗を埋もれさせないため）。
+    # ⚠️ 軸は候補JSONの `axis1_7c`/`axis2_7c`（pred_top3 上位2車）で、
+    #    `axis1`/`axis2`（3ヘッド軸）とは**別物**。取り違えると別の買い目になる。
+    # ⚠️ **総流しではない**。相手は `legs_7c`（3着内率15%以上・4〜5点で可変）。
+    # ⚠️ 賭け金も**可変**（1レース10,000円の予算枠 ÷ 点数）なので
+    #    stake_per_line ではなく stake_budget を持つ。
+    "7C":  {"file_key": "s7c", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "gate_filter": None,
+            "axis_keys": ("axis1_7c", "axis2_7c"),
+            "partners_key": "legs_7c",
+            "stake_budget": 10000,
+            "overlap_expected": True,
+            # ⚠️ 文面は買い目の実態と必ず一致させること（7B で不一致を出した前例あり）。
+            #    総流しではなく「3着に来そうにない車を外した4〜5点」である点、
+            #    点数によって1点あたりの金額が変わる点を明記する。
             "default_comment": (
-                "本日の穴狙いをお届けします。\n\n"
-                "当方の指数で頭ひとつ抜けた1車が、それでも4着以下に沈むと読んだレースだけを"
-                "選んでいます。抜けた1番手が消えれば、配当は跳ねます。\n\n"
-                "その1車と、同じラインの選手は買い目から外しました。"
-                "本命が飛ぶときは番手も一緒に飛ぶ傾向があるためです。\n\n"
-                "買い目は三連単と三連複の併せ買い。"
-                "三連単で大きな配当を狙い、三連複で的中を拾う組み立てにしています。\n\n"
+                "本日の二軸をお届けします。\n\n"
+                "当方の指数で、複勝率の高い2車がはっきり抜けているレースだけを"
+                "選んでいます。1日を通してお出しする、二軸探偵の土台となる予想です。\n\n"
+                "買い目は三連複・軸2車からの流しですが、総流しではありません。"
+                "3着以内に届きそうにない車は相手から外しています。\n"
+                "また、相手が絞り込めすぎるレース（力の差が大きく、当たっても"
+                "配当が期待できないレース）は、あらかじめ見送っています。\n\n"
                 "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
             )},
 }
@@ -327,6 +361,23 @@ def _record_submission(
 # ランクごとの候補正規化（S1のキー構造は他ランクと異なるため吸収する）
 # ---------------------------------------------------------------------------
 
+def _stake_per_line(cfg: dict, n_lines: int) -> int:
+    """1点あたりの賭け金を返す。
+
+    通常ランクは cfg["stake_per_line"] の固定額。7C のように**点数が可変**な
+    ランクは cfg["stake_budget"]（1レースの予算枠）を点数で割り 100円単位へ
+    切り捨てる（strategy_wt.rank_7c_unit_stake と同じ式）。
+    固定額のまま可変点数のランクを入稿すると、点数が少ない日ほど投資が減って
+    ペーパー成績と実入稿が食い違う。
+    """
+    budget = cfg.get("stake_budget")
+    if budget:
+        if n_lines <= 0:
+            raise ValueError("点数0では賭け金を決められません")
+        return max(100, (int(budget) // n_lines) // 100 * 100)
+    return int(cfg["stake_per_line"])
+
+
 def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], dict[int, str]]:
     """候補dictから (axis1, axis2, partners, marks) を返す。
     axis2 は trifecta_axis1 では submit_pick に渡さないが、テンプレート変数用に
@@ -335,7 +386,13 @@ def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], di
     if cfg["bet_kind"] == BET_KIND_TRIFECTA_AXIS1:
         axis1, p1, p2 = int(cand["axis"]), int(cand["p1"]), int(cand["p2"])
         return axis1, p1, [p1, p2], {axis1: "◎", p1: "○", p2: "▲"}
-    axis1, axis2 = int(cand["axis1"]), int(cand["axis2"])
+    # 軸のキーはランクによって違う。7C は軸の選び方が他ランク（3ヘッド）と別で、
+    # 候補JSONに `axis1_7c`/`axis2_7c` として入っている。`axis1`/`axis2` を
+    # 読んでしまうと**別の買い目を入稿する**ので、cfg の宣言に従う。
+    k1, k2 = cfg.get("axis_keys", ("axis1", "axis2"))
+    if cand.get(k1) is None or cand.get(k2) is None:
+        raise ValueError(f"軸キー {k1}/{k2} が候補JSONにありません")
+    axis1, axis2 = int(cand[k1]), int(cand[k2])
     # 相手を絞るランク（7B: WT△を外した pred_prob 上位3車）は候補JSONが持つ
     # 絞り込み済みリストをそのまま使う。総流しランク（7S/7A/9S/9A）は従来通り
     # 軸以外の全車が相手。partners_key が無い＝総流し、が既定。
@@ -500,10 +557,16 @@ def _process_rank(
     failures: list[str] = []
     is_multi = bool(cfg.get("multi_bet"))
 
+    # 衝突の扱いはランクによって意味が違う。**排他設計のランク**（7SS/7S/7A/7B/9S/
+    # 9A/7H1）で衝突が起きたのは想定外なので失敗として可視化する。一方 7C のような
+    # **重複前提のランク**（`overlap_expected`）では衝突は日常（実測 2.4件/日）で、
+    # 失敗に混ぜるとサマリーが常時赤くなり本物の失敗が埋もれる。
+    overlap_expected = bool(cfg.get("overlap_expected"))
     for cand in conflicts:
         msg = (f"{cand.get('venue_name', '?')}{cand.get('race_no', '?')}R({rank_key}): "
                f"別ランクが同じレースを入稿済みのためスキップ")
-        failures.append(msg)
+        if not overlap_expected:
+            failures.append(msg)
         print(f"[netkeirin_submit] {msg}", flush=True)
 
     for cand, gate_label in pending:
@@ -545,7 +608,8 @@ def _process_rank(
                 "\n".join(f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
                           for leg in legs)
                 if is_multi else
-                f"  軸={axis1} 相手={partners} 賭け金={cfg['stake_per_line']}円/点"
+                f"  軸={axis1} 相手={partners} "
+                f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点"
             )
             print(
                 f"[dry-run] {venue_name}{race_no}R ({rank_key}) 印={marks}\n"
@@ -572,7 +636,8 @@ def _process_rank(
                     n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
                     axis1=axis1,
                     axis2=(axis2_or_p1 if cfg["bet_kind"] == BET_KIND_TRIO_AXIS2 else None),
-                    partners=partners, stake_per_line=cfg["stake_per_line"],
+                    partners=partners,
+                    stake_per_line=_stake_per_line(cfg, len(partners)),
                     title=title, comment=comment,
                     # 「自信あり」は最上位の 7SS のみ（2026-08-05・ユーザー指示）。
                     # 上限に当たれば client 側が type=0 で自動リトライする。
@@ -676,7 +741,8 @@ def _process_manual(
     if dry_run:
         print(
             f"[dry-run][manual] {venue_name}{race_no}R ({rank_key}) "
-            f"軸={axis1}-{axis2} 相手={partners} 賭け金={cfg['stake_per_line']}円/点\n"
+            f"軸={axis1}-{axis2} 相手={partners} "
+            f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点\n"
             f"  タイトル: {title}\n"
             f"  コメント:\n{comment}\n",
             flush=True,
@@ -688,7 +754,8 @@ def _process_manual(
             race_date=race_date, venue_name=venue_name, race_no=race_no,
             n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
             axis1=axis1, axis2=axis2, partners=partners,
-            stake_per_line=cfg["stake_per_line"], title=title, comment=comment,
+            stake_per_line=_stake_per_line(cfg, len(partners)),
+            title=title, comment=comment,
         )
     except Exception as e:
         ok, msg = False, f"例外: {e}"

@@ -41,6 +41,7 @@ from src.notify.discord import send
 from src.strategy_wt import (
     rank_7h1_stakes,
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
+    RANK_7C_NE, RANK_7C_LEGS_MIN, rank_7c_select_legs, rank_7c_unit_stake,
     rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_STAKE,
     line_score_features, rank_7s_gate_label, ss_policy,
@@ -1417,6 +1418,279 @@ def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_comb
             logger.warning("7A pick VPS 書き込み失敗 %s: %s", race_key, e)
 
 
+# ── 7C（ベースモデル・終日の二軸・2026-08-07新設）─────────────────────────
+#    選別も軸も「モデル3着内率」だけで決まる（オッズ不使用）。
+#    7S/7A/7SS と違い **総流しではなく相手を足切りし、点数が可変**（4〜5点）で、
+#    賭け金は 1レース RANK_7C_BUDGET 円の予算枠を点数で割る。
+#    根拠は strategy_wt.RANK_7C_P3_SUM_MIN 定義部のセクションコメント参照。
+
+def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+    """7Cの発走前ライブオッズ判定（純関数・DB非依存）。
+
+    cand:        朝の7C候補JSON行（axis1/axis2 は _load_rank_7c_candidates が
+                 7C の軸に差し替え済み。相手は `legs_7c`・`top3_probs` を持つ）
+    trio_lookup: _build_odds_lookup(odds_data, "trio") が返す {frozenset: odds}
+
+    判定:
+      ① 盤面（有効オッズの掲載車）が RANK_7C_NE 車 — 欠車なら見送り
+         （7S/7A/7SS と同じ規約。7C は点数ゲートがあるので欠車で条件が変わりうる）
+      ② 軸2車が盤面に在籍
+      ③ 相手を**盤面から再計算**する（朝の legs_7c をそのまま使わない）。
+         `top3_probs` があれば rank_7c_select_legs を通し、無い旧形式のみ
+         legs_7c へフォールバックする（7B と同じ方針）
+      ④ 相手が RANK_7C_LEGS_MIN 点未満なら見送り
+         ＝「相手が絞れる＝実力差が大きい＝配当が付かない」ので買わない
+      ⑤ 賭け金 = rank_7c_unit_stake(点数)（予算枠を点数で割る）
+
+    returns (decision, detail)
+      decision: "buy" / "skip" / "不明"（盤面なし→次分再試行）
+      detail:   axis1/axis2 / combos / leg_odds / stake / skip_reason
+    """
+    detail: dict = {"axis1": None, "axis2": None, "combos": [], "leg_odds": {},
+                    "stake": None, "skip_reason": None}
+    try:
+        axis1 = int(cand["axis1"])
+        axis2 = int(cand["axis2"])
+    except (KeyError, TypeError, ValueError):
+        detail["skip_reason"] = "候補情報不正"
+        return "skip", detail
+    detail["axis1"], detail["axis2"] = axis1, axis2
+
+    if not trio_lookup:
+        return "不明", detail
+
+    valid: dict[frozenset, float] = {}
+    for k, ov in trio_lookup.items():
+        try:
+            fv = float(ov)
+        except (TypeError, ValueError):
+            continue
+        if 0 < fv < 9000:
+            valid[k] = fv
+    if not valid:
+        return "不明", detail
+
+    board: set[int] = set()
+    for k in valid:
+        board |= set(k)
+
+    if len(board) != RANK_7C_NE:
+        detail["skip_reason"] = f"盤面{len(board)}車（欠車）"
+        return "skip", detail
+    if axis1 not in board or axis2 not in board:
+        detail["skip_reason"] = "軸が盤面に不在"
+        return "skip", detail
+
+    others = sorted(board - {axis1, axis2})
+    probs = {int(k): float(v) for k, v in (cand.get("top3_probs") or {}).items()}
+    if probs:
+        legs = rank_7c_select_legs(others, probs)
+    else:
+        legs = [x for x in (cand.get("legs_7c") or []) if x in board]
+
+    if len(legs) < RANK_7C_LEGS_MIN:
+        detail["skip_reason"] = f"相手{len(legs)}点（{RANK_7C_LEGS_MIN}点未満・低配当回避）"
+        return "skip", detail
+
+    combos, leg_odds = [], {}
+    for t in legs:
+        key = frozenset({axis1, axis2, t})
+        ov = valid.get(key)
+        if ov is None:
+            continue
+        combos.append("-".join(map(str, sorted(key))))
+        leg_odds[str(t)] = ov
+    if len(combos) < RANK_7C_LEGS_MIN:
+        detail["skip_reason"] = f"オッズ取得できた目が{len(combos)}点"
+        return "skip", detail
+
+    detail["combos"] = combos
+    detail["leg_odds"] = leg_odds
+    detail["thirds"] = legs
+    detail["stake"] = rank_7c_unit_stake(len(combos))
+    return "buy", detail
+
+
+def _load_rank_7c_candidates(today: str) -> list[dict]:
+    """当日の7C候補 JSON（昼 + 夜）を読み込む。
+
+    ⚠️ **他ランクとの排他ガードは掛けない。** 7C は wt_overlap_n を一切見ないので
+       7S/7A/7SS/7B/7H1 と同一レースに併存するのが正常な設計であり、
+       `_exclude_overlapping_races` を掛けると本来の母集団が削れる。
+       1レース1商品の制約は netkeirin 入稿側だけで解決する。
+
+    ⚠️ 7C の軸は候補JSONの `axis1_7c`/`axis2_7c`（pred_top3 上位2車）で、
+       `axis1`/`axis2`（3ヘッド軸）とは**別物**。judge_rank_7s は `axis1`/`axis2`
+       を読むため、ここで 7C の軸を差し込んだコピーを返す。元の3ヘッド軸は
+       `axis1_3head`/`axis2_3head` に退避して調査時に追えるようにする。
+    """
+    picks_dir = Path(__file__).parent.parent / "data" / "picks"
+    raw: list[dict] = []
+    for fname in (f"wave_picks_wt_{today}_s7c_candidates.json",
+                  f"wave_picks_wt_{today}_night_s7c_candidates.json"):
+        p = picks_dir / fname
+        if p.exists():
+            try:
+                raw += json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("7C候補 JSON 読み込み失敗 %s: %s", p.name, e)
+    out: list[dict] = []
+    for c in raw:
+        if c.get("axis1_7c") is None or c.get("axis2_7c") is None:
+            logger.warning("7C候補に軸がありません（スキップ）: %s", c.get("race_key"))
+            continue
+        d = dict(c)
+        d["axis1_3head"], d["axis2_3head"] = c.get("axis1"), c.get("axis2")
+        d["axis1"], d["axis2"] = c["axis1_7c"], c["axis2_7c"]
+        out.append(d)
+    return out
+
+
+def _insert_rank_7c_pick(race_key: str, race_date: str, pred_combo: str,
+                         n_combos: int, stake: int) -> None:
+    """7C（ベースモデル・ペーパー）の記録行 {base}#7C を picks_history に即時反映する。
+
+    ⚠️ 他ランクと違い **stake が可変**（予算枠 ÷ 点数）なので呼び出し側から渡す。
+       固定 STAKE を掛けると投資額が実態とずれて ROI が壊れる。
+    """
+    store_key = race_key + "#7C"
+    bet = n_combos * stake
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO picks_history "
+                "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                "VALUES (?,?,?,?,?,0,0,0,?,'wt',False)",
+                (race_date, store_key, "RANK_7C", pred_combo, n_combos, bet),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("7C pick SQLite 書き込み失敗 %s: %s", race_key, e)
+
+    db_url = os.environ.get("KEIRIN_DB_URL")
+    if db_url:
+        try:
+            import psycopg2  # noqa: PLC0415
+            with psycopg2.connect(db_url) as vconn:
+                with vconn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO keirin.picks_history "
+                        "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,%s,'wt',False) "
+                        "ON CONFLICT (race_key) DO UPDATE SET "
+                        "rank=EXCLUDED.rank, pred_combo=EXCLUDED.pred_combo, "
+                        "n_combos=EXCLUDED.n_combos, bet_amount=EXCLUDED.bet_amount",
+                        (race_date, store_key, "RANK_7C", pred_combo, n_combos, bet),
+                    )
+        except Exception as e:
+            logger.warning("7C pick VPS 書き込み失敗 %s: %s", race_key, e)
+
+
+def _build_rank_7c_message(cand: dict, race_info: dict, detail: dict) -> str:
+    """7C（ベースモデル・ペーパー）の15分前 Discord 通知メッセージ。"""
+    venue = cand.get("venue_name", "?")
+    race_no = race_info.get("race_no", cand.get("race_no", "?"))
+    start = cand.get("start_time", "--:--")
+    axis1, axis2 = detail.get("axis1"), detail.get("axis2")
+    combos = detail.get("combos") or []
+    leg_odds = detail.get("leg_odds") or {}
+    n_pts = len(combos)
+    lines = []
+    for c in combos:
+        ov = leg_odds.get(c)
+        ov_str = f"{float(ov):.1f}倍" if ov is not None else "取得不可"
+        lines.append(f"    {c}:  {ov_str}")
+    p3sum = cand.get("p3_sum_top2")
+    p3_str = f"{100 * float(p3sum):.1f}%" if p3sum is not None else "—"
+    stake = int(detail.get("stake") or 0)
+    thirds = detail.get("thirds") or []
+    return (
+        f"🧭 **[7C]  {venue} {race_no}R  発走 {start}**\n"
+        f"  軸: 複勝率トップ2 {axis1}/{axis2}（ベースモデル・終日対象）\n"
+        f"  三連複 軸2車－相手{n_pts}車({n_pts}点 × {stake:,}円 = "
+        f"{n_pts * stake:,}円): "
+        f"`{axis1}={axis2}-{','.join(map(str, thirds))}`\n"
+        f"  **上位2車の複勝率合計={p3_str}**\n"
+        f"\n"
+        f"  📊 現在オッズ（締切10分前）:\n"
+        + "\n".join(lines)
+    )
+
+
+def _process_rank_7c_candidates(today: str, now_unix: int, notified: set[str]) -> tuple[list, set]:
+    """7C候補の発走前判定・記録・通知メッセージ生成（_process_rank_7ss_candidates の7C版）。"""
+    cands = _load_rank_7c_candidates(today)
+    if not cands:
+        return [], set()
+
+    race_info_map = _load_race_info(
+        [c["race_key"] for c in cands if "race_key" in c])
+
+    in_window: list[tuple[dict, dict]] = []
+    for cand in cands:
+        rk = cand.get("race_key")
+        if not rk or f"{rk}#7C" in notified:
+            continue
+        ri = race_info_map.get(rk)
+        if ri is None or ri.get("n_entries") != RANK_7C_NE:
+            continue
+        notify_at = int(ri["start_at"]) - NOTIFY_BEFORE_START_SEC
+        if notify_at <= now_unix < notify_at + NOTIFY_WINDOW_SEC:
+            in_window.append((cand, ri))
+    if not in_window:
+        return [], set()
+
+    scraper = WinticketScraper(request_interval=1.0)
+    messages: list[tuple[str, str]] = []
+    newly_done: set[str] = set()
+    for cand, ri in in_window:
+        rk = cand["race_key"]
+        rank_7c_key = f"{rk}#7C"
+        try:
+            odds_data = scraper.fetch_odds(
+                venue_id  = ri["venue_id"],
+                race_date = ri["race_date"],
+                race_no   = ri["race_no"],
+                cup_id    = ri["cup_id"],
+                day_index = ri["day_index"],
+            )
+        except Exception as e:
+            logger.warning("fetch_odds 失敗(7C) %s: %s", rk, e)
+            odds_data = None
+        if odds_data is None:
+            print(f"[prerace] {rk} 7C候補 → オッズ取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        trio_lookup = _build_odds_lookup(odds_data, "trio")
+        decision, detail = judge_rank_7c(cand, trio_lookup)
+        if decision == "不明":
+            print(f"[prerace] {rk} 7C候補 → 盤面取得不可（次回再試行）", flush=True)
+            time.sleep(0.3)
+            continue
+
+        _save_decision(today, rank_7c_key, {
+            "decision": decision, "rank": "RANK_7C", "paper": True,
+            "p3_sum_top2": cand.get("p3_sum_top2"),
+            "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
+        })
+
+        if decision == "buy":
+            combos = detail["combos"]
+            thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
+            pred = (f"{detail['axis1']}={detail['axis2']}-"
+                    + ",".join(map(str, thirds)))
+            _insert_rank_7c_pick(rk, today, pred, len(combos), int(detail["stake"]))
+            messages.append((rank_7c_key, _build_rank_7c_message(cand, ri, detail)))
+            print(f"[prerace] {rk} 7C候補 → buy（ペーパー・{len(combos)}点）", flush=True)
+        else:
+            _mark_paper_miwokuri(rk, "#7C")
+            print(f"[prerace] {rk} 7C候補 → skip: {detail.get('skip_reason')}", flush=True)
+        newly_done.add(rank_7c_key)
+        time.sleep(0.3)
+    return messages, newly_done
+
+
 def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
     """7A（境界ランク・ペーパー）の15分前 Discord 通知メッセージ。"""
     venue = cand.get("venue_name", "?")
@@ -2751,6 +3025,16 @@ def main():
         newly_done |= rank_7b_done
     except Exception as e:
         logger.exception("7B候補処理失敗（他ランク通知には影響しない）: %s", e)
+
+    # ── 7C候補（ベースモデル・終日の二軸・三連複5点・ペーパー）処理 ────────────
+    # 2026-08-07新設。**他ランクとは排他ではない**（wt_overlap_n を見ないため
+    # 同一レースに併存しうる）。1レース1商品の制約は netkeirin 入稿側で解決する。
+    try:
+        rank_7c_messages, rank_7c_done = _process_rank_7c_candidates(today, now_unix, notified)
+        messages += rank_7c_messages
+        newly_done |= rank_7c_done
+    except Exception as e:
+        logger.exception("7C候補処理失敗（他ランク通知には影響しない）: %s", e)
 
     # ── 9A候補（S9の境界ランク・ペーパー）処理 ──────────────────────────────
     # 2026-07-27導入。S9とは論理的に排他（2ゲート中1つだけ不合格）。
