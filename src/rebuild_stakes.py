@@ -89,7 +89,21 @@ def stakes_for_combos(
     top3_probs は **その時点の vintage 予測**（0-1 スケール）。
     board は朝オッズ盤面（無ければ p3 単独へ落ちる＝本番と同じ）。
     """
+    # 🔴 **p3 が無ければ落とす。黙って均等へ落としてはいけない。**
+    #    本番の `landing_weights` は p3 欠損時に均等へフォールバックするが、
+    #    それは「入稿時に予測が読めなかった」ための救済。再構築では p3 は
+    #    必ず手元にあるので、**空なら呼び出し側のバグ**である。
+    #    2026-08-07: 実際に7ランク中5つで候補dictへの `top3_probs` 登録が漏れ、
+    #    11時間の再構築が丸ごと均等配分で走った（実質的中率が +0.22pt しか
+    #    動かず気づいた）。無言のフォールバックは検知できない。
+    if not top3_probs:
+        raise ValueError(
+            "top3_probs が空です。候補dictへ 'top3_probs' を載せ忘れていませんか"
+            "（再構築では p3 は必ず取れるはずで、空なら呼び出し側のバグ）")
     thirds = [next(iter(c - {axis1, axis2})) for c in combos]
+    missing = [t for t in thirds if not top3_probs.get(t)]
+    if missing:
+        raise ValueError(f"top3_probs に買う相手の値がありません: {missing}")
     morning = None
     if board:
         got = {t: board.get(frozenset({axis1, axis2, t})) for t in thirds}

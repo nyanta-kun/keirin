@@ -206,6 +206,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
             "others": others, "trio": trio, "actual_top3": actual_top3,
+            "top3_probs": top3_probs,
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
         })
 
