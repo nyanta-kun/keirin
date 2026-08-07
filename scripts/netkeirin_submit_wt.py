@@ -468,7 +468,32 @@ _BET_TYPE_JP = {
 }
 
 
-def build_bet_detail(legs: list[BetLeg], source: str | None = None) -> str:
+def _load_trifecta_board(race_key: str) -> dict[tuple[int, ...], float]:
+    """三連単オッズ（7H1 の買い目にオッズを添えるため）。`_load_trio_board` と同方針。"""
+    board: dict[tuple[int, ...], float] = {}
+    with get_connection() as conn:
+        for sql in (
+            "SELECT combination, odds_value FROM wt_odds "
+            "WHERE race_key = ? AND bet_type = 'trifecta'",
+            "SELECT combination, odds_value FROM wt_odds_snapshot "
+            "WHERE race_key = ? AND bet_type = 'trifecta' AND snapshot_type = 'morning'",
+        ):
+            for comb, od in conn.execute(sql, (race_key,)).fetchall():
+                if od is None or not (0 < float(od) < 9000):
+                    continue
+                try:
+                    key = tuple(int(x) for x in _SEP_RE.split(str(comb)))
+                except ValueError:
+                    continue
+                if len(key) == 3:
+                    board[key] = float(od)
+            if board:
+                return board
+    return board
+
+
+def build_bet_detail(legs: list[BetLeg], source: str | None = None,
+                     odds: dict | None = None) -> str:
     """入稿した買い目と1点ごとの金額を JSON 文字列にする（Web 表示用）。
 
     🔴 **展開まで済ませて保存する。** 傾斜配分では点ごとに金額が違い、しかも
@@ -479,21 +504,29 @@ def build_bet_detail(legs: list[BetLeg], source: str | None = None) -> str:
 
     形式:
         {"total": 10000, "source": "blend",
-         "lines": [{"bet_type": "3連複", "combo": "1=2=5", "stake": 4100}, ...]}
+         "lines": [{"bet_type": "3連複", "combo": "1=2=5", "stake": 4100,
+                    "odds": 8.3}, ...]}
 
     `source` は金額配分の出どころ（blend / odds / model / equal・
     `src.stake_allocation` 参照）。均等配分のランクは None。
+
+    `odds` は**入稿時点の**オッズ（三連複は frozenset・三連単は tuple がキー）。
+    🔴 **配分の根拠そのものなので一緒に保存する。** あとから引くと発走時の値に
+       なってしまい、「なぜこの金額なのか」が読めなくなる。取れなければ None。
     """
+    odds = odds or {}
     lines: list[dict[str, Any]] = []
     for leg in legs:
         for target in sorted(expand_bet(leg.bet_kind, leg.groups),
                              key=lambda t: tuple(sorted(t)) if isinstance(t, frozenset) else t):
             cars = sorted(target) if isinstance(target, frozenset) else list(target)
             sep = "=" if isinstance(target, frozenset) else "-"
+            o = odds.get(target)
             lines.append({
                 "bet_type": _BET_TYPE_JP.get(leg.bet_kind, leg.bet_kind),
                 "combo": sep.join(str(c) for c in cars),
                 "stake": int(leg.stake_per_line),
+                "odds": round(float(o), 1) if o else None,
             })
     return json.dumps(
         {"total": sum(x["stake"] for x in lines), "source": source, "lines": lines},
@@ -514,6 +547,15 @@ def _legs_for_record(cfg: dict, axis1: int, axis2_or_p1: int, partners: list[int
     else:
         groups = [[axis1], [axis2_or_p1], list(partners)]
     return [BetLeg(cfg["bet_kind"], groups, stake)]
+
+
+def _bet_detail_odds(race_key: str, cfg: dict) -> dict:
+    """買い目に添えるオッズ。三連複はどのランクも要り、三連単は 7H1 だけ。"""
+    base = str(race_key).split("#")[0]
+    odds: dict = dict(_load_trio_board(base))
+    if cfg.get("multi_bet"):
+        odds.update(_load_trifecta_board(base))
+    return odds
 
 
 def _record_submission(
@@ -969,7 +1011,8 @@ def _process_rank(
                 cfg, axis1, axis2_or_p1, partners, _stake_per_line(cfg, len(partners)))
             _record_submission(
                 race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2_or_p1, msg,
-                bet_detail=build_bet_detail(record_legs, tilt_source),
+                bet_detail=build_bet_detail(
+                    record_legs, tilt_source, _bet_detail_odds(race_key, cfg)),
             )
             if claimed_races is not None:
                 claimed_races.add(race_key)
@@ -1112,7 +1155,8 @@ def _process_manual(
             cfg, axis1, axis2, partners, _stake_per_line(cfg, len(partners)))
         _record_submission(race_key, rank_key, session, venue_name, race_no, gate_label,
                            axis1, axis2, msg,
-                           bet_detail=build_bet_detail(record_legs, tilt_source))
+                           bet_detail=build_bet_detail(
+                               record_legs, tilt_source, _bet_detail_odds(race_key, cfg)))
         print(f"[netkeirin_submit][manual] 入稿成功 {venue_name}{race_no}R ({rank_key}) → {msg}", flush=True)
         return 1, []
     print(f"[netkeirin_submit][manual] 入稿失敗 {venue_name}{race_no}R ({rank_key}): {msg}", flush=True)

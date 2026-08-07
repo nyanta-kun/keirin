@@ -33,8 +33,8 @@ from src.netkeirin_client import (  # noqa: E402
 )
 
 
-def _detail(legs, source=None):
-    return json.loads(build_bet_detail(legs, source))
+def _detail(legs, source=None, odds=None):
+    return json.loads(build_bet_detail(legs, source, odds))
 
 
 def test_三連複軸2車が展開されて金額とともに並ぶ():
@@ -108,3 +108,29 @@ def test_JSONは日本語をエスケープしない():
     """DB を直接読んだときに券種が読めること。"""
     raw = build_bet_detail([BetLeg(BET_KIND_TRIO_AXIS2, [[1], [2], [3]], 100)])
     assert "3連複" in raw
+
+
+# ── 入稿時点のオッズ（2026-08-07 追加）────────────────────────────────
+
+def test_オッズを渡すと買い目に添えられる():
+    """**配分の根拠そのものなので一緒に保存する。** あとから引くと発走時の値に
+    なってしまい「なぜこの金額なのか」が読めなくなる。"""
+    legs = [BetLeg(BET_KIND_TRIO_AXIS2, [[1], [2], [3, 4]], 2500)]
+    odds = {frozenset({1, 2, 3}): 8.34, frozenset({1, 2, 4}): 21.0}
+    d = _detail(legs, "blend", odds)
+    got = {x["combo"]: x["odds"] for x in d["lines"]}
+    assert got == {"1=2=3": 8.3, "1=2=4": 21.0}      # 小数第1位へ丸める
+
+
+def test_三連単のオッズはtupleキーで引く():
+    legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION, [[3], [4], [1]], 500)]
+    d = _detail(legs, None, {(3, 4, 1): 128.5})
+    assert d["lines"][0] == {"bet_type": "3連単", "combo": "3-4-1",
+                             "stake": 500, "odds": 128.5}
+
+
+def test_オッズが取れなければNoneで残す():
+    """欠損を 0 や省略にすると表示側で「オッズ0倍」と読めてしまう。"""
+    legs = [BetLeg(BET_KIND_TRIO_AXIS2, [[1], [2], [3]], 10000)]
+    assert _detail(legs)["lines"][0]["odds"] is None
+    assert _detail(legs, None, {frozenset({1, 2, 3}): 0})["lines"][0]["odds"] is None
