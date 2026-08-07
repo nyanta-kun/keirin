@@ -192,6 +192,11 @@ def test_results_b_only_not_filemissing(monkeypatch):
     path.write_text(_B_ONLY, encoding="utf-8")
     msgs = []
     monkeypatch.setattr(nr, "send", lambda m, channel=None: msgs.append(m))
+    # 成績サマリーの Discord 通知は 2026-08-07 に廃止したが、**この検査が守るのは
+    # 通知の有無ではなく「Bランクのみの日を『ファイル無し』と誤判定しないこと」**
+    # というパースの回帰。廃止で検査ごと消すと再開時に壊れているのに気づけないので、
+    # ここだけスイッチを入れて本文を組み立てさせる。
+    monkeypatch.setattr(nr, "RESULTS_SUMMARY_NOTIFY_ENABLED", True)
     monkeypatch.setattr(_sys, "argv", ["notify_results_wt.py", _B_ONLY_DATE])
     try:
         nr.main()

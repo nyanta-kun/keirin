@@ -48,6 +48,10 @@ from src.strategy_wt import (
     line_score_features, rank_7s_gate_label, ss_policy,
 )
 
+# 発走前個別通知の送信スイッチ（2026-08-07 ユーザー要望で廃止）。
+# **判定と picks_history への記録は続ける**（下の送信箇所のコメント参照）。
+PRERACE_NOTIFY_ENABLED = False
+
 logger = logging.getLogger(__name__)
 
 # 日本標準時 (UTC+9)
@@ -3075,12 +3079,19 @@ def main():
 
     # 旧A候補・旧S1候補（6車三連単）の処理は 2026-07-17 全廃
 
-    # 推奨がある場合のみ Discord 送信（ヘッダーなし・詳細メッセージのみ）
-    if messages:
+    # 🔴 **発走前個別通知は 2026-08-07 にユーザー要望で廃止**。
+    #    ただし本スクリプトは通知だけの存在ではなく、発走15分前の判定結果を
+    #    `picks_history` へ書き込む（`_insert_*_pick`）。**cron から外すと
+    #    その書き込みごと止まる**ので、送信だけを落として実行は続ける。
+    #    再開は `PRERACE_NOTIFY_ENABLED = True` の1行。
+    if messages and PRERACE_NOTIFY_ENABLED:
         for rk, msg in messages:
             send(msg, channel="prerace")
             print(f"[prerace] {rk} → 通知送信完了", flush=True)
             time.sleep(0.5)
+    elif messages:
+        print(f"[prerace] {today} 推奨{len(messages)}件（通知は廃止・判定の記録のみ）",
+              flush=True)
     elif to_notify:
         print(f"[prerace] {today} 推奨なし（オッズ確認のみ・通知スキップ）", flush=True)
 

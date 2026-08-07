@@ -360,12 +360,24 @@ def main():
     _main_inner(date)
 
 
+# 成績サマリーの送信スイッチ（2026-08-07 ユーザー要望で廃止）。
+# **採点と picks_history への保存は続ける**。
+RESULTS_SUMMARY_NOTIFY_ENABLED = False
+
+
 def _main_inner(date):
     # 位置引数=日付 / --silent=Discord抑止(picks_history修復のみ・バックフィル用)
     pos = [a for a in sys.argv[1:] if not a.startswith("--")]
     target_date = pos[0] if pos else date.today().strftime("%Y-%m-%d")
     silent = "--silent" in sys.argv
-    emit = (lambda m: None) if silent else (lambda m: send(m, channel="results"))
+    # 🔴 **成績サマリー（競輪AI[wt]成績）の Discord 通知は 2026-08-07 に廃止**
+    #    （ユーザー要望「レース個別の通知のみとする」）。レース単位の通知は
+    #    `notify_race_result_wt.py` が担当する。
+    #    ⚠️ 本スクリプトは通知だけの存在ではなく**採点して picks_history へ
+    #       書き戻す**のが本体なので、呼び出し自体は止めてはいけない。
+    #    再開は `RESULTS_SUMMARY_NOTIFY_ENABLED = True` の1行。
+    emit = ((lambda m: None) if (silent or not RESULTS_SUMMARY_NOTIFY_ENABLED)
+            else (lambda m: send(m, channel="results")))
     dc = target_date.replace("-", "")
 
     # 発走前判定（prerace_decisions_*.json）を読み込む。
