@@ -36,7 +36,11 @@ echo "[$(date '+%H:%M:%S')] 予想生成..."
   2>&1 | tee -a "$LOG_DIR/picks_${TODAY}.log"
 
 echo "[$(date '+%H:%M:%S')] 予想をDiscordへ通知..."
-.venv/bin/python3 scripts/notify_picks.py "$TODAY" \
+# 「朝夕の推奨」Discord通知は 2026-07-31 に廃止済み（wt 側は同日撤去）。
+# 本スクリプトは旧・非winticket経路で現在 cron から呼ばれていないが、
+# 手で叩いたときに廃止済みの通知が飛ばないよう合わせて塞ぐ。
+# .venv/bin/python3 scripts/notify_picks.py "$TODAY"
+true \
   2>&1 | tee -a "$LOG_DIR/notify_${TODAY}.log"
 
 echo "[$(date '+%H:%M:%S')] Xポスト用テキスト送信..."
