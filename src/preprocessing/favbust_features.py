@@ -18,10 +18,38 @@
 | レース単位 | 45 | WT公式予想の拡散度 / 競走得点の構成 / ライン構成 / 脚質構成 / 制度・会場 |
 | 本命単位 | 22 | 本命自身の予測値・得点順位・ライン内の位置・脚質・対抗との関係 |
 
-⚠️ `win_*` / `top3_*` は **WINTICKET が表示する予想率**（`wt_entries.pred_win_pct` /
-`pred_top3_pct`）由来で、**当方モデルの出力ではない**。当方モデルの出力は
-`fav_pp3` / `fav_ppw` / `fav_pbad`（3着内率 / 1着率 / 大敗率）として本命の分だけ入る。
-両者を取り違えないこと。
+🔴 `win_*` / `top3_*` の出自（2026-08-08 是正・**以前ここに書いてあった説明は誤り**）
+
+以前は「WINTICKET が表示する予想率で当方モデルの出力ではない」と書いてあったが
+**逆**。`wt_entries.pred_win_pct` / `pred_top3_pct` は**当方モデルの出力**である。
+
+- 書き込み元は `src/cli/main.py`（`wave-picks-wt`）の1箇所だけで、
+  `lgbm_wt_win` / `lgbm_wt`（eval）の `predict_proba` をそのまま %化して
+  `UPDATE wt_entries SET pred_win_pct = ?, pred_top3_pct = ?` している。
+- スクレイパ（`src/scraper/pipeline_wt.py`）の `wt_entries` INSERT にこの2列は
+  **含まれない**。WINTICKET から取っているのは `prediction_mark`（◎◯▲の記号）だけ。
+
+なぜ重要か: 「外部サイトの値だから vintage 管理は要らない」と読めてしまい、
+過去分を再構築するときの扱いを誤る。本モジュールの `fav_pp3`/`fav_ppw`/`fav_pbad`
+は呼び出し側が月次凍結 vintage モデルを明示ロードして計算する一方、
+`win_*`/`top3_*` は **DB に入っている値をそのまま読む**（`race_features()`）ので、
+vintage の指定が効かない。
+
+現状これは look-ahead ではない:
+  - ライブ書き込みは `wave-picks-wt --date <当日>` が当日分だけを更新し、
+    本番モデルは週次（日曜23:30）再学習なので「前日までで学習したモデルで
+    当日レースを評価」＝ honest。過去日を遡って上書きすることはない。
+  - 過去分は `scripts/backfill_index_pct_wt.py` が月次 vintage 体系で
+    全期間 502,522件を再計算済み（2026-07-29・`docs/vintage_model_policy.md`）。
+
+ただし **backfill 未実行の区間では「週次本番モデル由来の値」と
+「月次凍結モデル」が混ざる**ため、再構築の再現性は保証されない。
+特徴量の由来を変えたとき・新しい月を再構築するときは
+`backfill_index_pct_wt.py` を流し直すこと。
+
+当方モデルの選手単位出力は `fav_pp3` / `fav_ppw` / `fav_pbad`
+（3着内率 / 1着率 / 大敗率）として本命の分だけ入る。こちらは呼び出し側が
+vintage を明示するので指定が効く。両者を取り違えないこと。
 
 ## 役割判定（買い目構築で使う）
 

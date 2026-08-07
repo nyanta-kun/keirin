@@ -45,6 +45,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+from src.wt_vintage_config import assert_vintage_for_past
 from src.database import get_connection  # noqa: E402
 from src.models.trainer import load_model  # noqa: E402
 from src.preprocessing.favbust_features import (  # noqa: E402
@@ -169,6 +170,12 @@ def main() -> None:
     ap.add_argument("--bad-model", default="lgbm_wt_bad")
     ap.add_argument("--favbust-model", default="lgbm_wt_favbust")
     args = ap.parse_args()
+
+    # 過去日に本番モデルを当てると in-sample になるので落とす（2026-08-08）。
+    # 既定値が本番モデル名なので、指定を忘れると**無言で**そうなっていた。
+    _end = args.date_to or args.date
+    if _end:
+        assert_vintage_for_past(_end, {"bad": args.bad_model, "eval": args.eval_model, "favbust": args.favbust_model, "win": args.win_model})
 
     d_to = args.date_to or args.date
     cands = build(args.date, d_to, args.eval_model, args.win_model,

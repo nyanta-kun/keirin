@@ -221,15 +221,47 @@ def test_reconcile_covers_7h1_once_rebuild_exists():
     登録漏れがあると当月の picks_history が rebuild行 と live行 の混在になる
     （2026-08-06 に 7A/7B で実際に発生）。逆に rebuild が無いうちに登録すると
     cron が毎朝失敗するため、**存在するのに未登録**のときだけ落とす。
+
+    ⚠️ 判定は `reconcile_walkforward_tail.sh` の **for 行のパース**で行う。
+       以前は全文の `in` 判定だったため、同ファイルのコメントに書かれた
+       "7h1:7H1"（＝「実装したらここへ足すこと」という TODO そのもの）を
+       拾ってしまい、**未登録のまま PASS していた**（2026-08-08 検出）。
+       安全網が安全網として機能していなかったので、二度と全文一致に戻さない。
     """
-    from pathlib import Path
-    repo = Path(__file__).resolve().parent.parent
-    rebuild = repo / "scripts" / "rebuild_7h1_walkforward_pg.py"
-    sh = (repo / "scripts" / "reconcile_walkforward_tail.sh").read_text(encoding="utf-8")
-    if rebuild.exists():
-        assert '"7h1:7H1"' in sh, (
+    from tests.reconcile_spec import rebuild_scripts, reconcile_specs
+    registered = reconcile_specs()
+    if "7h1" in rebuild_scripts():
+        assert registered.get("7h1") == "7H1", (
             "rebuild_7h1_walkforward_pg.py があるのに "
-            "reconcile_walkforward_tail.sh へ未登録（当月が新旧混在になる）")
+            f"reconcile_walkforward_tail.sh の for 行へ未登録（登録済み: {sorted(registered)}）")
+
+
+def test_reconcile_covers_every_rebuild_script():
+    """存在する `rebuild_*_walkforward_pg.py` は全て tail reconcile へ登録すること。
+
+    7H1 の登録漏れ（2026-08-08 検出）はランク固有の事故ではなく
+    「ランクを増やすたびに手書きリストへ足し忘れる」という反復パターンで、
+    このリポジトリでは RANK_ORDER・CURRENT_PAPER_RANKS でも同型の事故が
+    起きている。ランク名を1つずつ検査するテストを増やしても次のランクで
+    また漏れるので、**存在するスクリプト全件**を対象に検査する。
+
+    意図的に除外するものは `_INTENTIONALLY_UNREGISTERED` へ理由付きで書く。
+    """
+    from tests.reconcile_spec import (
+        _INTENTIONALLY_UNREGISTERED, rebuild_scripts, reconcile_specs,
+    )
+    missing = rebuild_scripts() - set(reconcile_specs()) - set(_INTENTIONALLY_UNREGISTERED)
+    assert not missing, (
+        f"rebuild スクリプトがあるのに tail reconcile へ未登録: {sorted(missing)}。"
+        " 登録するか、除外理由を tests/reconcile_spec._INTENTIONALLY_UNREGISTERED へ書くこと")
+
+
+def test_reconcile_registration_has_no_dangling_entry():
+    """逆に、実体の無いスクリプトを登録していないこと（毎朝 cron が失敗する）。"""
+    from tests.reconcile_spec import rebuild_scripts, reconcile_specs
+    dangling = set(reconcile_specs()) - rebuild_scripts()
+    assert not dangling, (
+        f"tail reconcile が存在しない rebuild スクリプトを呼んでいる: {sorted(dangling)}")
 
 
 def test_evening_pass_rebuilds_7h1_before_early_exit():

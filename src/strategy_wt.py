@@ -382,8 +382,14 @@ RANK_7C_LOWPAY_GAP34_MIN = 0.30
 # 🔴 **固定額/点ではない。** 点数が可変なので、固定額にすると点数の多いレースほど
 #    投資が増えて ROI の重み付けが歪む。予算枠なら全レースが等しく効く。
 #    この方式では **ガミ ⟺ 的中オッズ < 点数**（戻り = (BUDGET/k) × odds）。
-RANK_7C_BUDGET = 10000
-RANK_7C_UNIT = 100
+# ⚠️ 値をここに書き直さないこと（2026-08-08 是正）。以前は 10000/100 という
+#    リテラルの再定義で、`RACE_BUDGET`/`STAKE_UNIT` と**同じ値を2箇所に手書き**
+#    していた。一方 netkeirin 入稿側（`netkeirin_submit_wt.RANK_CONFIGS`）は
+#    `RACE_BUDGET` を直接参照しているため、全ランク一律で予算を改定したときに
+#    「入稿される金額」と「picks_history に記録される賭け金」が無言で食い違う。
+#    同じ値の手書き二重管理はこのリポジトリが繰り返し踏んでいる事故の型。
+RANK_7C_BUDGET = RACE_BUDGET
+RANK_7C_UNIT = STAKE_UNIT
 
 
 RANK_7S_NE = 7                  # 対象車数（7車ちょうど）
@@ -1370,8 +1376,9 @@ RANK_7H1_GAP_MIN = 0.20            # 抜け度（モデル1着率の1位−2位�
 RANK_7H1_BUST_PROB_MIN = 0.2666
 RANK_7H1_BUDGET_TF = 7500          # 三連単の予算枠（円/レース）
 RANK_7H1_BUDGET_TRIO = 2500        # 三連複の予算枠（円/レース）
-RANK_7H1_BUDGET_CAP = 10000        # 1レースの購入上限（円）
-RANK_7H1_UNIT = 100                # 最低賭け金単位（円）
+# ⚠️ 同じ値のリテラル再定義にしない（RANK_7C_BUDGET と同じ理由・2026-08-08）。
+RANK_7H1_BUDGET_CAP = RACE_BUDGET  # 1レースの購入上限（円）
+RANK_7H1_UNIT = STAKE_UNIT         # 最低賭け金単位（円）
 RANK_7H1_TRIO_POOL_MAX = 5         # 三連複BOXに使うプール上限車数（→最大10点）
 RANK_7H1_TF_SECOND_N = 2           # 三連単の2着に使うプール上位の車数
 
@@ -1562,7 +1569,7 @@ def rank_7h1_daily_select(candidates: list[dict]) -> list[dict]:
 #   複数ランクの行を持てる**（実データでも 7H1 と 7B が共存している）。したがって
 #   **候補生成・記録の段階では重複を排除しない**（ユーザー判断: 重なりは気にしない）。
 #   重複排除は **netkeirin 入稿でのみ**行う（1レース1商品という外部仕様のため）。
-#   優先順位は `netkeirin_submit_wt.RANK_ORDER`（7H1 > 7SS > 7S > 7A > 7B > 7C）。
+#   優先順位は `netkeirin_submit_wt.RANK_ORDER`（7H1 > 7SS > 7S > 7A > 7C > 7B）。
 #   実測の重なりは 2.4〜3.2件/日で、入稿に残る 7C は 16.7件/日。
 #
 # memory: keirin_base_model_two_axis_2026_08_07

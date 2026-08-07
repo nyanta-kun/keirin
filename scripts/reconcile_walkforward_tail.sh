@@ -1,6 +1,7 @@
 #!/bin/bash
-# 毎日 08:30 実行: 7車4ランク（7SS/7S/7A/7B）と9車（9S/9A）の直近ウィンドウ
-# （当月）のみを月次凍結vintageモデルで honest に再構築する。
+# 毎日 08:40 実行（cron 実測値）: 7車ランク（7SS/7S/7A/7B/7C/7H1）と
+# 9車（9S/9A）の直近ウィンドウ（当月）のみを月次凍結vintageモデルで
+# honest に再構築する。
 #
 # 背景1（当初の目的・2026-07-27 ユーザー指摘）:
 #   daily_picks_wt.sh / evening_picks_wt.sh が書き込む当日の候補行
@@ -36,6 +37,30 @@ mkdir -p "$LOG_DIR"
 DATE=$(date +%Y-%m-%d)
 LOG="$LOG_DIR/reconcile_tail_${DATE}.log"
 
+# --- 多重起動防止 + 共有ロック（2026-08-08 追加）---
+# 本スクリプトは picks_history の当月分を DELETE→INSERT で作り直すのに、
+# 他の書き込み系（daily_picks_wt / evening_picks_wt / intraday_results_wt /
+# results_check_wt）が全て持っている flock を**唯一持っていなかった**。
+# 背景2 の対策が「実行時刻を 00:50→08:30 へずらす」という時間差頼みで、
+# daily_picks_wt.sh 側にはリトライ待機（最大3回×5分）があるため
+# 08:30 に食い込みうる。intraday_results_wt.sh は15分毎なので 08:30 にも走る。
+# ⚠️ 共有ロックは **待つ（-w）**。-n でスキップすると当月の再構築が
+#    黙って行われず、まさに本スクリプトが防ごうとしている混在が残る。
+LOCK_FILE="$LOG_DIR/reconcile_walkforward_tail.lock"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  echo "[$(date '+%H:%M:%S')] [reconcile_tail] 前回実行がロック中のためスキップします（${LOCK_FILE}）。" \
+    | tee -a "$LOG_DIR/lock_skips.log" >&2
+  exit 0
+fi
+SHARED_LOCK="$LOG_DIR/wt_picks_writer.lock"
+exec 201>"$SHARED_LOCK"
+if ! flock -w 3600 201; then
+  echo "[$(date '+%H:%M:%S')] [reconcile_tail] 共有ロック待ちが60分を超えました（${SHARED_LOCK}）。" \
+    | tee -a "$LOG_DIR/lock_skips.log" >&2
+  exit 1
+fi
+
 echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a "$LOG"
 
 # 2026-07-31: S1(SEVEN_S1)はユーザー判断により全廃（commit df31431）・
@@ -55,16 +80,19 @@ echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a 
 #    live 行のまま取り残され、過去期間と条件が食い違う（＝本スクリプトが
 #    防ごうとしている状態そのもの）。2026-08-06 時点の一覧は
 #    strategy_wt.CURRENT_PAPER_RANKS と一致している。
-# ⚠️ RANK_7H1（穴推奨・本命バスト型・2026-08-06新設）は **まだここに入れない**。
-#    rebuild_7h1_walkforward_pg.py が未実装のため、追加するとこのcronが
-#    「スクリプトが無い」で毎朝失敗する。バックフィル実装と同時に
-#    "7h1:7H1" を下のリストへ足すこと。
-#    忘れ防止に tests/test_rank_7h1.py::test_reconcile_covers_7h1_once_rebuild_exists が
-#    「rebuild スクリプトが存在するのにここへ未登録」を検出して落ちる。
 # RANK_7C（ベースモデル・終日の二軸・2026-08-07新設）は rebuild_7c_walkforward_pg.py
 # を同時に用意したのでここに含める。7C は eval モデルしか使わないため
 # bad の vintage が無い月でも窓が落ちない。
-for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "7c:7C" "9s:9S" "9a:9A"; do
+# RANK_7H1（穴推奨・本命バスト型）は rebuild_7h1_walkforward_pg.py の実装
+# （2026-08-07 commit 89acd9a）と同時に登録すべきだったが漏れていた。
+# 2026-08-08 のレビューで検出し追加（それまで 7H1 の当月だけ live 行が残り、
+# 2026-08-06 に 7A/7B で起きた rebuild行×live行の混在と同じ状態だった）。
+# 忘れ防止に tests/test_rank_7h1.py::test_reconcile_covers_7h1_once_rebuild_exists
+# が「rebuild スクリプトが存在するのにここへ未登録」を検出して落ちる。
+# ⚠️ そのテストは**この for 行だけをパースする**。過去、全文の文字列一致で
+#    書かれていたため上のコメントに含まれる "7h1:7H1" を拾って未登録のまま
+#    PASS していた（＝安全網が丸ごと無効だった）。
+for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "7c:7C" "9s:9S" "9a:9A" "7h1:7H1"; do
   script="${spec%%:*}"
   label="${spec##*:}"
   .venv/bin/python3 "scripts/rebuild_${script}_walkforward_pg.py" --tail-only 2>&1 | tee -a "$LOG" \
@@ -77,7 +105,7 @@ done
 # しまったときに **Web から推奨が消えたまま 10:00 まで気づけない** ため、
 # 消えていたら書き戻す安全網を置く。候補JSONからの再生成で冪等。
 TODAY=$(date +%Y-%m-%d)
-echo "[$(date '+%H:%M:%S')] 当日候補の復元チェック（$TODAY）..." | tee -a "$LOG"
+echo "[$(date '+%H:%M:%S')] 当日候補の復元チェック（${TODAY}）..." | tee -a "$LOG"
 PYTHONPATH=. .venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" 2>&1 | tee -a "$LOG" \
   || echo "[$(date '+%H:%M:%S')] 当日候補の復元に失敗（継続）" | tee -a "$LOG"
 
