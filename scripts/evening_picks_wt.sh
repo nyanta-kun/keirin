@@ -168,13 +168,12 @@ echo "[$(date '+%H:%M:%S')] S7（Sランク）朝夜統合再選出..."
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 夜候補書き込みに失敗（継続）"
 
-# 3b. netkeirin（ウマい車券）へ現行4ランク(7S/7A/9S/9A)候補を下書き自動入稿
-#     （2026-07-23新設・2026-07-28全ランク対応。ランクごとのON/OFFは
-#     keirin.netkeirin_settings＝kiseki側 /keirin/settings で管理）
-echo "[$(date '+%H:%M:%S')] netkeirinへ下書き入稿（夕）..."
-.venv/bin/python3 scripts/netkeirin_submit_wt.py "$TODAY" evening \
-  2>&1 | tee -a "$LOG_DIR/netkeirin_${TODAY}.log" \
-  || echo "[$(date '+%H:%M:%S')] netkeirin入稿(夕)に失敗（継続）"
+# 3b. 🔴 **netkeirin への入稿はここでは行わない**（2026-08-07 に分離）。
+#     このスクリプトは 16:00 に走るが、ミッドナイト開催（第1R 20時）の三連複は
+#     16時台でもまだ2割前後が未確定で、18時まで待つと 10.8% まで下がる。
+#     netkeirin は公開後に差し替えられないので、入稿は板が育ってからにする。
+#     入稿は `scripts/wave_submit_wt.sh evening`（cron 18:00）が担当する。
+#     ここは候補の再生成（ライン予想が午後に公開される夜レース向け）に専念する。
 
 # 4. VPS PostgreSQL 同期（夜の部 wt_entries/picks_history を反映）
 if [[ -n "$KEIRIN_DB_URL" ]]; then

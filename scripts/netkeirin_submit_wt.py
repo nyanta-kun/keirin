@@ -65,10 +65,26 @@ from src.netkeirin_client import (
     expand_bet,
 )
 from src.notify.discord import send
+from src.meeting_wave import (
+    WAVE_MORNING,
+    WAVE_NIGHT,
+    WAVE_NOON,
+    WAVE_LABEL_JP,
+    wave_of_first_hour,
+)
 from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import RACE_BUDGET, rank_7s_gate_label, unit_stake
 
-SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
+SESSION_LABEL_JP = {"morning": "午前", "noon": "昼", "evening": "午後"}
+
+# session → その回で入稿する開催の波（`src/meeting_wave.py`）。
+# 🔴 **1つの開催は必ず1つの波でしか入稿されない**。netkeirin は公開後に
+#    差し替えられないので、二重に出すと先の商品が消える。
+SESSION_WAVE = {
+    "morning": WAVE_MORNING,   # モーニング・デイ（第1R < 12時）
+    "noon": WAVE_NOON,         # ナイター（第1R 12〜17時台）
+    "evening": WAVE_NIGHT,     # ミッドナイト（第1R 18時〜）
+}
 
 _DEFAULT_TITLE_TEMPLATE = "{venue}{race_no}R 二軸探偵"
 _DEFAULT_COMMENT_TEMPLATE = (
@@ -310,11 +326,49 @@ def _apply_template(
 # 候補・設定・送信済み記録の読み書き
 # ---------------------------------------------------------------------------
 
+def _load_meeting_waves(target_date: str) -> dict[str, str]:
+    """race_key → 入稿の波（開催＝会場×日 の第1R発走時刻で決まる）。
+
+    netkeirin は**公開後の差し替えができない**ので、板が育つのを待ってから
+    入稿するしかない。どの開催をいつ出すかは `src/meeting_wave.py` が正本。
+    """
+    waves: dict[str, str] = {}
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT race_key, venue_id, start_at FROM wt_races WHERE race_date = ?",
+            (target_date,),
+        ).fetchall()
+    first: dict[str, float] = {}
+    parsed: list[tuple[str, str, float | None]] = []
+    for r in rows:
+        try:
+            hour = (int(r["start_at"]) + 9 * 3600) % 86400 / 3600 if r["start_at"] else None
+        except (TypeError, ValueError):
+            hour = None
+        parsed.append((r["race_key"], str(r["venue_id"]), hour))
+        if hour is not None:
+            v = str(r["venue_id"])
+            first[v] = min(first.get(v, 1e9), hour)
+    for race_key, venue, _ in parsed:
+        waves[race_key] = wave_of_first_hour(first.get(venue))
+    return waves
+
+
 def _load_candidates(target_date: str, session: str, file_key: str) -> list[dict]:
     picks_dir = Path(__file__).parent.parent / "data" / "picks"
-    suffix = f"_night_{file_key}_candidates.json" if session == "evening" else f"_{file_key}_candidates.json"
-    path = picks_dir / f"wave_picks_wt_{target_date}{suffix}"
-    if not path.exists():
+    # 波ごとの再生成ファイルがあればそれを使い、無ければ朝の生成物へ落とす。
+    # 🔴 **フォールバックは必須**。夜の再生成（evening_picks_wt.sh）が動かなかった日に
+    #    「ファイルが無いから入稿しない」だと、朝の入稿からも波で除外されている
+    #    ミッドナイトが**その日まるごと商品ゼロ**になる。予想自体は朝に全開催ぶん
+    #    出来ているので、それを使って出すほうが必ず良い。
+    prefixes = {"evening": "_night", "noon": "_noon"}
+    candidates = []
+    if session in prefixes:
+        candidates.append(picks_dir /
+                          f"wave_picks_wt_{target_date}{prefixes[session]}_{file_key}_candidates.json")
+    candidates.append(picks_dir / f"wave_picks_wt_{target_date}_{file_key}_candidates.json")
+    path = next((p for p in candidates if p.exists()), None)
+    if path is None:
         return []
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -596,7 +650,7 @@ def _normalize_multi_candidate(
 def _process_rank(
     rank_key: str, target_date: str, session: str, race_date, settings: dict[str, dict],
     already: set[tuple[str, str]], dry_run: bool, race_key_filter: str | None = None,
-    claimed_races: set[str] | None = None,
+    claimed_races: set[str] | None = None, waves: dict[str, str] | None = None,
 ) -> tuple[int, list[str]]:
     cfg = RANK_CONFIGS[rank_key]
     if not _is_enabled(settings, rank_key):
@@ -605,6 +659,13 @@ def _process_rank(
     raw = _load_candidates(target_date, session, cfg["file_key"])
     if race_key_filter:
         raw = [c for c in raw if c.get("race_key") == race_key_filter]
+    # 🔴 この回で担当する開催だけに絞る。朝の候補JSONは当日全開催ぶん入っている
+    #    （予想・Discord・Web は朝に全部出す）ので、ここで落とさないと
+    #    夜の開催まで朝に入稿してしまい、板が育つ前の配分で確定してしまう。
+    if waves is not None:
+        want = SESSION_WAVE.get(session)
+        raw = [c for c in raw
+               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want]
     if not raw:
         return 0, []
 
@@ -916,7 +977,9 @@ def _process_manual(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("target_date")
-    parser.add_argument("session", choices=("morning", "evening"))
+    # session は「どの波の開催を入稿するか」を決める（src/meeting_wave.py 参照）。
+    #   morning = モーニング・デイ / noon = ナイター / evening = ミッドナイト
+    parser.add_argument("session", choices=("morning", "noon", "evening"))
     parser.add_argument("--dry-run", action="store_true", help="送信せず生成内容を標準出力に出す")
     parser.add_argument(
         "--race-key", default=None,
@@ -968,6 +1031,13 @@ def main() -> None:
               flush=True)
         return
 
+    waves = _load_meeting_waves(target_date)
+    want_wave = SESSION_WAVE[session]
+    n_wave = sum(1 for w in waves.values() if w == want_wave)
+    print(f"[netkeirin_submit] {target_date} {session}: "
+          f"担当は {WAVE_LABEL_JP[want_wave]} — 当日{len(waves)}レース中{n_wave}レース",
+          flush=True)
+
     all_race_keys: set[str] = set()
     per_rank_raw: dict[str, list[dict]] = {}
     for rank_key in RANK_ORDER:
@@ -977,6 +1047,8 @@ def main() -> None:
         raw = _load_candidates(target_date, session, cfg["file_key"])
         if args.race_key:
             raw = [c for c in raw if c.get("race_key") == args.race_key]
+        raw = [c for c in raw
+               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want_wave]
         per_rank_raw[rank_key] = raw
         all_race_keys.update(c["race_key"] for c in raw)
 
@@ -992,7 +1064,7 @@ def main() -> None:
             continue
         n, failures = _process_rank(
             rank_key, target_date, session, race_date, settings, already, args.dry_run,
-            race_key_filter=args.race_key, claimed_races=claimed_races,
+            race_key_filter=args.race_key, claimed_races=claimed_races, waves=waves,
         )
         submitted_counts[rank_key] = n
         all_failures.extend(failures)
