@@ -1886,6 +1886,15 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                 # 7C（ベースモデル）用: 軸は**3ヘッドではなく pred_top3 上位2車**で、
                 # 選別値も同じ量（その合計）から導く。オッズ非依存なので朝に確定する。
                 # 相手は 3着内率 >= RANK_7C_LEG_P3_MIN の車のみ（点数可変）。
+                # 車番 → line_group。7SS の同一ライン判定と 7C の低配当パターン判定が
+                # どちらも使うので、**両方より前に**組み立てる。
+                # 🔴 2026-08-07: 7C の判定（下）がこの代入より前に `_lg` を読んでいて
+                #    `UnboundLocalError` でループ初回に必ず落ちていた（c713d92）。
+                #    ループ変数なので2周目以降は**前のレースの line_group** を
+                #    読むことになり、仮に落ちなくても誤判定になる。順序を入れ替えて塞ぐ。
+                _lg = {int(r.frame_no): getattr(r, "line_group", None)
+                       for r in grp_sorted.itertuples(index=False)}
+
                 sel_7c = rank_7c_select_axis(top3_probs)
                 if sel_7c:
                     others_7c = sorted(set(top3_probs) - {sel_7c[0], sel_7c[1]})
@@ -1893,13 +1902,9 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                 else:
                     legs_7c = []
                 # 低配当パターン（上位3車が抜けている ∧ その3車が同一ライン）は見送る。
-                # `_lg` は 7SS 判定でも使っている line_group の辞書。
                 lowpay_7c = rank_7c_is_lowpay_pattern(top3_probs, _lg)
 
                 # 7SS（2026-08-05新設）判定用。軸2車が同一ラインか。
-                # line_group は wt_entries 由来で build_features_wt が引き回している。
-                _lg = {int(r.frame_no): getattr(r, "line_group", None)
-                       for r in grp_sorted.itertuples(index=False)}
                 same_line = rank_7ss_same_line(axis1, axis2, _lg)
 
                 rank_7s_raw_candidates.append({
