@@ -40,7 +40,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
-from src.strategy_wt import CURRENT_PAPER_RANKS, ABOLISHED_PAPER_RANKS
+from src.strategy_wt import (
+    CURRENT_PAPER_RANKS, ABOLISHED_PAPER_RANKS, rank_7c_unit_stake,
+    RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE, RANK_9S_STAKE, RANK_9A_STAKE,
+)
 
 # 集計対象ランクの単一正本は src/strategy_wt.py の CURRENT_PAPER_RANKS /
 # ABOLISHED_PAPER_RANKS を参照する（2026-07-31 再発防止・是正タスク B-6/C-1）。
@@ -539,6 +542,26 @@ def _main_inner(date):
         if _pk not in picks:
             picks[_pk] = ("RANK_7B", "", "")
 
+    # 7C=ベースモデル・終日の二軸（2026-08-07導入）:
+    # decisions キー {rk}#7C（decision=buy）を picks に注入する（slot="seven_7c"）。
+    # 買い目の形は 7A/7SS と同じ三連複2軸総流し5点。
+    for _key, _dec in decisions.items():
+        if not _key.endswith("#7C") or _dec.get("decision") != "buy" or not _dec.get("combos"):
+            continue
+        _rk = _key[:-3]
+        if not _rk.startswith(dc):
+            continue
+        try:
+            _, _code, _rno = _rk.split("_")
+        except ValueError:
+            continue
+        _venue = code2name.get(_code)
+        if _venue is None:
+            continue
+        _pk = (_venue, int(_rno), "seven_7c")
+        if _pk not in picks:
+            picks[_pk] = ("RANK_7C", "", "")
+
     # 7H1=穴推奨・本命バスト型（2026-08-06導入）:
     # decisions キー {rk}#7H1（decision=buy）を picks に注入する（slot="seven_7h1"）。
     # ⚠️ 他ランクと違い **三連単+三連複の2券種**なので `combos` ではなく
@@ -638,6 +661,7 @@ def _main_inner(date):
     results_7a = []           # 7A=S7の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
     results_7b = []           # 7B=◎◯一致×順序/相手不一致（ペーパー）行 — ヘッダー合計には含めず別集計（2026-08-03導入）
     results_7h1 = []          # 7H1=穴推奨・本命バスト型（2券種）行 — ヘッダー合計には含めず別集計（2026-08-06導入）
+    results_7c = []           # 7C=ベースモデル・終日の二軸（ペーパー）行 — ヘッダー合計には含めず別集計（2026-08-07導入）
     results_9a = []           # 9A=S9の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
     p7sb = p7sr = p7sh = 0    # 7+車 旧Sランク 合計
@@ -661,6 +685,9 @@ def _main_inner(date):
     # 7B（◎◯一致×順序/相手不一致・相手絞り3点・2026-08-03導入。ヘッダー合計には含めない）
     p7bb = p7br = p7bh = 0
     p7h1b = p7h1r = p7h1h = 0   # 7H1（穴推奨）の 購入額 / 払戻 / 的中数
+    # 7C（ベースモデル・終日の二軸・2026-08-07導入。ヘッダー合計には含めない）
+    # ⚠️ **賭け金が可変**（予算枠÷点数）なので購入額は decision の stake から積む。
+    p7cb = p7cr = p7ch = 0
     skipped_dns = 0           # 軸欠車/全相手欠車でレース無効（返還）→不計上
     with get_connection() as conn:
         for (venue, race_no, _slot), (rank, ptime, combo_str) in sorted(picks.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
@@ -737,7 +764,9 @@ def _main_inner(date):
                 rank_7s_order = [int(r[0]) for r in rank_7s_rows]
                 if len(rank_7s_order) < 3:
                     continue
-                rank_7s_stake = int(dec_s7.get("stake") or 100)
+                # 旧 decisions は stake=100 で保存されている。予算枠へ統一した
+                # 2026-08-07 以降と混ざらないよう、欠損時はランクの標準単価を使う。
+                rank_7s_stake = int(dec_s7.get("stake") or RANK_7S_STAKE)
                 try:
                     rank_7s_axis1 = int(dec_s7.get("axis1"))
                     rank_7s_axis2 = int(dec_s7.get("axis2"))
@@ -834,7 +863,7 @@ def _main_inner(date):
                 rank_9s_order = [int(r[0]) for r in rank_9s_rows]
                 if len(rank_9s_order) < 3:
                     continue
-                rank_9s_stake = int(dec_s9.get("stake") or 100)
+                rank_9s_stake = int(dec_s9.get("stake") or RANK_9S_STAKE)
                 try:
                     rank_9s_axis1 = int(dec_s9.get("axis1"))
                     rank_9s_axis2 = int(dec_s9.get("axis2"))
@@ -918,7 +947,7 @@ def _main_inner(date):
                 a7_order = [int(r[0]) for r in a7_rows]
                 if len(a7_order) < 3:
                     continue
-                a7_stake = int(dec_7a.get("stake") or 100)
+                a7_stake = int(dec_7a.get("stake") or RANK_7A_STAKE)
                 try:
                     a7_axis1 = int(dec_7a.get("axis1"))
                     a7_axis2 = int(dec_7a.get("axis2"))
@@ -988,7 +1017,7 @@ def _main_inner(date):
                 b7_order = [int(r[0]) for r in b7_rows]
                 if len(b7_order) < 3:
                     continue
-                b7_stake = int(dec_7b.get("stake") or 100)
+                b7_stake = int(dec_7b.get("stake") or RANK_7B_STAKE)
                 try:
                     b7_axis1 = int(dec_7b.get("axis1"))
                     b7_axis2 = int(dec_7b.get("axis2"))
@@ -1037,6 +1066,81 @@ def _main_inner(date):
                         p7bh += 1
                 history.append((target_date, f"{rk}#7B", "RANK_7B", b7_pred, b7_n_combos,
                                 int(b7_hit), b7_pay, b7_trio_pay, b7_trifecta_pay, b7_bet,
+                                not is_buy, None,
+                                *gap_map.get(rk, (None, None, None)), None))
+                continue
+
+            if _slot == "seven_7c":
+                # ── 7C（ベースモデル・終日の二軸・2026-08-07導入）採点 ──
+                # judge_rank_7c/_process_rank_7c_candidates と対。正本は
+                # decisions の {rk}#7C。返還処理なし。
+                #
+                # ⚠️ **賭け金が可変**（1レース10,000円の予算枠 ÷ 点数）。他ランクの
+                #    ように固定 STAKE を掛けると投資額が実態とずれて ROI が壊れる。
+                #    decision に保存した stake を必ず使う（無ければ点数から再計算）。
+                # ⚠️ 相手は総流しではないので、見送り時の pred_combo も
+                #    「軸=軸-見送り」表記にとどめ、残り全車を並べない。
+                dec_7c = decisions.get(rk + "#7C")
+                if not dec_7c or dec_7c.get("decision") not in ("buy", "skip"):
+                    print(f"[notify_results_wt] 7C判定記録なし {rk}: 不計上", flush=True)
+                    continue
+                is_buy = dec_7c.get("decision") == "buy" and bool(dec_7c.get("combos"))
+                c7_rows = conn.execute(
+                    "SELECT frame_no FROM wt_entries WHERE race_key=? AND finish_order BETWEEN 1 AND 3 "
+                    "ORDER BY finish_order", (rk,)).fetchall()
+                c7_order = [int(r[0]) for r in c7_rows]
+                if len(c7_order) < 3:
+                    continue
+                try:
+                    c7_axis1 = int(dec_7c.get("axis1"))
+                    c7_axis2 = int(dec_7c.get("axis2"))
+                except (TypeError, ValueError):
+                    continue
+                c7_top3 = frozenset(c7_order[:3])
+                c7_trio_pay = pm.get(rk, {}).get(("trio", c7_top3), 0)
+                c7_trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(c7_order[:3])), 0)
+
+                if is_buy:
+                    try:
+                        c7_combos = [frozenset(int(x) for x in str(c).split("-"))
+                                     for c in dec_7c["combos"]]
+                    except (TypeError, ValueError):
+                        continue
+                    c7_n_combos = len(c7_combos)
+                    c7_stake = int(dec_7c.get("stake")
+                                   or rank_7c_unit_stake(c7_n_combos))
+                    c7_hit = any(cs == c7_top3 for cs in c7_combos)
+                    c7_pay = c7_trio_pay * c7_stake // 100 if c7_hit else 0
+                    c7_bet = c7_n_combos * c7_stake
+                    c7_thirds = sorted(
+                        next(iter(cs - {c7_axis1, c7_axis2}))
+                        for cs in c7_combos if len(cs - {c7_axis1, c7_axis2}) == 1)
+                    c7_pred = f"{c7_axis1}={c7_axis2}-" + ",".join(map(str, c7_thirds))
+                else:
+                    c7_hit = c7_axis1 in c7_top3 and c7_axis2 in c7_top3
+                    c7_pay = 0
+                    c7_bet = 0
+                    c7_n_combos = 0
+                    c7_pred = f"{c7_axis1}={c7_axis2}-見送り"
+                c7_tstr = ptime
+                _c7_stt = start_map.get(rk)
+                if _c7_stt:
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        c7_tstr = _dt.fromtimestamp(int(_c7_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
+                    except (ValueError, TypeError):
+                        pass
+                if is_buy:
+                    c7_mark = f"◎ ¥{c7_pay:,}" if c7_hit else "×"
+                    results_7c.append(
+                        f"[7C] {venue} {race_no}R {c7_tstr}  予:{c7_pred}"
+                        f"  実:{'-'.join(map(str, c7_order[:3]))}  {c7_mark}")
+                    p7cb += c7_bet
+                    if c7_hit:
+                        p7cr += c7_pay
+                        p7ch += 1
+                history.append((target_date, f"{rk}#7C", "RANK_7C", c7_pred, c7_n_combos,
+                                int(c7_hit), c7_pay, c7_trio_pay, c7_trifecta_pay, c7_bet,
                                 not is_buy, None,
                                 *gap_map.get(rk, (None, None, None)), None))
                 continue
@@ -1137,7 +1241,7 @@ def _main_inner(date):
                 a9_order = [int(r[0]) for r in a9_rows]
                 if len(a9_order) < 3:
                     continue
-                a9_stake = int(dec_9a.get("stake") or 100)
+                a9_stake = int(dec_9a.get("stake") or RANK_9A_STAKE)
                 try:
                     a9_axis1 = int(dec_9a.get("axis1"))
                     a9_axis2 = int(dec_9a.get("axis2"))
@@ -1434,9 +1538,11 @@ def _main_inner(date):
     # 7H1（穴推奨・本命バスト型・2026-08-06導入）。三連単+三連複の2券種を合算した行。
     # 既存6ランク（予想ベース）とは目的が違うのでヘッダー合計には含めない。
     h1_line = _rank_line("7H1(穴推奨/2券種)", len(results_7h1), p7h1b, p7h1r, p7h1h)
+    # 7C（ベースモデル・終日の二軸・2026-08-07導入）。件数が最多になるランク。
+    c7_line = _rank_line("7C(ベース/相手可変)", len(results_7c), p7cb, p7cr, p7ch)
     # 7SS（波乱軸選出・RANK_7SS）は 2026-08-02 に全廃したため Discord 行も削除した。
     for _l in (s1_line, old7ssp_line, old7ss_line, s7s_line, a7_line, b7_line,
-               h1_line, r_line, ss_line, s_line):
+               c7_line, h1_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1445,7 +1551,7 @@ def _main_inner(date):
         msg += "\n" + "\n".join(rank_lines)
     msg += "\n```\n" + "\n".join(
         total_7plus + results_7plus_s1 + results_7plus_s7 + results_7a + results_7b
-        + results_7h1) + "\n```"
+        + results_7c + results_7h1) + "\n```"
 
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"

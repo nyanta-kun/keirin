@@ -44,8 +44,11 @@ import live_report_wt as lr
 #    削除済みでDBには0件、バックアップCSVは旧定義なので新7SSと合算してはいけない。
 # 2026-08-06: 穴推奨系 RANK_7H1（本命バスト型）を新設。命名は {車数}H{連番} で、
 # 既存の予想ベース系（S/A/B）とは系統を分ける（7H2 以降は予約）。
+# 2026-08-07: ベースモデル RANK_7C（終日の二軸）を新設。既存ランクとは
+# **論理的に排他ではない**（wt_overlap_n を見ない）唯一の予想ベース系ランクで、
+# 重複排除は netkeirin 入稿側だけで行う。
 CURRENT_RANK_NAMES = {"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S",
-                      "RANK_9A", "RANK_7H1"}
+                      "RANK_9A", "RANK_7H1", "RANK_7C"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {

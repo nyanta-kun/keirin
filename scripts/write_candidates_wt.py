@@ -382,6 +382,25 @@ def _write_paper_candidates(target_date: str) -> None:
         rows.append((f"{rk}#7B", "RANK_7B",
                      f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None, 0))
 
+    # 7C（ベースモデル・終日の二軸・2026-08-07新設）。
+    # ⚠️ **軸は3ヘッドではなく pred_top3 上位2車**なので `axis1`/`axis2` ではなく
+    #    `axis1_7c`/`axis2_7c` を読む（取り違えると別の買い目を表示してしまう）。
+    # ⚠️ **総流しではない**。相手は3着内率15%以上に足切りした `legs_7c`（4〜5点・可変）。
+    #    `_third_list` を使うと総流し表記になり買い目を偽るので使わない。
+    # 候補JSONは rank_7c_daily_select() で合計・点数の両ゲート適用済み。
+    # ⚠️ 7C は他ランクと**同一レースに併存する**（wt_overlap_n を見ないため
+    #    論理的に排他ではない）。「1レース1ランク」ガードを掛けてはいけない。
+    #    重複排除は netkeirin 入稿側だけで行う。
+    for c in _load((f"wave_picks_wt_{target_date}_s7c_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7c_candidates.json")):
+        rk = c.get("race_key")
+        axis1, axis2 = c.get("axis1_7c"), c.get("axis2_7c")
+        legs = c.get("legs_7c") or []
+        if not rk or axis1 is None or axis2 is None or not legs:
+            continue
+        rows.append((f"{rk}#7C", "RANK_7C",
+                     f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None, 0))
+
     # 7H1（穴推奨・本命バスト型／唯一の2券種ランク・2026-08-07 追加）。
     #
     # 【なぜ必要だったか】7H1 の picks_history 行は発走15分前の判定

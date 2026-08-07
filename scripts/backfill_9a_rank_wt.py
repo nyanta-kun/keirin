@@ -63,7 +63,7 @@ from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
-    RANK_9A_STAKE, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
+    RANK_9A_STAKE, unit_stake, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
     rank_7s_wt_overlap_n, rank_9a_daily_select,
 )
 
@@ -225,8 +225,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         rk = c_["race_key"]
         hit = c_["actual_top3"] in combos
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-        pay = trio_pay * RANK_9A_STAKE // 100 if hit else 0
-        bet = len(combos) * RANK_9A_STAKE
+        # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+        # 欠車で相手が減ったレースでも投資額が予算枠に揃うよう、固定単価では
+        # なく実点数から単価を出す。
+        stake = unit_stake(len(combos))
+        pay = trio_pay * stake // 100 if hit else 0
+        bet = len(combos) * stake
         rows.append({
             "race_date": c_["race_date"],
             "race_key": f"{rk}#9A", "rank": "RANK_9A",

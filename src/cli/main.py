@@ -1276,6 +1276,8 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
+        rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
+        RANK_7C_P3_SUM_MIN, RANK_7C_LEGS_MIN,
         rank_7ss_daily_select, rank_7ss_same_line,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
     )
@@ -1880,6 +1882,16 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                 others_7b = sorted(set(top3_probs) - {axis1, axis2})
                 order_disagree = rank_7b_order_disagree(win_probs, wt_honmei)
 
+                # 7C（ベースモデル）用: 軸は**3ヘッドではなく pred_top3 上位2車**で、
+                # 選別値も同じ量（その合計）から導く。オッズ非依存なので朝に確定する。
+                # 相手は 3着内率 >= RANK_7C_LEG_P3_MIN の車のみ（点数可変）。
+                sel_7c = rank_7c_select_axis(top3_probs)
+                if sel_7c:
+                    others_7c = sorted(set(top3_probs) - {sel_7c[0], sel_7c[1]})
+                    legs_7c = rank_7c_select_legs(others_7c, top3_probs)
+                else:
+                    legs_7c = []
+
                 # 7SS（2026-08-05新設）判定用。軸2車が同一ラインか。
                 # line_group は wt_entries 由来で build_features_wt が引き回している。
                 _lg = {int(r.frame_no): getattr(r, "line_group", None)
@@ -1910,6 +1922,12 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     "others": others_7b,
                     "top3_probs": {str(k): round(v, 6) for k, v in top3_probs.items()},
                     "legs_7b": rank_7b_select_legs(others_7b, top3_probs, wt_ana),
+                    # ↓ 7C用（軸は3ヘッドと別物なので専用キーで持つ。
+                    #   `axis1`/`axis2` を上書きすると 7S/7A/7SS/7B が壊れる）
+                    "axis1_7c": sel_7c[0] if sel_7c else None,
+                    "axis2_7c": sel_7c[1] if sel_7c else None,
+                    "p3_sum_top2": round(sel_7c[2], 6) if sel_7c else None,
+                    "legs_7c": legs_7c,
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
@@ -1988,6 +2006,33 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         _n_same = sum(1 for c in rank_7s_raw_candidates if c.get("same_line"))
         click.echo(f"[保存先] {rank_7ss_path}  (7SS候補 {len(rank_7ss_candidates)}件/"
                    f"{len(rank_7s_raw_candidates)}件中・entropy不合格×同一ライン/ペーパー検証)")
+
+        # ── 7C候補（ベースモデル・終日の二軸・2026-08-07新設）──────────────
+        # 他ランクと違い wt_overlap_n を一切見ないため**論理的に排他ではない**。
+        # 重複排除は netkeirin 入稿でのみ行う（picks_history は #suffix 付きの
+        # race_key なので同一レースに複数ランクの行を持てる）。
+        # 詳細は strategy_wt.RANK_7C_P3_SUM_MIN 定義部のセクションコメント参照。
+        rank_7c_candidates = rank_7c_daily_select(rank_7s_raw_candidates)
+        rank_7c_suffix = "_night_s7c_candidates.json" if is_night else "_s7c_candidates.json"
+        rank_7c_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7c_suffix}"
+        with open(rank_7c_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7c_candidates, f, ensure_ascii=False, indent=2)
+        # 母集団の内訳を必ず出す。選別値が全件 None ＝ pred_top3 が取れていない、
+        # 点数ゲートで全滅、といった「黙って0件」を検知するため
+        # （7B の race_type 欠損で実際に踏んだ前例と同型の予防）。
+        _n_no_p3 = sum(1 for c in rank_7s_raw_candidates if c.get("p3_sum_top2") is None)
+        _n_sum_ok = sum(1 for c in rank_7s_raw_candidates
+                        if c.get("p3_sum_top2") is not None
+                        and float(c["p3_sum_top2"]) >= RANK_7C_P3_SUM_MIN)
+        click.echo(f"[保存先] {rank_7c_path}  (7C候補 {len(rank_7c_candidates)}件/"
+                   f"{len(rank_7s_raw_candidates)}件中・上位2車の3着内率合計>="
+                   f"{RANK_7C_P3_SUM_MIN} ∧ 相手{RANK_7C_LEGS_MIN}点以上/ペーパー検証)")
+        click.echo(f"[wt] 7C母集団: 合計条件通過={_n_sum_ok} → 相手"
+                   f"{RANK_7C_LEGS_MIN}点以上={len(rank_7c_candidates)}  "
+                   f"(p3欠損 {_n_no_p3}件)")
+        if _n_no_p3:
+            click.echo(f"[wt][警告] 7C: p3_sum_top2 が算出できない候補が {_n_no_p3}件 "
+                       f"あります（pred_top3 の欠損）。", err=True)
         click.echo(f"[wt] 軸2車が同一ライン: {_n_same}件 / {len(rank_7s_raw_candidates)}件")
 
     # ── S9候補（S7の9車立て版・独立ランク・2026-07-26導入）──
