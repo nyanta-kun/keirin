@@ -73,7 +73,17 @@ from src.meeting_wave import (
     wave_of_first_hour,
 )
 from src.stake_allocation import group_by_stake, tilted_stakes
-from src.strategy_wt import RACE_BUDGET, rank_7s_gate_label, unit_stake
+from src.strategy_wt import (
+    RACE_BUDGET,
+    RANK_7H1_TF_UNIT,
+    rank_7h1_trio_stakes,
+    rank_7s_gate_label,
+    unit_stake,
+)
+
+# 三連複の組み合わせ表記の区切り。**表で違う**（wt_odds は '1=2=3' /
+# wt_odds_snapshot は '1-2-3'）ので両方受ける。
+_SEP_RE = re.compile(r"[-=]")
 
 SESSION_LABEL_JP = {"morning": "午前", "noon": "昼", "evening": "午後"}
 
@@ -581,7 +591,7 @@ def _load_trio_board(race_key: str) -> dict[frozenset[int], float]:
                 if od is None or not (0 < float(od) < 9000):
                     continue
                 try:
-                    key = frozenset(int(x) for x in re.split(r"[-=]", str(comb)))
+                    key = frozenset(int(x) for x in _SEP_RE.split(str(comb)))
                 except ValueError:
                     continue
                 if len(key) == 3:
@@ -701,9 +711,9 @@ def _trio_box_group(legs_trio: list[str]) -> list[int]:
 
 
 def _normalize_multi_candidate(
-    cand: dict, cfg: dict,
-) -> tuple[list[BetLeg], dict[int, str], int, int]:
-    """7H1 候補から (買い目行, 印, ◎車番, ○車番) を返す。
+    cand: dict, cfg: dict, race_key: str | None = None,
+) -> tuple[list[BetLeg], dict[int, str], int, int, str | None]:
+    """7H1 候補から (買い目行, 印, ◎車番, ○車番, 配分の出どころ) を返す。
 
     印（ユーザー確定・2026-08-06）:
       ◎ = 三連単の1着固定車 / ○ = 2着列の1番手 / ▲ = 2着列の2番手 /
@@ -712,9 +722,20 @@ def _normalize_multi_candidate(
     tf_groups = _trifecta_formation_groups(cand.get("legs_tf") or [])
     trio_cars = _trio_box_group(cand.get("legs_trio") or [])
 
-    stake_tf, stake_trio = int(cand["stake_tf"]), int(cand["stake_trio"])
-    if stake_tf <= 0 or stake_trio <= 0:
-        raise ValueError(f"賭け金が不正です（三連単{stake_tf}円 / 三連複{stake_trio}円）")
+    # 🔴 賭け金は**候補JSONの値を使わず入稿時点で決め直す**（2026-08-07）。
+    #    三連単は 1点 RANK_7H1_TF_UNIT 円の均等、残りを三連複へ回し、
+    #    **入稿時点のオッズで払戻が等しくなるよう**配分する。
+    #    候補JSONの stake_* は朝の候補生成時点の値で、板が育ってから入稿する
+    #    設計（開催単位の3波）とは時点が食い違うため使わない。
+    trio_legs = [frozenset(int(x) for x in _SEP_RE.split(str(c)))
+                 for c in (cand.get("legs_trio") or [])]
+    trio_legs = [t for t in trio_legs if len(t) == 3]
+    board = _load_trio_board(race_key) if race_key else {}
+    odds = {t: board.get(t) for t in trio_legs}
+    source = "odds" if (odds and all(odds.values())) else "equal"
+    stake_tf = RANK_7H1_TF_UNIT
+    trio_stakes = rank_7h1_trio_stakes(
+        trio_legs, odds if source == "odds" else None, len(cand.get("legs_tf") or []))
 
     first, second, third = tf_groups
     if len(first) != 1:
@@ -735,12 +756,13 @@ def _normalize_multi_candidate(
     for c in trio_cars:          # BOXだけで買っている車も買い目に入っている
         marks.setdefault(c, "△")
 
-    legs = [
-        BetLeg(BET_KIND_TRIFECTA_FORMATION, tf_groups, stake_tf),
-        BetLeg(BET_KIND_TRIO_BOX, [trio_cars], stake_trio),
-    ]
+    # 三連複は目ごとに金額が違うので **1目 = 1行**（3車のBOX＝1点）で出す。
+    # 同額でも束ねられない（BOXは車群でしか表現できず、任意の部分集合を作れない）。
+    legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION, tf_groups, stake_tf)]
+    for t in sorted(trio_legs, key=lambda x: sorted(x)):
+        legs.append(BetLeg(BET_KIND_TRIO_BOX, [sorted(t)], trio_stakes[t]))
     axis2 = ranked_second[0] if ranked_second else first[0]
-    return legs, marks, first[0], axis2
+    return legs, marks, first[0], axis2, source
 
 
 # ---------------------------------------------------------------------------
@@ -844,7 +866,8 @@ def _process_rank(
         tilt_stakes_map: dict[int, int] = {}
         try:
             if is_multi:
-                legs, marks, axis1, axis2_or_p1 = _normalize_multi_candidate(cand, cfg)
+                legs, marks, axis1, axis2_or_p1, tilt_source = _normalize_multi_candidate(
+                    cand, cfg, race_key.split("#")[0])
             else:
                 axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
                 if cfg.get("tilt_stakes"):

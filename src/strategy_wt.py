@@ -1419,6 +1419,48 @@ def rank_7h1_unit(budget: int, n_legs: int) -> int:
     return u if u >= RANK_7H1_UNIT else 0
 
 
+# 三連単の1点あたり（円）。2026-08-07 ユーザー指定で 900円前後の均等割りから固定 500円へ。
+# 三連単の枠を薄くして残りを三連複へ回す設計で、実測（2,414R・最終オッズ）:
+#   実質的中 9.94% → **18.31%**（的中18.35% にほぼ一致＝ガミがほぼ消える）
+#   ROI 80.54% → **86.85%**
+# ⚠️ 引き換えに**最高払戻が 1,148,340円 → 633,000円**へ下がる（三連単が44%薄くなる）。
+#    「三連単で大きな配当を狙う」性格は half になる。ユーザー了承済み。
+RANK_7H1_TF_UNIT = 500
+
+
+def rank_7h1_trio_budget(n_tf: int, cap: int = RANK_7H1_BUDGET_CAP,
+                         tf_unit: int = RANK_7H1_TF_UNIT) -> int:
+    """三連単を 1点 `tf_unit` 円で買った残り＝三連複へ回す予算。
+
+    現行の 7車立てなら 三連単8点×500 = 4,000円 → 三連複へ 6,000円。
+    """
+    return max(0, cap - tf_unit * max(n_tf, 0))
+
+
+def rank_7h1_trio_stakes(trio_legs: list, trio_odds: dict | None, n_tf: int,
+                         unit: int = RANK_7H1_UNIT) -> dict:
+    """三連複の目ごとの賭け金。**入稿時点のオッズで払戻が等しくなるよう配分**する。
+
+    trio_odds が無い（朝の板が買う目すべてに揃わない）場合は**均等**へ落とす
+    （ユーザー指定の (a) フォールバック）。7H1 は穴狙いで人気薄を買うため
+    朝の板が埋まるのは実測 53.3% しかない。
+
+    ⚠️ 端数は `allocate_budget` の規則（想定払戻が最小の点）に従って配る。
+       均等割りの切り捨てで捨てていた分（実測 平均613円/レース）も使い切る。
+    """
+    from .stake_allocation import allocate_budget
+
+    if not trio_legs:
+        return {}
+    budget = rank_7h1_trio_budget(n_tf)
+    if budget < unit * len(trio_legs):
+        return {leg: unit for leg in trio_legs}
+    usable = (trio_odds and all(trio_odds.get(leg) for leg in trio_legs))
+    w = ({leg: 1.0 / trio_odds[leg] for leg in trio_legs} if usable
+         else {leg: 1.0 for leg in trio_legs})
+    return allocate_budget(w, budget=budget, unit=unit)
+
+
 def rank_7h1_stakes(n_trio: int, n_tf: int) -> tuple[int, int, int]:
     """(三連複の1点あたり, 三連単の1点あたり, 合計購入額) を返す。
 
