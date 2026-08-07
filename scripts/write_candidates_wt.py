@@ -312,7 +312,7 @@ def _write_paper_candidates(target_date: str) -> None:
                     print(f"[write_candidates_wt] {fname} 読み込み失敗: {e}", flush=True)
         return out
 
-    rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder, gate_label)
+    rows: list[tuple] = []  # (race_key_store, rank, pred_placeholder, gate_label, n_combos)
     # U(#7U)/M(#7M) は 2026-07-21 全廃・S1(#7S1) は 2026-07-31 全廃のため
     # 読み込み自体を行わない（上記docstring参照）。
     for c in _load((f"wave_picks_wt_{target_date}_s7_candidates.json",
@@ -324,7 +324,7 @@ def _write_paper_candidates(target_date: str) -> None:
         gate_label = rank_7s_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
             continue  # 重なり2・不明は候補として表示しない（rank_7s_daily_select と同じ除外対象）
-        rows.append((f"{rk}#7S", "RANK_7S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", gate_label))
+        rows.append((f"{rk}#7S", "RANK_7S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", gate_label, 0))
 
     for c in _load((f"wave_picks_wt_{target_date}_s9_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s9_candidates.json")):
@@ -335,7 +335,7 @@ def _write_paper_candidates(target_date: str) -> None:
         gate_label = rank_7s_gate_label(c.get("wt_overlap_n"), c.get("axis1_class"), c.get("axis2_class"))
         if gate_label is None:
             continue  # S7と同じ基準（重なり2・不明は候補として表示しない）
-        rows.append((f"{rk}#9S", "RANK_9S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", gate_label))
+        rows.append((f"{rk}#9S", "RANK_9S", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", gate_label, 0))
 
     for c in _load((f"wave_picks_wt_{target_date}_s7a_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s7a_candidates.json")):
@@ -345,7 +345,7 @@ def _write_paper_candidates(target_date: str) -> None:
             continue
         # 7A候補JSON自体が既にrank_7a_daily_select()で境界ケースのみに絞り込み済み
         # （rank_7s_gate_label が None を返すケース）のため、ここでは再フィルタしない。
-        rows.append((f"{rk}#7A", "RANK_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
+        rows.append((f"{rk}#7A", "RANK_7A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None, 0))
 
     # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
     # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物。
@@ -358,7 +358,7 @@ def _write_paper_candidates(target_date: str) -> None:
         if not rk or axis1 is None or axis2 is None:
             continue
         rows.append((f"{rk}#7SS", "RANK_7SS",
-                     f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None))
+                     f"{axis1}={axis2}-{_third_list(axis1, axis2, 7)}", None, 0))
 
     for c in _load((f"wave_picks_wt_{target_date}_s9a_candidates.json",
                     f"wave_picks_wt_{target_date}_night_s9a_candidates.json")):
@@ -366,7 +366,7 @@ def _write_paper_candidates(target_date: str) -> None:
         axis1, axis2 = c.get("axis1"), c.get("axis2")
         if not rk or axis1 is None or axis2 is None:
             continue
-        rows.append((f"{rk}#9A", "RANK_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None))
+        rows.append((f"{rk}#9A", "RANK_9A", f"{axis1}={axis2}-{_third_list(axis1, axis2, 9)}", None, 0))
 
     # 7B（2026-08-03導入）。他ランクと違い相手を絞る（総流しではない）ため、
     # 候補時点の pred_combo も残り全車ではなく候補JSONの legs_7b（△除外・
@@ -380,26 +380,53 @@ def _write_paper_candidates(target_date: str) -> None:
         if not rk or axis1 is None or axis2 is None or not legs:
             continue
         rows.append((f"{rk}#7B", "RANK_7B",
-                     f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None))
+                     f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None, 0))
+
+    # 7H1（穴推奨・本命バスト型／唯一の2券種ランク・2026-08-07 追加）。
+    #
+    # 【なぜ必要だったか】7H1 の picks_history 行は発走15分前の判定
+    # （notify_prerace_wt._save_rank_7h1_pick）でしか作られず、**朝の推奨一覧に
+    # 一切出ない**状態だった（7H1 新設時にこの登録が漏れていた）。
+    # 他ランクと同じく朝に bet_amount=0 の暫定行を置き、発走前判定が
+    # 買い目・金額を上書きする。
+    #
+    # ⚠️ **bet_amount は必ず 0 のまま置くこと。** 発走前に「盤面が取れない/欠車で
+    #    無効」となった場合、notify_prerace_wt._mark_paper_miwokuri が
+    #    `bet_amount = 0` の行だけを見送りへ更新する設計なので、ここで金額を
+    #    入れると見送りに落とせず購入済みとして残る。
+    # ⚠️ pred_combo の形式は _save_rank_7h1_pick と**完全に一致**させること
+    #    （採点・Web 表示の両方が同じ文字列を前提にしている）。
+    # ⚠️ 7H1 は他ランクと**同一レースに併存する**（2026-04以降の実データで
+    #    7H1+7S 34件・7B+7H1 29件等）。「1レース1ランク」ガードを掛けてはいけない。
+    for c in _load((f"wave_picks_wt_{target_date}_s7h1_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s7h1_candidates.json")):
+        rk = c.get("race_key")
+        trio = c.get("legs_trio") or []
+        tf = c.get("legs_tf") or []
+        if not rk or not trio or not tf:
+            continue
+        rows.append((f"{rk}#7H1", "RANK_7H1",
+                     "三複:" + ",".join(trio) + " / 三単:" + ",".join(tf),
+                     None, len(trio) + len(tf)))
 
     if not rows:
         return
     inserted = 0
     try:
         with get_connection() as conn:
-            for store_key, rank, pred, gate_label in rows:
+            for store_key, rank, pred, gate_label, n_combos in rows:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO picks_history "
                     "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
-                    "VALUES (?,?,?,?,0,0,0,0,0,'wt',False,?)",
-                    (target_date, store_key, rank, pred, gate_label),
+                    "VALUES (?,?,?,?,?,0,0,0,0,'wt',False,?)",
+                    (target_date, store_key, rank, pred, n_combos, gate_label),
                 )
                 inserted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
             conn.commit()
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(S7/S9/7A/9A) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(7S/7A/7SS/7B/9S/9A/7H1) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")
@@ -409,13 +436,13 @@ def _write_paper_candidates(target_date: str) -> None:
         import psycopg2  # noqa: PLC0415
         with psycopg2.connect(db_url) as pg_conn:
             with pg_conn.cursor() as cur:
-                for store_key, rank, pred, gate_label in rows:
+                for store_key, rank, pred, gate_label, n_combos in rows:
                     cur.execute(
                         "INSERT INTO keirin.picks_history "
                         "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,trio_payout,bet_amount,route,miwokuri,gate_label) "
-                        "VALUES (%s,%s,%s,%s,0,0,0,0,0,'wt',FALSE,%s) "
+                        "VALUES (%s,%s,%s,%s,%s,0,0,0,0,'wt',FALSE,%s) "
                         "ON CONFLICT (race_key) DO NOTHING",
-                        (target_date, store_key, rank, pred, gate_label),
+                        (target_date, store_key, rank, pred, n_combos, gate_label),
                     )
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補 VPS ミラー失敗: {e}", flush=True)

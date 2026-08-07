@@ -34,7 +34,7 @@ from src.wt_rebuild_common import (
     rebuild_pg_atomic,
     split_by_model_availability,
 )
-from src.wt_vintage_config import monthly_windows
+from src.wt_vintage_config import monthly_windows, tail_windows
 
 _RANK_LABEL = "RANK_9S"
 _DELETE_COND = "rank='RANK_9S' AND race_key LIKE '%#9S' AND race_date BETWEEN ? AND ?"
@@ -55,9 +55,9 @@ def main() -> None:
                           "2026-08-01のm2608不足によるFileNotFoundError実害を踏まえた対応）。")
     args = ap.parse_args()
 
-    windows = monthly_windows()
-    if args.tail_only:
-        windows = windows[-1:]
+    # --tail-only は当日を含めない（tail_windows の docstring 参照）。
+    # 当日分を削除すると再構築では戻せず、Web から推奨が消えるため。
+    windows = tail_windows() if args.tail_only else monthly_windows()
 
     # --- 事前チェック: build_rows(重い計算)を始める前に全窓のモデル存在を検証 ---
     available, missing = split_by_model_availability(windows)

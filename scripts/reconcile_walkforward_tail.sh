@@ -68,4 +68,14 @@ for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "9s:9S" "9a:9A"; do
     || echo "[$(date '+%H:%M:%S')] ${label} tail再構築 失敗（継続）" | tee -a "$LOG"
 done
 
+# 【保険】当日の候補行を復元する（2026-08-07 追加）。
+# tail の窓は当日を含めない設計（src/wt_vintage_config.tail_windows）に直したので
+# 本来ここで消えることは無いが、rebuild 側の窓計算を将来また当日込みに戻して
+# しまったときに **Web から推奨が消えたまま 10:00 まで気づけない** ため、
+# 消えていたら書き戻す安全網を置く。候補JSONからの再生成で冪等。
+TODAY=$(date +%Y-%m-%d)
+echo "[$(date '+%H:%M:%S')] 当日候補の復元チェック（$TODAY）..." | tee -a "$LOG"
+PYTHONPATH=. .venv/bin/python3 scripts/write_candidates_wt.py "$TODAY" 2>&1 | tee -a "$LOG" \
+  || echo "[$(date '+%H:%M:%S')] 当日候補の復元に失敗（継続）" | tee -a "$LOG"
+
 echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 完了 ===" | tee -a "$LOG"

@@ -19,7 +19,7 @@
 train_monthly_vintage_models.py全てから共通importする。
 """
 from calendar import monthrange
-from datetime import date
+from datetime import date, timedelta
 
 BASE_FROM = "2022-12-01"
 FIRST_MONTH = (2024, 1)
@@ -74,3 +74,27 @@ def monthly_windows(upto: date | None = None) -> list[tuple[str, str, str, str]]
             m = 1
             y += 1
     return windows
+
+
+def tail_windows(today: date | None = None) -> list[tuple[str, str, str, str]]:
+    """`--tail-only` 用の窓（直近1窓）を **当日を含めずに** 返す。
+
+    【なぜ当日を除くか（2026-08-07）】
+    rebuild 系は対象期間の picks_history を**一旦全削除してから**再計算した行を
+    入れ直す。ところが再構築できるのは結果が確定したレースだけなので、
+    まだ発走していない当日分は「削除されたまま戻ってこない」。
+    実際 08:40 の `reconcile_walkforward_tail.sh` が当日の推奨行を消し、
+    10:00 の `intraday_results_wt.sh`（write_candidates_wt.py）が復元するまで
+    **約75分間 Web から推奨が消える**状態になっていた。
+
+    当日は結果が無く再構築のしようがない＝削除は純粋な損失なので、
+    tail の窓は前日で打ち切る。月初(1日)なら前月の窓がそのまま返る。
+
+    ⚠️ `monthly_windows()` 側の既定は変えていない。全期間再構築は
+       当日を含んだままでよい（結果のあるレースだけが入り直るため実害がなく、
+       既定を変えると全 rebuild スクリプトの挙動が一斉に変わる）。
+    """
+    if today is None:
+        today = date.today()
+    ws = monthly_windows(upto=today - timedelta(days=1))
+    return ws[-1:] if ws else []
