@@ -42,6 +42,7 @@ from src.strategy_wt import (
     rank_7h1_stakes,
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
     RANK_7C_NE, RANK_7C_LEGS_MIN, rank_7c_select_legs, rank_7c_unit_stake,
+    unit_stake,
     rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_STAKE,
     line_score_features, rank_7s_gate_label, ss_policy,
@@ -759,7 +760,9 @@ def _insert_rank_7s_pick(race_key: str, race_date: str, pred_combo: str, n_combo
                 "S"（片方だけ重なる＝wt_overlap_n=1）。2026-07-21〜。
     """
     store_key = race_key + "#7S"
-    bet = n_combos * RANK_7S_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -825,7 +828,8 @@ def _build_rank_7s_message(cand: dict, race_info: dict, detail: dict, gate_label
         f"🎲 **[{label}]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         + (f"（{label_desc}）" if label_desc else "") + "\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7S_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -899,7 +903,7 @@ def _process_rank_7s_candidates(today: str, now_unix: int, notified: set[str]) -
             "decision": decision,
             "rank": "RANK_7S",
             "paper": True,
-            "stake": RANK_7S_STAKE,
+            "stake": unit_stake(len(detail.get("combos") or [])),
             "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": wt_overlap_n,
             "gate_label": gate_label,
@@ -1007,7 +1011,9 @@ def _insert_rank_9s_pick(race_key: str, race_date: str, pred_combo: str, n_combo
     _insert_rank_7s_pick の9車版（rank='RANK_9S'・race_key末尾#9S・RANK_9S_STAKE）。
     """
     store_key = race_key + "#9S"
-    bet = n_combos * RANK_9S_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -1066,7 +1072,8 @@ def _build_rank_9s_message(cand: dict, race_info: dict, detail: dict, gate_label
         f"🎲 **[{label}]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         + (f"（{label_desc}）" if label_desc else "") + "\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_9S_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1139,7 +1146,7 @@ def _process_rank_9s_candidates(today: str, now_unix: int, notified: set[str]) -
             "decision": decision,
             "rank": "RANK_9S",
             "paper": True,
-            "stake": RANK_9S_STAKE,
+            "stake": unit_stake(len(detail.get("combos") or [])),
             "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": wt_overlap_n,
             "gate_label": gate_label,
@@ -1212,7 +1219,9 @@ def _insert_rank_7a_pick(race_key: str, race_date: str, pred_combo: str, n_combo
     _insert_rank_7s_pick の7A版（rank='RANK_7A'・race_key末尾#7A・RANK_7A_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#7A"
-    bet = n_combos * RANK_7A_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -1265,7 +1274,8 @@ def _build_rank_7a_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎲 **[7A]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         f"（S7の境界ランク・3ゲート中1つだけ不合格）\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7A_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1328,7 +1338,8 @@ def _process_rank_7a_candidates(today: str, now_unix: int, notified: set[str]) -
 
         _save_decision(today, rank_7a_key, {
             "decision": decision, "rank": "RANK_7A", "paper": True,
-            "stake": RANK_7A_STAKE, "axis_sum": cand.get("axis_sum"),
+            "stake": unit_stake(len(detail.get("combos") or [])),
+            "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
         })
 
@@ -1386,7 +1397,9 @@ def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_comb
     _insert_rank_7s_pick の7SS版（rank='RANK_7SS'・race_key末尾#7SS・RANK_7SS_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#7SS"
-    bet = n_combos * RANK_7SS_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -1712,7 +1725,8 @@ def _build_rank_7ss_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎲 **[7A]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         f"（S7の境界ランク・3ゲート中1つだけ不合格）\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_7SS_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -1775,7 +1789,8 @@ def _process_rank_7ss_candidates(today: str, now_unix: int, notified: set[str]) 
 
         _save_decision(today, rank_7ss_key, {
             "decision": decision, "rank": "RANK_7SS", "paper": True,
-            "stake": RANK_7SS_STAKE, "axis_sum": cand.get("axis_sum"),
+            "stake": unit_stake(len(detail.get("combos") or [])),
+            "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
         })
 
@@ -1916,7 +1931,9 @@ def _insert_rank_7b_pick(race_key: str, race_date: str, pred_combo: str, n_combo
     gate_labelなし）。点数は総流しではなく相手を絞った RANK_7B_LEGS 点が基本。
     """
     store_key = race_key + "#7B"
-    bet = n_combos * RANK_7B_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -1970,7 +1987,8 @@ def _build_rank_7b_message(cand: dict, race_info: dict, detail: dict) -> str:
     return (
         f"🎯 **[7B]  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: {axis1}/{axis2}（WT公式印◎◯と一致・ただしモデル1位は◎ではない）\n"
-        f"  三連複2軸・相手絞り({n_pts}点 / 名目{n_pts * RANK_7B_STAKE:,}円): "
+        f"  三連複2軸・相手絞り({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}-" + ",".join(str(c.split("-")[-1]) for c in combos) + "`\n"
         f"  **{ana_str}**／軸合計複勝指数(波乱度)={axis_sum_str}\n"
         f"\n"
@@ -2033,7 +2051,8 @@ def _process_rank_7b_candidates(today: str, now_unix: int, notified: set[str]) -
 
         _save_decision(today, rank_7b_key, {
             "decision": decision, "rank": "RANK_7B", "paper": True,
-            "stake": RANK_7B_STAKE, "axis_sum": cand.get("axis_sum"),
+            "stake": unit_stake(len(detail.get("combos") or [])),
+            "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"),
             "order_disagree": cand.get("order_disagree"), **detail,
         })
@@ -2283,7 +2302,9 @@ def _insert_rank_9a_pick(race_key: str, race_date: str, pred_combo: str, n_combo
     _insert_rank_9s_pick の9A版（rank='RANK_9A'・race_key末尾#9A・RANK_9A_STAKE・gate_labelなし）。
     """
     store_key = race_key + "#9A"
-    bet = n_combos * RANK_9A_STAKE
+    # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
+    # 固定単価を掛けると欠車で点数が減ったとき投資額が予算枠からずれる。
+    bet = n_combos * unit_stake(n_combos)
     try:
         with get_connection() as conn:
             conn.execute(
@@ -2336,7 +2357,8 @@ def _build_rank_9a_message(cand: dict, race_info: dict, detail: dict) -> str:
         f"🎲 **[9A]（9車立て）  {venue} {race_no}R  発走 {start}**\n"
         f"  軸: 単勝×複勝指数トップ3重なり {axis1}/{axis2}"
         f"（S9の境界ランク・2ゲート中1つだけ不合格）\n"
-        f"  三連複2軸総流し({n_pts}点 / 名目{n_pts * RANK_9A_STAKE:,}円): "
+        f"  三連複2軸総流し({n_pts}点 × {unit_stake(n_pts):,}円 = "
+        f"{n_pts * unit_stake(n_pts):,}円): "
         f"`{axis1}={axis2}流し`\n"
         f"  **軸合計複勝指数(波乱度)={axis_sum_str}**\n"
         f"\n"
@@ -2399,7 +2421,8 @@ def _process_rank_9a_candidates(today: str, now_unix: int, notified: set[str]) -
 
         _save_decision(today, rank_9a_key, {
             "decision": decision, "rank": "RANK_9A", "paper": True,
-            "stake": RANK_9A_STAKE, "axis_sum": cand.get("axis_sum"),
+            "stake": unit_stake(len(detail.get("combos") or [])),
+            "axis_sum": cand.get("axis_sum"),
             "wt_overlap_n": cand.get("wt_overlap_n"), **detail,
         })
 

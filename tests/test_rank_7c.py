@@ -152,18 +152,39 @@ def test_netkeirin_7c_uses_budget_and_own_axis_keys():
     cfg = ns.RANK_CONFIGS["7C"]
     assert cfg["axis_keys"] == ("axis1_7c", "axis2_7c")
     assert cfg["partners_key"] == "legs_7c"
-    assert cfg["stake_budget"] == sw.RANK_7C_BUDGET
+    assert cfg["stake_budget"] == sw.RACE_BUDGET
     assert "stake_per_line" not in cfg      # 固定額と併記すると取り違える
     assert cfg["overlap_expected"] is True  # 衝突は想定内＝失敗集計に混ぜない
+    # タイトル・文面は 7A と同じ既定テンプレート（ユーザー指示 2026-08-07）
+    assert "default_comment" not in cfg
+
+
+def test_all_ranks_invest_one_race_budget():
+    """🔴 全ランクが1レース RACE_BUDGET 円に揃っていること（2026-08-07 統一）。
+    固定単価に戻すと点数が変わったとき投資額がずれ、Web の比較が壊れる。"""
+    from scripts import netkeirin_submit_wt as ns
+    for rank, n_pts in (("7SS", 5), ("7S", 5), ("7A", 5), ("7B", 3),
+                        ("9S", 7), ("9A", 7), ("7C", 4), ("7C", 5)):
+        cfg = ns.RANK_CONFIGS[rank]
+        total = n_pts * ns._stake_per_line(cfg, n_pts)
+        assert sw.RACE_BUDGET - 200 <= total <= sw.RACE_BUDGET, (rank, n_pts, total)
+
+
+def test_default_comment_does_not_hardcode_point_count():
+    """既定文面は 7S/7A/7SS(5点) と 7C(4〜5点) が共有するので点数を書かない。"""
+    from scripts import netkeirin_submit_wt as ns
+    assert "5点" not in ns._DEFAULT_COMMENT_TEMPLATE
 
 
 def test_netkeirin_stake_resolution():
+    """2026-08-07 に全ランクが予算枠方式へ統一されたので、点数が同じなら
+    ランクによらず同じ単価になる。"""
     from scripts import netkeirin_submit_wt as ns
     assert ns._stake_per_line(ns.RANK_CONFIGS["7C"], 4) == 2500
     assert ns._stake_per_line(ns.RANK_CONFIGS["7C"], 5) == 2000
-    # 固定額ランクは点数に依存しない
     assert ns._stake_per_line(ns.RANK_CONFIGS["7S"], 5) == 2000
-    assert ns._stake_per_line(ns.RANK_CONFIGS["7S"], 3) == 2000
+    assert ns._stake_per_line(ns.RANK_CONFIGS["7B"], 3) == 3300
+    assert ns._stake_per_line(ns.RANK_CONFIGS["9S"], 7) == 1400
 
 
 def test_netkeirin_7c_normalizes_with_its_own_axes():
@@ -177,12 +198,13 @@ def test_netkeirin_7c_normalizes_with_its_own_axes():
     assert marks == {5: "◎", 6: "○"}
 
 
-def test_netkeirin_7c_comment_does_not_claim_full_spread():
-    """文面と買い目の実態を一致させる（7B で不一致を出した前例がある）。"""
+def test_netkeirin_7c_uses_same_template_as_7a():
+    """タイトル・文面は 7A と同じ（ユーザー指示 2026-08-07）。
+    どちらも rank 固有の上書きを持たず既定テンプレートへ落ちる。"""
     from scripts import netkeirin_submit_wt as ns
-    c = ns.RANK_CONFIGS["7C"]["default_comment"]
-    assert "総流しではありません" in c
-    assert "5点均等" not in c
+    assert "default_comment" not in ns.RANK_CONFIGS["7A"]
+    assert "default_comment" not in ns.RANK_CONFIGS["7C"]
+    assert "default_title" not in ns.RANK_CONFIGS["7C"]
 
 
 # ── 発走前のライブ判定（盤面・欠車の扱い）───────────────────────────────

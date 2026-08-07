@@ -42,6 +42,7 @@ from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
 from src.strategy_wt import (
     CURRENT_PAPER_RANKS, ABOLISHED_PAPER_RANKS, rank_7c_unit_stake,
+    RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE, RANK_9S_STAKE, RANK_9A_STAKE,
 )
 
 # 集計対象ランクの単一正本は src/strategy_wt.py の CURRENT_PAPER_RANKS /
@@ -763,7 +764,9 @@ def _main_inner(date):
                 rank_7s_order = [int(r[0]) for r in rank_7s_rows]
                 if len(rank_7s_order) < 3:
                     continue
-                rank_7s_stake = int(dec_s7.get("stake") or 100)
+                # 旧 decisions は stake=100 で保存されている。予算枠へ統一した
+                # 2026-08-07 以降と混ざらないよう、欠損時はランクの標準単価を使う。
+                rank_7s_stake = int(dec_s7.get("stake") or RANK_7S_STAKE)
                 try:
                     rank_7s_axis1 = int(dec_s7.get("axis1"))
                     rank_7s_axis2 = int(dec_s7.get("axis2"))
@@ -860,7 +863,7 @@ def _main_inner(date):
                 rank_9s_order = [int(r[0]) for r in rank_9s_rows]
                 if len(rank_9s_order) < 3:
                     continue
-                rank_9s_stake = int(dec_s9.get("stake") or 100)
+                rank_9s_stake = int(dec_s9.get("stake") or RANK_9S_STAKE)
                 try:
                     rank_9s_axis1 = int(dec_s9.get("axis1"))
                     rank_9s_axis2 = int(dec_s9.get("axis2"))
@@ -944,7 +947,7 @@ def _main_inner(date):
                 a7_order = [int(r[0]) for r in a7_rows]
                 if len(a7_order) < 3:
                     continue
-                a7_stake = int(dec_7a.get("stake") or 100)
+                a7_stake = int(dec_7a.get("stake") or RANK_7A_STAKE)
                 try:
                     a7_axis1 = int(dec_7a.get("axis1"))
                     a7_axis2 = int(dec_7a.get("axis2"))
@@ -1014,7 +1017,7 @@ def _main_inner(date):
                 b7_order = [int(r[0]) for r in b7_rows]
                 if len(b7_order) < 3:
                     continue
-                b7_stake = int(dec_7b.get("stake") or 100)
+                b7_stake = int(dec_7b.get("stake") or RANK_7B_STAKE)
                 try:
                     b7_axis1 = int(dec_7b.get("axis1"))
                     b7_axis2 = int(dec_7b.get("axis2"))
@@ -1238,7 +1241,7 @@ def _main_inner(date):
                 a9_order = [int(r[0]) for r in a9_rows]
                 if len(a9_order) < 3:
                     continue
-                a9_stake = int(dec_9a.get("stake") or 100)
+                a9_stake = int(dec_9a.get("stake") or RANK_9A_STAKE)
                 try:
                     a9_axis1 = int(dec_9a.get("axis1"))
                     a9_axis2 = int(dec_9a.get("axis2"))

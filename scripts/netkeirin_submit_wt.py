@@ -63,14 +63,17 @@ from src.netkeirin_client import (
     expand_bet,
 )
 from src.notify.discord import send
-from src.strategy_wt import rank_7s_gate_label
+from src.strategy_wt import RACE_BUDGET, rank_7s_gate_label, unit_stake
 
 SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
 
 _DEFAULT_TITLE_TEMPLATE = "{venue}{race_no}R 二軸探偵"
 _DEFAULT_COMMENT_TEMPLATE = (
     "本日の二軸をお届けします。\n\n"
-    "買い目は三連複・軸2車流し（5点均等）です。独自の検証では、この5点のうち"
+    # ⚠️ 7S/7A/7SS(5点) と 7C(4〜5点・可変) が共有するので**点数を書かない**。
+    #    2026-08-07 以前は「（5点均等）」「この5点のうち」と書いており、
+    #    7C が同じ文面を使うと買い目を偽ることになるため一般化した。
+    "買い目は三連複・軸2車流し（均等買い）です。独自の検証では、買い目のうち"
     "最終オッズが低い（目安5〜10倍以下）組み合わせを購入対象から外すと、"
     "的中率は下がる一方で回収率は上昇する傾向を確認しています。"
     "二軸探偵の入稿は発走前の最終オッズを確認できないタイミングで行っているため、"
@@ -125,15 +128,15 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             )},
     # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
     # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物で名前のみ継承。
-    "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_per_line": 2000, "gate_filter": None},
-    "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": "S"},
-    "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 2000, "gate_filter": None},
+    "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_budget": RACE_BUDGET, "gate_filter": None},
+    "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S"},
+    "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None},
     # 7B（2026-08-03新設）は総流しではなく相手を3点に絞る（partners_key）。
     # 1レース総額を他ランク（約10,000円）と揃えるため 3点×3,300円とする。
     # ⚠️ `_is_enabled()` は fail-open（netkeirin_settings に行が無いと常時ON）の
     #    ため、導入時に enabled=false の行を明示投入してある。ユーザーが
     #    /keirin/settings で明示的にONにするまで入稿されない。
-    "7B":  {"file_key": "s7b", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 3300, "gate_filter": None,
+    "7B":  {"file_key": "s7b", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None,
             "partners_key": "legs_7b",
             # ⚠️ 2026-08-05 の PR#12 で 7B は「◎○一致 × **順序一致** × 準決勝」へ
             #    全面入替した。旧7Bは順序**不一致**が条件だったため、旧文面の
@@ -147,8 +150,8 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
                 "買い目は三連複・軸2車から相手3点の均等買いです。\n\n"
                 "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
             )},
-    "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": "S"},
-    "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_per_line": 1400, "gate_filter": None},
+    "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S"},
+    "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None},
     # 7C（2026-08-07新設・ベースモデル「終日の二軸」）。**必ず最下位に置くこと**。
     # 母集団が全7車レースで他ランクと排他ではないため、上位ランクが取った
     # レースは 7C が降りる。この衝突は**想定内**なので `overlap_expected` で
@@ -158,24 +161,13 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
     # ⚠️ **総流しではない**。相手は `legs_7c`（3着内率15%以上・4〜5点で可変）。
     # ⚠️ 賭け金も**可変**（1レース10,000円の予算枠 ÷ 点数）なので
     #    stake_per_line ではなく stake_budget を持つ。
-    "7C":  {"file_key": "s7c", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "gate_filter": None,
+    "7C":  {"file_key": "s7c", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None,
             "axis_keys": ("axis1_7c", "axis2_7c"),
             "partners_key": "legs_7c",
-            "stake_budget": 10000,
             "overlap_expected": True,
-            # ⚠️ 文面は買い目の実態と必ず一致させること（7B で不一致を出した前例あり）。
-            #    総流しではなく「3着に来そうにない車を外した4〜5点」である点、
-            #    点数によって1点あたりの金額が変わる点を明記する。
-            "default_comment": (
-                "本日の二軸をお届けします。\n\n"
-                "当方の指数で、複勝率の高い2車がはっきり抜けているレースだけを"
-                "選んでいます。1日を通してお出しする、二軸探偵の土台となる予想です。\n\n"
-                "買い目は三連複・軸2車からの流しですが、総流しではありません。"
-                "3着以内に届きそうにない車は相手から外しています。\n"
-                "また、相手が絞り込めすぎるレース（力の差が大きく、当たっても"
-                "配当が期待できないレース）は、あらかじめ見送っています。\n\n"
-                "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
-            )},
+            # タイトル・文面は **7A と同じ既定テンプレート**を使う（ユーザー指示
+            # 2026-08-07）。したがって default_comment は持たない。
+            },
 }
 # 入稿の処理順。**RANK_CONFIGS から導出する**（上位ランクから順に並べてあるため
 # 定義順がそのまま優先順位になる）。
@@ -374,7 +366,7 @@ def _stake_per_line(cfg: dict, n_lines: int) -> int:
     if budget:
         if n_lines <= 0:
             raise ValueError("点数0では賭け金を決められません")
-        return max(100, (int(budget) // n_lines) // 100 * 100)
+        return unit_stake(n_lines, int(budget))
     return int(cfg["stake_per_line"])
 
 

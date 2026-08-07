@@ -32,6 +32,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import src.strategy_wt as sw
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -324,9 +326,10 @@ class TestS7BuildRowsVoidUnification:
         assert len(rows) == 1
         r = rows[0]
         assert r["n_combos"] == 5
-        assert r["bet_amount"] == 500
+        # 2026-08-07: 賭け金は1レース RACE_BUDGET(10,000円) を点数で均等割り
+        assert r["bet_amount"] == 5 * sw.unit_stake(5) == 10000
         assert r["hit"] == 1  # 実際の3着=frame6, combo{1,2,6}が的中
-        assert r["payout"] == 1000  # trio_pay(1000) * STAKE(100) // 100
+        assert r["payout"] == 1000 * sw.unit_stake(5) // 100 == 20000
         # pred_combo は実際に購入した5目のみを列挙
         assert "3,4,5,6,7" in r["pred_combo"]
 
@@ -350,7 +353,8 @@ class TestS7BuildRowsVoidUnification:
         assert len(rows) == 1
         r = rows[0]
         assert r["n_combos"] == 4
-        assert r["bet_amount"] == 400
+        # 欠車で1点減っても投資は予算枠に揃う（2,500円×4点）
+        assert r["bet_amount"] == 4 * sw.unit_stake(4) == 10000
         assert r["hit"] == 1
         assert "5" not in r["pred_combo"].split("-")[-1].split(" ")[0].split(",")
         for x in ("3", "4", "6", "7"):
@@ -408,7 +412,7 @@ class TestS7BuildRowsVoidUnification:
         r = rows[0]
         # frame7 は欠車ではないので5点のまま（DNFによる自動除外は発生しない）
         assert r["n_combos"] == 5
-        assert r["bet_amount"] == 500
+        assert r["bet_amount"] == 5 * sw.unit_stake(5) == 10000
         for x in ("3", "4", "5", "6", "7"):
             assert x in r["pred_combo"]
         # 的中は frame3 が3着のため combo{1,2,3}。frame7を含むcomboは外れ計上のみ。
@@ -474,7 +478,7 @@ def test_rank_9s_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert len(matching) == 1, f"S9: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 6
-    assert r["bet_amount"] == 600
+    assert r["bet_amount"] == 6 * sw.unit_stake(6) == 9600
     assert "9" not in r["pred_combo"]
 
 
@@ -502,7 +506,7 @@ def test_rank_7a_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert len(matching) == 1, f"7A: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 4
-    assert r["bet_amount"] == 400
+    assert r["bet_amount"] == 4 * sw.unit_stake(4) == 10000
     assert "7" not in r["pred_combo"]
 
 
@@ -534,5 +538,5 @@ def test_rank_9a_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert len(matching) == 1, f"9A: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 6
-    assert r["bet_amount"] == 600
+    assert r["bet_amount"] == 6 * sw.unit_stake(6) == 9600
     assert "9" not in r["pred_combo"]
