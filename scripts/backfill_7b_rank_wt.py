@@ -54,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
+from src.rebuild_stakes import load_morning_boards, stakes_for_combos
 from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
@@ -221,7 +222,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         candidates.append({
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
-            "others": others, "trio": trio, "actual_top3": actual_top3,
+            "others": others, "trio": trio, "actual_top3": actual_top3, "top3_probs": top3_probs,
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
             # 7B用: 順序ゲート（2026-08-05〜は「一致」側）と相手絞りに必要な情報
             "order_disagree": rank_7b_order_disagree(win_probs, wt_honmei),
@@ -229,6 +230,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "wt_ana": wt_ana, "top3_probs": top3_probs,
         })
 
+    morning_boards = load_morning_boards([c["race_key"] for c in candidates])
     rows: list[dict] = []
     for c_ in rank_7b_daily_select(candidates):
         axis1, axis2 = c_["axis1"], c_["axis2"]
@@ -251,12 +253,12 @@ def build_rows(model_name: str, date_from: str, date_to: str,
         rk = c_["race_key"]
         hit = c_["actual_top3"] in combos
         trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-        # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
-        # 欠車で相手が減ったレースでも投資額が予算枠に揃うよう、固定単価では
-        # なく実点数から単価を出す。
-        stake = unit_stake(len(combos))
-        pay = trio_pay * stake // 100 if hit else 0
-        bet = len(combos) * stake
+        # 賭け金は1レース RACE_BUDGET 円を**入稿と同じ傾斜配分**で割り振る。
+        # 7B も3点買いとはいえ 3.0倍未満はガミになる（netkeirin は不的中扱い）。
+        stakes = stakes_for_combos(axis1, axis2, combos, c_.get("top3_probs") or {},
+                                   morning_boards.get(rk))
+        pay = trio_pay * stakes[c_["actual_top3"]] // 100 if hit else 0
+        bet = sum(stakes.values())
         rows.append({
             "race_date": c_["race_date"],
             "race_key": f"{rk}#7B", "rank": "RANK_7B",

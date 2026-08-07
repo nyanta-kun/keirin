@@ -98,16 +98,18 @@ def test_盤面が一部しか無ければモデルへ落ちる(board):
     assert source == "model"
 
 
-def test_7Bは傾斜配分の対象外():
-    """3点買いはガミ境界が3.0倍でほぼ無害。商品説明（相手3点の均等買い）とも整合する。"""
-    assert not sub.RANK_CONFIGS["7B"].get("tilt_stakes")
+def test_三連複軸2車のランクはすべて傾斜配分の対象():
+    """当初 7B だけ除外していたが、3点買いでも 3.0倍未満はガミになる。
+    実測 +1.05pt [+0.66, +1.43] P=100% だったので全ランク一律にした。"""
+    assert sub.RANK_CONFIGS["7B"].get("tilt_stakes")
+    # 7H1 は三連単+三連複の併せ買いで予算配分の考え方が別（対象外のまま）。
     assert not sub.RANK_CONFIGS["7H1"].get("tilt_stakes")
 
 
-def test_三連複軸2車のランクは7B以外すべて傾斜配分の対象():
-    """新しいランクを足したときに**付け忘れ**を検出する（RANK_ORDER で実際に起きた型）。"""
+def test_新ランクへの付け忘れを検出する():
+    """RANK_ORDER で実際に起きた「一覧の手書き二重管理」型の事故を防ぐ。"""
     for key, cfg in sub.RANK_CONFIGS.items():
-        if cfg.get("bet_kind") != BET_KIND_TRIO_AXIS2 or key == "7B":
+        if cfg.get("bet_kind") != BET_KIND_TRIO_AXIS2:
             continue
         assert cfg.get("tilt_stakes"), f"{key} に tilt_stakes が付いていません"
 

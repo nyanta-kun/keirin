@@ -23,6 +23,7 @@ dutch 配分で効くのは**買う点どうしの相対的な 1/オッズ**だ�
 """
 from __future__ import annotations
 
+import os
 import pickle
 import re
 import sys
@@ -44,7 +45,9 @@ N_UNITS = BUDGET // UNIT
 _SEP_RE = re.compile(r"[-=]")
 DETAIL = REPO / "data" / "exp_cache" / "axis_detail_7car.pkl"
 TRIO_RANKS = ("RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B")
-MORNING_FROM = "2026-06-08"
+MORNING_FROM = "2026-06-08"   # 朝オッズが存在する最初の日
+FROM = os.environ.get("EXP_FROM", MORNING_FROM)
+TO = os.environ.get("EXP_TO", "2026-08-06")
 
 
 # ------------------------------------------------------------------ 読み込み
@@ -105,7 +108,7 @@ def build(conn, p3map):
         FROM keirin.picks_history p
         JOIN keirin.wt_races r ON r.race_key = split_part(p.race_key,'#',1)
         WHERE p.rank IN ({",".join("'" + r + "'" for r in TRIO_RANKS)})
-          AND p.race_date >= '{MORNING_FROM}' AND p.race_date <= '2026-08-06'
+          AND p.race_date >= '{FROM}' AND p.race_date <= '{TO}'
           AND COALESCE(r.cancel,0)=0 AND r.n_entries=7
     """))
     for r in rows:
@@ -118,7 +121,7 @@ def build(conn, p3map):
                          axes=axes, legs=legs, p3=p3map[base]))
     # 7C は picks_history 未 backfill のため確定仕様で再現
     for r in pickle.load(open(DETAIL, "rb")):
-        if not (MORNING_FROM <= r["date"] <= "2026-08-06") or len(r["p3"]) != 7:
+        if not (FROM <= r["date"] <= TO) or len(r["p3"]) != 7:
             continue
         p3 = r["p3"]
         ranked = sorted(p3, key=lambda f: (-p3[f], f))
@@ -283,9 +286,12 @@ def main():
         morning = load_odds(conn, bases, "morning")
         top3 = load_top3(conn, bases)
 
-    snap_days = {r["date"] for r in recs if r["base"] in morning}
-    recs = [r for r in recs if r["date"] in snap_days]
-    print(f"7車 {len(recs):,} レース（{MORNING_FROM}〜2026-08-06・朝スナップショットのある日）")
+    if os.environ.get("EXP_ALL_DAYS"):
+        pass   # 全期間モード: 朝スナップショットの有無で母集団を絞らない
+    else:
+        snap_days = {r["date"] for r in recs if r["base"] in morning}
+        recs = [r for r in recs if r["date"] in snap_days]
+    print(f"7車 {len(recs):,} レース（{FROM}〜{TO}・朝スナップショットのある日）")
     nfull = sum(1 for r in recs
                 if all(frozenset({*r["axes"], t}) in morning.get(r["base"], {})
                        for t in r["legs"]))
