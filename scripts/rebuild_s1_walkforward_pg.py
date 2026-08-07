@@ -36,36 +36,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.backfill_s1w_rank_wt import build_rows
-from src.database import get_connection
+from src.wt_rebuild_common import rebuild_pg_atomic
 from src.wt_vintage_config import monthly_windows
 
 
-def wipe_rows_pg(date_from: str, date_to: str, dry_run: bool) -> None:
-    cond = "rank='SEVEN_S1' AND race_key LIKE '%#7S1' AND race_date BETWEEN ? AND ?"
-    with get_connection() as conn:
-        n = conn.execute(f"SELECT COUNT(*) FROM picks_history WHERE {cond}",
-                          (date_from, date_to)).fetchone()[0]
-        print(f"[rebuild-s1-pg] 既存 #7S1 行（{date_from}〜{date_to}）: {n}件 → 削除"
-              f"{'（dry-run）' if dry_run else ''}")
-        if not dry_run and n:
-            conn.execute(f"DELETE FROM picks_history WHERE {cond}", (date_from, date_to))
-            conn.commit()
-
-
-def insert_rows_pg(rows: list[dict], dry_run: bool) -> None:
-    if dry_run or not rows:
-        return
-    rows_ins = [{**r, "miwokuri": False} for r in rows]
-    with get_connection() as conn:
-        conn.executemany(
-            "INSERT OR REPLACE INTO picks_history "
-            "(race_date,race_key,rank,pred_combo,n_combos,hit,payout,"
-            " trifecta_payout,bet_amount,route,miwokuri) "
-            "VALUES (:race_date,:race_key,:rank,:pred_combo,:n_combos,:hit,"
-            " :payout,:trifecta_payout,:bet_amount,'wt',:miwokuri)",
-            rows_ins)
-        conn.commit()
-    print(f"[rebuild-s1-pg] {len(rows)}件 書き込み完了（VPS PG）")
+#: DELETE/COUNT の WHERE 句（`rebuild_pg_atomic` へ渡す完全な条件文字列）。
+_DELETE_COND = "rank='SEVEN_S1' AND race_key LIKE '%#7S1' AND race_date BETWEEN ? AND ?"
 
 
 def _parse_upto(v: str | None):
@@ -114,10 +90,17 @@ def main() -> None:
           f"投資{total_bet:,} → 回収{total_pay:,} "
           f"ROI {total_pay / total_bet * 100 if total_bet else 0:.1f}%")
 
-    wipe_rows_pg(wipe_from, wipe_to, args.dry_run)
-    insert_rows_pg(all_rows, args.dry_run)
-    if args.dry_run:
-        print("[rebuild-s1-pg] DRY RUN（書き込みなし）")
+    # 🔴 wipe(DELETE)→insert は**単一トランザクション**で行う（2026-08-08 是正）。
+    #   従来はここだけ旧方式（DELETE を commit してから INSERT を別 commit）で、
+    #   途中で例外が起きると wipe だけ確定して insert が失われ得た
+    #   （2026-08-01 に他ランクで実害が出て `rebuild_pg_atomic` が導入された
+    #   のに、全廃済みの S1 版だけ移行から漏れていた）。
+    rebuild_pg_atomic(
+        rank_label="SEVEN_S1",
+        delete_cond_sql=_DELETE_COND,
+        per_window_rows=[(wipe_from, wipe_to, all_rows)],
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":

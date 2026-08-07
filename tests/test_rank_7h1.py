@@ -172,6 +172,32 @@ def test_judge_skips_when_first_place_car_is_scratched(cand_7h1):
     assert "1着固定" in (detail["skip_reason"] or "")
 
 
+def test_judge_skips_when_fav_itself_is_scratched(cand_7h1):
+    """🔴 本命（＝バストすると読んだ相手）自身が欠車したら見送ること。
+
+    買い目は設計上 fav を一切含まない（本命ラインを丸ごと落とす）ので、
+    fav が消えても組み合わせは残り6車で成立してしまい、**そのまま "buy" に
+    なっていた**（2026-08-08 レビューで検出。他ランクは全て「軸が盤面に不在」を
+    明示的に skip 扱いにしているのに 7H1 だけ防御が無かった）。
+
+    7H1 の選別は「7車ちょうどの盤面で本命1車が沈む」というレース構造の予測に
+    依存しており、fav 自身が欠車した時点で前提が崩れる（実質6車レース＝
+    favbust モデルの較正が想定していない状況）。
+    """
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([2, 3, 4, 5, 6, 7])          # 本命の1番が欠車
+    decision, detail = judge_rank_7h1(cand_7h1, trio, tf)
+    assert decision == "skip"
+    assert "本命" in (detail["skip_reason"] or "")
+
+
+def test_judge_still_buys_when_fav_is_present(cand_7h1):
+    """本命が居るなら従来どおり買うこと（上の追加ガードで買えなくならない）。"""
+    from scripts.notify_prerace_wt import judge_rank_7h1
+    trio, tf = _lookup([1, 2, 3, 4, 5, 6, 7])
+    assert judge_rank_7h1(cand_7h1, trio, tf)[0] == "buy"
+
+
 def test_judge_drops_scratched_partners_and_restakes(cand_7h1):
     """相手が欠けた目だけ落とし、残った点数で賭け金を張り直す。"""
     from scripts.notify_prerace_wt import judge_rank_7h1

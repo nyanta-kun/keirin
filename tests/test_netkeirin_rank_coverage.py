@@ -79,3 +79,26 @@ def test_current_paper_ranks_are_submittable():
     assert not missing, (
         f"CURRENT_PAPER_RANKS にあるが netkeirin 入稿側に定義が無い: {missing}"
     )
+
+
+def test_normalize_candidate_rejects_identical_axes():
+    """自動経路でも axis1 == axis2 を弾くこと（2026-08-08 レビュー指摘）。
+
+    手動入稿 `_process_manual` には同値チェックがあるのに自動経路には無く、
+    同じ車が2つ来ると `expand_bet(BET_KIND_TRIO_AXIS2, ...)` が
+    要素2つの frozenset を返して**三連複として不正な買い目**を入稿しうる。
+    経路ごとに防御が非対称なのは危ういので揃える。
+    """
+    import pytest
+
+    from scripts.netkeirin_submit_wt import RANK_CONFIGS, _normalize_candidate
+
+    cfg = RANK_CONFIGS["7S"]
+    k1, k2 = cfg.get("axis_keys", ("axis1", "axis2"))
+    with pytest.raises(ValueError, match="軸1と軸2が同じ"):
+        _normalize_candidate({k1: 3, k2: 3}, cfg)
+
+    # 正常系は通ること
+    axis1, axis2, partners, marks = _normalize_candidate({k1: 3, k2: 5}, cfg)
+    assert (axis1, axis2) == (3, 5)
+    assert 3 not in partners and 5 not in partners

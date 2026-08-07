@@ -55,7 +55,14 @@ def compute_rolling():
 print("データ構築中...")
 raw = load_raw_data_wt(min_date=args.train_from)
 df = build_features_wt(raw)
-df = df[df["finish_order"].notna() & (df["finish_order"]>=1)].copy()
+# 🔴 ここで完走馬だけに絞ってはいけない（2026-08-08 是正・生存者バイアス）。
+#   以前は build_features_wt の直後に
+#       df = df[df["finish_order"].notna() & (df["finish_order"]>=1)]
+#   としており、後段の tiered() が **完走者だけを並べ替えて軸を選んで**いた。
+#   本番は出走予定の全車で順位を確定するので、指数1位が欠車・失格になると
+#   2位が繰り上がって1位扱いになり、ROI が実態より良く出る
+#   （backtest_wt.py が doc18 で直したのと同じ欠陥がここだけ残っていた）。
+#   → 全エントリーを保持したまま順位付けし、**学習時だけ**完走者に絞る。
 df["player_id"] = raw.loc[df.index,"player_id"].values
 df["race_size"] = df.groupby("race_key")["frame_no"].transform("count")
 df["w_field"] = 1.0/df["race_size"]
@@ -69,7 +76,11 @@ if not args.no_rolling:
         df[c]=df[c].fillna(df[c].median())
     cols += ROLL_COLS
 
-tr = df[df["race_date"] < args.val_from]
+# 学習は完走者のみ（目的変数が着順由来のため）。評価用の df は全エントリーのまま。
+# ⚠️ マスクはここで作る。上の merge が index を振り直すので、事前に作った
+#    Series を reindex すると静かにずれる。
+_finished = df["finish_order"].notna() & (df["finish_order"] >= 1)
+tr = df[(df["race_date"] < args.val_from) & _finished]
 print(f"学習 {tr['race_key'].nunique()}R ({args.train_from}〜{args.val_from})  特徴量{len(cols)}個")
 model = train_lgbm(tr, feature_cols=cols, target_col=TARGET_COL_WT, weight_col="w_field")
 save_model(model, args.save_as)
@@ -105,7 +116,11 @@ print(f"\n{'='*64}\nwinticket 本番評価  (特徴量: {'rolling込み' if not 
 KS = {"A":238,"S":185,"SS":1321}  # ks 真のOOS実績(参考)
 for sp,a,b in [("検証",args.val_from,args.test_from),("テスト",args.test_from,args.test_to)]:
     s=df[(df["race_date"]>=a)&(df["race_date"]<b)].copy()
-    auc=roc_auc_score(s[TARGET_COL_WT],s["pred_prob"])
+    # ROI 集計(tiered) は全エントリーで順位を付ける（生存者バイアス回避）が、
+    # AUC は完走者のみで測る。欠車は top3_flag=0 になるだけで「予測を外した」
+    # わけではないため、混ぜると AUC が実力と無関係に動く。
+    _s_fin = s[s["finish_order"].notna() & (s["finish_order"] >= 1)]
+    auc=roc_auc_score(_s_fin[TARGET_COL_WT],_s_fin["pred_prob"])
     rec=tiered(s)
     print(f"\n[{sp}] {s['race_key'].nunique()}R  AUC={auc:.4f}")
     print(f"  {'層':<4}{'対象R':>6}{'的中率':>7}{'ROI':>7}{'  ks参考':>9}")

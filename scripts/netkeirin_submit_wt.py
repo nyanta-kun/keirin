@@ -71,6 +71,7 @@ from src.meeting_wave import (
     WAVE_NOON,
     WAVE_LABEL_JP,
     wave_of_first_hour,
+    waves_due_by,
 )
 from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import (
@@ -690,6 +691,13 @@ def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], di
     if cand.get(k1) is None or cand.get(k2) is None:
         raise ValueError(f"軸キー {k1}/{k2} が候補JSONにありません")
     axis1, axis2 = int(cand[k1]), int(cand[k2])
+    # 手動入稿の `_process_manual` は axis1 == axis2 を弾くのに、自動経路には
+    # そのチェックが無かった（2026-08-08 是正）。同じ車が2つ来ると
+    # `expand_bet(BET_KIND_TRIO_AXIS2, ...)` が要素2つの frozenset を返し、
+    # **三連複として不正な買い目**をそのまま入稿してしまう。
+    # 現状は候補生成側が保証しているが、経路ごとに防御が非対称なのは危うい。
+    if axis1 == axis2:
+        raise ValueError(f"軸1と軸2が同じ車です（{k1}={axis1} / {k2}={axis2}）")
     # 相手を絞るランク（7B: WT△を外した pred_prob 上位3車）は候補JSONが持つ
     # 絞り込み済みリストをそのまま使う。総流しランク（7S/7A/9S/9A）は従来通り
     # 軸以外の全車が相手。partners_key が無い＝総流し、が既定。
@@ -827,10 +835,14 @@ def _process_rank(
     # 🔴 この回で担当する開催だけに絞る。朝の候補JSONは当日全開催ぶん入っている
     #    （予想・Discord・Web は朝に全部出す）ので、ここで落とさないと
     #    夜の開催まで朝に入稿してしまい、板が育つ前の配分で確定してしまう。
+    #    ⚠️ 自分の波と**完全一致**で絞ると、発走時刻が前倒しに訂正された開催が
+    #    通過済みの波へ移り、その日どの回からも入稿されない（2026-08-08 是正）。
+    #    `waves_due_by()` で「自分の波 + 前の波」を対象にする。二重入稿は
+    #    `_already_submitted()` が、発走済みは直下の `started` が止める。
     if waves is not None:
-        want = SESSION_WAVE.get(session)
+        due_waves = set(waves_due_by(SESSION_WAVE.get(session, WAVE_MORNING)))
         raw = [c for c in raw
-               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want]
+               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) in due_waves]
     # 発走済みのレースへは出さない（売れないので商品にならない）。
     if started is not None:
         n_before = len(raw)
@@ -1230,9 +1242,16 @@ def main() -> None:
     waves = _load_meeting_waves(target_date)
     started = _load_started_races(target_date)
     want_wave = SESSION_WAVE[session]
+    # 自分の波 + 取りこぼした過去の波（発走時刻が前倒しに訂正された開催の救済）。
+    # 二重入稿は _already_submitted() が、終わったレースへの入稿は
+    # _load_started_races() が止めるので拾い直しても副作用は無い。
+    due_waves = set(waves_due_by(want_wave))
     n_wave = sum(1 for w in waves.values() if w == want_wave)
+    n_due = sum(1 for w in waves.values() if w in due_waves)
+    carry = n_due - n_wave
     print(f"[netkeirin_submit] {target_date} {session}: "
-          f"担当は {WAVE_LABEL_JP[want_wave]} — 当日{len(waves)}レース中{n_wave}レース",
+          f"担当は {WAVE_LABEL_JP[want_wave]} — 当日{len(waves)}レース中{n_wave}レース"
+          + (f"（+ 前の波の未入稿 {carry}レースも対象）" if carry else ""),
           flush=True)
 
     all_race_keys: set[str] = set()
@@ -1245,7 +1264,7 @@ def main() -> None:
         if args.race_key:
             raw = [c for c in raw if c.get("race_key") == args.race_key]
         raw = [c for c in raw
-               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) == want_wave
+               if waves.get(str(c.get("race_key", "")).split("#")[0], WAVE_MORNING) in due_waves
                and str(c.get("race_key", "")).split("#")[0] not in started]
         per_rank_raw[rank_key] = raw
         all_race_keys.update(c["race_key"] for c in raw)
