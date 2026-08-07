@@ -42,6 +42,7 @@ import argparse
 import html
 import json
 import math
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.netkeirin_client import (
+    ACT_TYPE_CONFIDENT,
     ACT_TYPE_DEFAULT,
     ACT_TYPE_LONGSHOT,
     BET_KIND_TRIFECTA_AXIS1,
@@ -63,6 +65,7 @@ from src.netkeirin_client import (
     expand_bet,
 )
 from src.notify.discord import send
+from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import RACE_BUDGET, rank_7s_gate_label, unit_stake
 
 SESSION_LABEL_JP = {"morning": "午前", "evening": "午後"}
@@ -73,13 +76,14 @@ _DEFAULT_COMMENT_TEMPLATE = (
     # ⚠️ 7S/7A/7SS(5点) と 7C(4〜5点・可変) が共有するので**点数を書かない**。
     #    2026-08-07 以前は「（5点均等）」「この5点のうち」と書いており、
     #    7C が同じ文面を使うと買い目を偽ることになるため一般化した。
-    "買い目は三連複・軸2車流し（均等買い）です。独自の検証では、買い目のうち"
-    "最終オッズが低い（目安5〜10倍以下）組み合わせを購入対象から外すと、"
-    "的中率は下がる一方で回収率は上昇する傾向を確認しています。"
-    "二軸探偵の入稿は発走前の最終オッズを確認できないタイミングで行っているため、"
-    "この絞り込みは行っておりません。\n\n"
-    "レース直前の最終オッズをご自身でご確認いただき、低倍率の目を外すなど、"
-    "回収率を意識したアレンジにもぜひご活用ください。"
+    # ⚠️ 2026-08-07 の傾斜配分導入で「均等買い」も嘘になったため方式の説明を差し替えた。
+    #    **配分方式を変えるときは必ずこの文面と DB の comment_template も見ること。**
+    "買い目は三連複・軸2車流しです。金額は均等ではなく、当方が想定する発走時オッズに"
+    "応じて配分しています。配当が低くなりやすい買い目に厚く、高くなりやすい買い目に"
+    "薄く置き、どの目で決まっても払戻が投資を上回ることを狙う組み立てです。\n\n"
+    "入稿は朝の時点で行っているため、この配分はあくまで想定オッズに基づくものです。"
+    "レース直前の実際のオッズをご自身でご確認いただき、配分を調整いただくと精度が"
+    "上がります。目安は「各買い目の 賭け金 × オッズ が投資総額を上回っていること」です。"
 )
 
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
@@ -128,9 +132,15 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             )},
     # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
     # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物で名前のみ継承。
-    "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_budget": RACE_BUDGET, "gate_filter": None},
-    "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S"},
-    "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None},
+    # `tilt_stakes` — 均等割りをやめ、想定着地オッズに応じて配分する（2026-08-07）。
+    # netkeirin の的中率は**ガミを不的中として数える**ため、5点均等では
+    # 5.0倍未満の的中が全部「不的中」表示になる（実測: 的中の51.8%がガミ）。
+    # 詳細と実測値は src/stake_allocation.py のモジュール docstring。
+    # ⚠️ **7B には付けない**。3点買いなので境界が3.0倍でガミ率4.9%＝ほぼ無害であり、
+    #    「相手3点の均等買い」という商品説明とも整合している。
+    "7SS": {"file_key": "s7ss", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,    "stake_budget": RACE_BUDGET, "gate_filter": None, "tilt_stakes": True},
+    "7S":  {"file_key": "s7",  "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S", "tilt_stakes": True},
+    "7A":  {"file_key": "s7a", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None, "tilt_stakes": True},
     # 7B（2026-08-03新設）は総流しではなく相手を3点に絞る（partners_key）。
     # 1レース総額を他ランク（約10,000円）と揃えるため 3点×3,300円とする。
     # ⚠️ `_is_enabled()` は fail-open（netkeirin_settings に行が無いと常時ON）の
@@ -150,8 +160,11 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
                 "買い目は三連複・軸2車から相手3点の均等買いです。\n\n"
                 "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
             )},
-    "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S"},
-    "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None},
+    # 9車は相手7点＝ガミ境界が7.0倍で7車より条件が悪いので傾斜配分の対象。
+    # ⚠️ 実測の主対象は7車（1,061R）で、9車は件数が薄く単独では検証していない。
+    #    仕組みは券種・点数に依らず同じなので同じ扱いにしてある。
+    "9S":  {"file_key": "s9",  "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": "S", "tilt_stakes": True},
+    "9A":  {"file_key": "s9a", "n_cars": 9, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None, "tilt_stakes": True},
     # 7C（2026-08-07新設・ベースモデル「終日の二軸」）。**必ず最下位に置くこと**。
     # 母集団が全7車レースで他ランクと排他ではないため、上位ランクが取った
     # レースは 7C が降りる。この衝突は**想定内**なので `overlap_expected` で
@@ -165,6 +178,7 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             "axis_keys": ("axis1_7c", "axis2_7c"),
             "partners_key": "legs_7c",
             "overlap_expected": True,
+            "tilt_stakes": True,
             # タイトル・文面は **7A と同じ既定テンプレート**を使う（ユーザー指示
             # 2026-08-07）。したがって default_comment は持たない。
             },
@@ -177,6 +191,12 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
 #    2026-08-06 朝まで続いた（メインループが RANK_ORDER を回すため）。
 #    同じ「ランク一覧の二重管理」は kiseki 側でも繰り返し事故を起こしている。
 RANK_ORDER = list(RANK_CONFIGS)
+
+# 勝負アイコン「自信あり」を付けるランク（2026-08-05・ユーザー指示で 7SS のみ）。
+# 🔴 **単一正本にする**。傾斜配分の導入で submit_pick 経路と submit_pick_multi 経路の
+#    2箇所で判定するようになったため、`rank_key == "7SS"` を手書きで2つ持つと
+#    片方だけ直して静かに食い違う（本ファイルの RANK_ORDER で実際に起きた型）。
+CONFIDENT_RANKS = {"7SS"}
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +388,72 @@ def _stake_per_line(cfg: dict, n_lines: int) -> int:
             raise ValueError("点数0では賭け金を決められません")
         return unit_stake(n_lines, int(budget))
     return int(cfg["stake_per_line"])
+
+
+def _load_trio_board(race_key: str) -> dict[frozenset[int], float]:
+    """レースの三連複オッズ盤面（朝の値を優先）。
+
+    ⚠️ **`wt_odds` は '1=2=3' / `wt_odds_snapshot` は '1-2-3'** と区切り文字が違う。
+       片方だけを想定すると盤面が丸ごと空になり、**無言で均等割りへ落ちる**
+       （検証スクリプトで実際にサンプルが 1/20 に消えた）。両方を受ける。
+
+    朝スナップショット（日次バッチの ⑥ で退避・入稿の ⑨ より前）を正とし、
+    無ければ現在の `wt_odds` を使う。定時バッチではこの2つは同じ値になり、
+    アドホックに後から入稿するときだけ後者が新しくなる（そのほうが良い）。
+    """
+    board: dict[frozenset[int], float] = {}
+    with get_connection() as conn:
+        for sql, params in (
+            ("SELECT combination, odds_value FROM wt_odds_snapshot "
+             "WHERE race_key = ? AND bet_type = 'trio' AND snapshot_type = 'morning'",
+             (race_key,)),
+            ("SELECT combination, odds_value FROM wt_odds "
+             "WHERE race_key = ? AND bet_type = 'trio'", (race_key,)),
+        ):
+            for comb, od in conn.execute(sql, params).fetchall():
+                if od is None or not (0 < float(od) < 9000):
+                    continue
+                try:
+                    key = frozenset(int(x) for x in re.split(r"[-=]", str(comb)))
+                except ValueError:
+                    continue
+                if len(key) == 3:
+                    board[key] = float(od)
+            if board:
+                return board
+    return board
+
+
+def _load_top3_probs(race_key: str) -> dict[int, float]:
+    """{車番: モデルの3着内率 0-1}。`wt_entries.pred_top3_pct` は日次バッチが
+    候補生成の直後（入稿より前）に書くので、入稿時点で必ず読める。"""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT frame_no, pred_top3_pct FROM wt_entries WHERE race_key = ?",
+            (race_key,),
+        ).fetchall()
+    return {int(r["frame_no"]): float(r["pred_top3_pct"]) / 100
+            for r in rows if r["pred_top3_pct"] is not None}
+
+
+def _build_tilted_legs(
+    race_key: str, cfg: dict, axis1: int, axis2: int, partners: list[int],
+) -> tuple[list[BetLeg], str, dict[int, int]]:
+    """想定着地オッズに応じた傾斜配分の買い目行を組み立てる。
+
+    returns (買い目行, 重みの出どころ, {相手車番: 賭け金})。
+    同額の相手は1行にまとめる（netkeirin の1行は bet_money を1つしか持てない）。
+    """
+    board = _load_trio_board(race_key)
+    morning = {t: board.get(frozenset({axis1, axis2, t})) for t in partners}
+    morning = {t: o for t, o in morning.items() if o}
+    stakes, source = tilted_stakes(
+        partners, morning, _load_top3_probs(race_key),
+        budget=int(cfg.get("stake_budget") or RACE_BUDGET),
+    )
+    legs = [BetLeg(BET_KIND_TRIO_AXIS2, [[axis1], [axis2], cars], stake)
+            for stake, cars in group_by_stake(stakes)]
+    return legs, source, stakes
 
 
 def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], dict[int, str]]:
@@ -572,11 +658,24 @@ def _process_rank(
         # main() 側でも try されていない）。1レース分の失敗として記録し継続する。
         legs: list[BetLeg] = []
         partners: list[int] = []
+        tilt_source: str | None = None
+        tilt_stakes_map: dict[int, int] = {}
         try:
             if is_multi:
                 legs, marks, axis1, axis2_or_p1 = _normalize_multi_candidate(cand, cfg)
             else:
                 axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
+                if cfg.get("tilt_stakes"):
+                    legs, tilt_source, tilt_stakes_map = _build_tilted_legs(
+                        race_key, cfg, axis1, axis2_or_p1, partners)
+                    # 🔴 印を submit_pick が内部で作っていたものと**同じ**にする。
+                    #    submit_pick は軸=◎○・**買った相手=△**・買っていない車=印なし
+                    #    を自前で組むが、submit_pick_multi は渡された marks をそのまま
+                    #    使う。`_normalize_candidate` の marks は軸2車しか持たないので、
+                    #    ここで補わないと相手の△が全部消える（2026-08-03 に 7B で
+                    #    直したのと同型の「表示と入稿の食い違い」）。
+                    marks = {**{c: "△" for c in partners},
+                             axis1: "◎", axis2_or_p1: "○"}
         except (ValueError, KeyError, TypeError, IndexError) as e:
             failures.append(f"{race_key} ({rank_key}): 候補情報不正 - {e}")
             print(f"[netkeirin_submit] スキップ {venue_name}{race_no}R ({rank_key}): {e}",
@@ -596,13 +695,20 @@ def _process_rank(
             comment = f"{comment}\n\n{entry_table}"
 
         if dry_run:
-            detail = (
-                "\n".join(f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
-                          for leg in legs)
-                if is_multi else
-                f"  軸={axis1} 相手={partners} "
-                f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点"
-            )
+            if is_multi:
+                detail = "\n".join(
+                    f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
+                    for leg in legs)
+            elif tilt_source:
+                detail = (
+                    f"  軸={axis1},{axis2_or_p1} 傾斜配分(出どころ={tilt_source}・"
+                    f"合計{sum(tilt_stakes_map.values()):,}円)\n"
+                    + "\n".join(f"    相手{car}: {stake:,}円"
+                                for car, stake in sorted(tilt_stakes_map.items()))
+                )
+            else:
+                detail = (f"  軸={axis1} 相手={partners} "
+                          f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点")
             print(
                 f"[dry-run] {venue_name}{race_no}R ({rank_key}) 印={marks}\n"
                 f"{detail}\n"
@@ -615,12 +721,20 @@ def _process_rank(
 
         try:
             assert client is not None
-            if is_multi:
+            if is_multi or tilt_source:
+                # 傾斜配分は点ごとに bet_money が違うので、同額どうしをまとめた
+                # 複数行として送る（`kaime` は配列なので submit は1回のまま）。
                 ok, msg = client.submit_pick_multi(
                     race_date=race_date, venue_name=venue_name, race_no=race_no,
                     n_cars=cfg["n_cars"], legs=legs, marks=marks,
                     title=title, comment=comment,
-                    act_type=cfg.get("act_type", ACT_TYPE_DEFAULT),
+                    # 「自信あり」は最上位の 7SS のみ。submit_pick は confident=True
+                    # から act_type を導くが submit_pick_multi は act_type 直指定なので、
+                    # 傾斜配分経路でも同じ勝負アイコンになるようここで合わせる。
+                    act_type=cfg.get(
+                        "act_type",
+                        ACT_TYPE_CONFIDENT if rank_key in CONFIDENT_RANKS
+                        else ACT_TYPE_DEFAULT),
                 )
             else:
                 ok, msg = client.submit_pick(
@@ -633,7 +747,7 @@ def _process_rank(
                     title=title, comment=comment,
                     # 「自信あり」は最上位の 7SS のみ（2026-08-05・ユーザー指示）。
                     # 上限に当たれば client 側が type=0 で自動リトライする。
-                    confident=(rank_key == "7SS"),
+                    confident=(rank_key in CONFIDENT_RANKS),
                 )
         except Exception as e:
             ok, msg = False, f"例外: {e}"
@@ -730,11 +844,27 @@ def _process_manual(
     if entry_table:
         comment = f"{comment}\n\n{entry_table}"
 
+    # 手動入稿も自動入稿と**同じ商品**なので配分方式を揃える。
+    # 片方だけ均等のままだと、共通の文面「想定オッズに応じて配分しています」が
+    # 手動入稿分だけ嘘になる。なおこちらは日中に呼ばれるため朝スナップショットが
+    # 無ければ現在の wt_odds を使う＝自動入稿より新しいオッズで配分できる。
+    tilt_source = None
+    tilt_stakes_map: dict[int, int] = {}
+    legs: list[BetLeg] = []
+    if cfg.get("tilt_stakes"):
+        legs, tilt_source, tilt_stakes_map = _build_tilted_legs(
+            race_key, cfg, axis1, axis2, partners)
+
     if dry_run:
+        detail = (
+            f"傾斜配分(出どころ={tilt_source}) "
+            + " / ".join(f"{c}:{s:,}円" for c, s in sorted(tilt_stakes_map.items()))
+            if tilt_source else
+            f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点"
+        )
         print(
             f"[dry-run][manual] {venue_name}{race_no}R ({rank_key}) "
-            f"軸={axis1}-{axis2} 相手={partners} "
-            f"賭け金={_stake_per_line(cfg, len(partners)):,}円/点\n"
+            f"軸={axis1}-{axis2} 相手={partners} {detail}\n"
             f"  タイトル: {title}\n"
             f"  コメント:\n{comment}\n",
             flush=True,
@@ -742,13 +872,23 @@ def _process_manual(
         return 1, []
 
     try:
-        ok, msg = NetkeirinClient().submit_pick(
-            race_date=race_date, venue_name=venue_name, race_no=race_no,
-            n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
-            axis1=axis1, axis2=axis2, partners=partners,
-            stake_per_line=_stake_per_line(cfg, len(partners)),
-            title=title, comment=comment,
-        )
+        if tilt_source:
+            ok, msg = NetkeirinClient().submit_pick_multi(
+                race_date=race_date, venue_name=venue_name, race_no=race_no,
+                n_cars=cfg["n_cars"], legs=legs,
+                marks={**{c: "△" for c in partners}, axis1: "◎", axis2: "○"},
+                title=title, comment=comment,
+                act_type=(ACT_TYPE_CONFIDENT if rank_key in CONFIDENT_RANKS
+                          else ACT_TYPE_DEFAULT),
+            )
+        else:
+            ok, msg = NetkeirinClient().submit_pick(
+                race_date=race_date, venue_name=venue_name, race_no=race_no,
+                n_cars=cfg["n_cars"], bet_kind=cfg["bet_kind"],
+                axis1=axis1, axis2=axis2, partners=partners,
+                stake_per_line=_stake_per_line(cfg, len(partners)),
+                title=title, comment=comment,
+            )
     except Exception as e:
         ok, msg = False, f"例外: {e}"
 
