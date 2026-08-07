@@ -397,18 +397,31 @@ def _load_trio_board(race_key: str) -> dict[frozenset[int], float]:
        片方だけを想定すると盤面が丸ごと空になり、**無言で均等割りへ落ちる**
        （検証スクリプトで実際にサンプルが 1/20 に消えた）。両方を受ける。
 
-    朝スナップショット（日次バッチの ⑥ で退避・入稿の ⑨ より前）を正とし、
-    無ければ現在の `wt_odds` を使う。定時バッチではこの2つは同じ値になり、
-    アドホックに後から入稿するときだけ後者が新しくなる（そのほうが良い）。
+    🔴 **常に `wt_odds`（＝その時点の最新）を優先する。** 朝スナップショットは
+    フォールバックにすぎない。理由は板の厚さが**時計時刻ではなく発走までの近さ**で
+    決まるため（実測・2026-08-07）:
+
+        朝8:12時点の三連複 未確定率 —
+          〜10時台発走 0.8% / 11-13時 9.4% / 14-16時 17.2% /
+          17-19時 34.6% / **20時以降 58.3%**
+
+    夜のレースは朝には板がほぼ無い。あとから入稿するほど良くなるので、
+    その時刻の最新値を使えなければ意味がない（`wt_odds` は日中 15分ごとの
+    `intraday_results_wt.sh` で更新される）。朝の定時バッチではこの2つは
+    同じ値になるので、優先順位を変えても朝の挙動は一切変わらない。
+
+    ⚠️ **9999.9 は winticket の「オッズ未確定」センチネル**（朝の三連複の23%）。
+       実際の確定値は 1.1倍〜と幅がありオッズとして使えないので、
+       0<odds<9000 の範囲外は**採らない**（買う点が1つでも欠ければモデル配分に落ちる）。
     """
     board: dict[frozenset[int], float] = {}
     with get_connection() as conn:
         for sql, params in (
+            ("SELECT combination, odds_value FROM wt_odds "
+             "WHERE race_key = ? AND bet_type = 'trio'", (race_key,)),
             ("SELECT combination, odds_value FROM wt_odds_snapshot "
              "WHERE race_key = ? AND bet_type = 'trio' AND snapshot_type = 'morning'",
              (race_key,)),
-            ("SELECT combination, odds_value FROM wt_odds "
-             "WHERE race_key = ? AND bet_type = 'trio'", (race_key,)),
         ):
             for comb, od in conn.execute(sql, params).fetchall():
                 if od is None or not (0 < float(od) < 9000):
