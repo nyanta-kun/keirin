@@ -81,9 +81,21 @@ def test_stakes_never_exceed_cap_and_are_100yen_units(n_trio, n_tf):
     u_trio, u_tf, total = sw.rank_7h1_stakes(n_trio, n_tf)
     assert total <= sw.RANK_7H1_BUDGET_CAP, "1レースの購入上限を超えている"
     assert u_trio % sw.RANK_7H1_UNIT == 0 and u_tf % sw.RANK_7H1_UNIT == 0
-    assert u_trio * n_trio <= sw.RANK_7H1_BUDGET_TRIO
-    assert u_tf * n_tf <= sw.RANK_7H1_BUDGET_TF
+    assert u_trio >= sw.RANK_7H1_UNIT, "三連複が0円になっている"
+    assert u_tf <= sw.RANK_7H1_TF_UNIT, "三連単が単一正本の単価を超えている"
     assert total == u_trio * n_trio + u_tf * n_tf
+
+
+@pytest.mark.parametrize("n_trio", [1, 4, 7, 10])
+def test_record_side_tf_unit_matches_the_single_source(n_trio):
+    """記録側（picks_history）の三連単単価は入稿側と同じ `RANK_7H1_TF_UNIT`。
+
+    2026-08-07〜08-08 に、記録側が旧・枠方式（7,500円÷8点=900円）・入稿側が
+    `RANK_7H1_TF_UNIT`(=500円) という二重管理になり、Web に出ている実績が
+    実際に売っている商品を説明しない状態になっていた。単価は1箇所で決める。
+    """
+    _, u_tf, _ = sw.rank_7h1_stakes(n_trio, 8)      # 7車立ての通常形＝三連単8点
+    assert u_tf == sw.RANK_7H1_TF_UNIT
 
 
 def _cand(gap, bust, **kw):
