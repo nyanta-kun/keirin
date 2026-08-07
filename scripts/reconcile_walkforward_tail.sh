@@ -61,7 +61,10 @@ echo "[$(date '+%H:%M:%S')] === walk-forward tail再構築 開始 ===" | tee -a 
 #    "7h1:7H1" を下のリストへ足すこと。
 #    忘れ防止に tests/test_rank_7h1.py::test_reconcile_covers_7h1_once_rebuild_exists が
 #    「rebuild スクリプトが存在するのにここへ未登録」を検出して落ちる。
-for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "9s:9S" "9a:9A"; do
+# RANK_7C（ベースモデル・終日の二軸・2026-08-07新設）は rebuild_7c_walkforward_pg.py
+# を同時に用意したのでここに含める。7C は eval モデルしか使わないため
+# bad の vintage が無い月でも窓が落ちない。
+for spec in "7ss:7SS" "7s:7S" "7a:7A" "7b:7B" "7c:7C" "9s:9S" "9a:9A"; do
   script="${spec%%:*}"
   label="${spec##*:}"
   .venv/bin/python3 "scripts/rebuild_${script}_walkforward_pg.py" --tail-only 2>&1 | tee -a "$LOG" \

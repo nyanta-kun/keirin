@@ -60,6 +60,41 @@ def _cand(sum2, n_legs, rk="20260807_01_01"):
             "legs_7c": list(range(3, 3 + n_legs))}
 
 
+# ── 低配当パターンの除外 ────────────────────────────────────────────
+
+def _p3(vals):
+    return {i + 1: v for i, v in enumerate(vals)}
+
+
+def test_lowpay_pattern_needs_both_gap_and_same_line():
+    """🔴 片方だけでは切らない。両方揃ったときだけ見送る。"""
+    # 豊橋5R(2026-08-07) 相当: 3-4位差31.8pt ∧ 上位3車が同一ライン
+    p3 = {7: 0.825, 4: 0.626, 2: 0.590, 5: 0.272, 1: 0.233, 6: 0.206, 3: 0.168}
+    same = {7: 1, 4: 1, 2: 1, 5: 5, 1: 2, 6: 4, 3: 3}
+    assert sw.rank_7c_is_lowpay_pattern(p3, same) is True
+    # 3車が抜けているが同一ラインではない → 買う
+    diff = {7: 1, 4: 2, 2: 3, 5: 5, 1: 2, 6: 4, 3: 3}
+    assert sw.rank_7c_is_lowpay_pattern(p3, diff) is False
+    # 同一ラインだが3-4位差が小さい → 買う
+    flat = {7: 0.825, 4: 0.626, 2: 0.590, 5: 0.560, 1: 0.233, 6: 0.206, 3: 0.168}
+    assert sw.rank_7c_is_lowpay_pattern(flat, same) is False
+
+
+def test_lowpay_pattern_is_false_when_line_unknown():
+    """ライン不明を理由に推奨を減らさない（安全側は『買う』）。"""
+    p3 = {7: 0.825, 4: 0.626, 2: 0.590, 5: 0.272, 1: 0.233, 6: 0.206, 3: 0.168}
+    assert sw.rank_7c_is_lowpay_pattern(p3, None) is False
+    assert sw.rank_7c_is_lowpay_pattern(p3, {7: None, 4: 1, 2: 1}) is False
+
+
+def test_daily_select_excludes_lowpay_pattern():
+    c = _cand(1.60, 5, "x")
+    assert sw.rank_7c_daily_select([c])          # 通常は通る
+    assert sw.rank_7c_daily_select([{**c, "lowpay_pattern": True}]) == []
+    # 旧形式（キー欠損）は False 扱いで落とさない
+    assert sw.rank_7c_daily_select([{**c, "lowpay_pattern": None}])
+
+
 def test_daily_select_requires_both_gates():
     cands = [
         _cand(1.60, 5, "a"),   # 通過
@@ -236,6 +271,19 @@ def test_judge_buys_and_sets_variable_stake(cand_7c):
     assert detail["stake"] == sw.rank_7c_unit_stake(4) == 2500
 
 
+def test_judge_keys_leg_odds_by_combo_label():
+    """🔴 leg_odds のキーは買い目の文字列。3列目の車番にすると Discord 通知が
+    全件『取得不可』になる（2026-08-07 の 7C 初日に実際に発生）。"""
+    from scripts.notify_prerace_wt import judge_rank_7c
+    cand = {"race_key": "r", "axis1": 2, "axis2": 5, "p3_sum_top2": 1.70,
+            "legs_7c": [1, 3, 4, 6],
+            "top3_probs": {"1": 0.40, "2": 0.90, "3": 0.30, "4": 0.20,
+                           "5": 0.80, "6": 0.16, "7": 0.05}}
+    _, detail = judge_rank_7c(cand, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
+    assert set(detail["leg_odds"]) == set(detail["combos"])
+    assert all(detail["leg_odds"][c] is not None for c in detail["combos"])
+
+
 def test_judge_skips_when_legs_fall_below_minimum(cand_7c):
     """🔴 相手が4点未満になったら買わない（低配当回避の本体）。"""
     from scripts.notify_prerace_wt import judge_rank_7c
@@ -272,3 +320,30 @@ def test_judge_recomputes_legs_from_board_not_morning_json(cand_7c):
     cand_7c["legs_7c"] = [1, 3]                   # 朝の値が壊れていても
     decision, detail = judge_rank_7c(cand_7c, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
     assert decision == "buy" and detail["thirds"] == [1, 3, 4, 6]
+
+
+# ── walk-forward 再構築の登録漏れ防止 ───────────────────────────────
+
+def test_reconcile_registers_7c():
+    """rebuild スクリプトがあるのに reconcile へ登録し忘れると、直近日の 7C だけ
+    live 記録のまま残り honest な再構築が当たらない（7A/7B で実際に混在が起きた）。"""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    assert (root / "scripts" / "rebuild_7c_walkforward_pg.py").exists()
+    sh = (root / "scripts" / "reconcile_walkforward_tail.sh").read_text()
+    assert '"7c:7C"' in sh
+
+
+def test_backfill_7c_does_not_require_win_or_bad_models():
+    """7C は pred_prob だけで軸も相手も決まる。win/bad を必須にすると
+    vintage 不足で無意味に窓が落ちる。"""
+    import inspect
+
+    from scripts import backfill_7c_rank_wt as bf
+    src = inspect.getsource(bf.build_rows)
+    assert "load_model(win_model_name)" not in src
+    assert "pred_bad" not in src
+
+    from scripts import rebuild_7c_walkforward_pg as rb
+    rsrc = inspect.getsource(rb.main)
+    assert "require_bad=True" not in rsrc

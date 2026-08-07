@@ -357,6 +357,27 @@ RANK_7C_LEG_P3_MIN = 0.15
 #    したがって**的中率とROIを犠牲にせず低配当だけを落とせる唯一のゲート**。
 RANK_7C_LEGS_MIN = 4
 
+# 🔴 低配当パターンの除外（2026-08-07 追加・ユーザー発見）。
+#   **「複勝率の3位と4位が大きく離れている（＝上位3車が抜けている）」かつ
+#     「その上位3車が同一ライン」**のレースは見送る。
+#   実例 豊橋5R(2026-08-07): 複勝率 82.5/62.6/59.0 → 27.2 と3-4位差31.8pt、
+#   上位3車(7・4・2)が全員ライン1。結果 2-4-7 で三連複 2.0倍＝10,000円投資に対し
+#   払戻4,000円。**ライン3車で決まると配当が付かない**。
+#
+#   評価窓での除外対象の実力（母集団の4.8%）:
+#     的中 68.68%（全体58.08%より**高い**）／**的中の66.1%が2.0倍以下**／ROI 73.6%
+#   ＝「よく当たるが儲からない」型を正確に切り出せている。
+#
+#   見送った場合（評価窓/確認窓）: 件数 23.48→22.36 / 22.47→21.56 件/日、
+#   的中 58.08→57.55 / 59.42→59.07%、ROI 77.3→77.5 / 77.8→77.9%、
+#   **低配当的中 2.10→1.59 / 2.08→1.66 件/日（−24%/−20%）**。両窓で符号一致。
+#
+#   ⚠️ 片方だけでは切らない。「3-4位差だけ」は7.6%・「同一ラインだけ」は29.4%が該当し、
+#      後者は的中率を3.2pt も落とす。**両方揃ったときだけ**が最小の犠牲で効く。
+#   ⚠️ ROI はほとんど動かない（+0.2pt）。これは収益改善ではなく
+#      「当たったのに損をした」体験の比率を下げる施策（15.4%→12.4%）。
+RANK_7C_LOWPAY_GAP34_MIN = 0.30
+
 # 1レースの予算枠。点数で均等割りし 100円単位へ切り捨てる（7H1 と同じ方式）。
 # 🔴 **固定額/点ではない。** 点数が可変なので、固定額にすると点数の多いレースほど
 #    投資が増えて ROI の重み付けが歪む。予算枠なら全レースが等しく効く。
@@ -1501,12 +1522,40 @@ def rank_7c_select_axis(top3_probs: dict[int, float]) -> tuple[int, int, float] 
     return a1, a2, top3_probs[a1] + top3_probs[a2]
 
 
+def rank_7c_is_lowpay_pattern(
+    top3_probs: dict[int, float], line_groups: dict[int, object] | None,
+    gap34_min: float = RANK_7C_LOWPAY_GAP34_MIN,
+) -> bool:
+    """7Cの低配当パターン判定: 上位3車が抜けている ∧ その3車が同一ライン。
+
+    top3_probs:  {frame_no: pred_top3}（0-1 スケール・レース内全車）
+    line_groups: {frame_no: wt_entries.line_group}。**不明なら False**
+      （情報が無いことを理由に推奨を減らさない＝安全側は「買う」）。
+
+    True なら見送る。根拠は RANK_7C_LOWPAY_GAP34_MIN 定義部のコメント参照。
+    ⚠️ 片方だけの条件で切ってはいけない（的中率の犠牲が大きい）。
+    """
+    if not line_groups or len(top3_probs) < 4:
+        return False
+    ranked = sorted(top3_probs, key=lambda f: (-top3_probs[f], f))
+    if top3_probs[ranked[2]] - top3_probs[ranked[3]] < gap34_min:
+        return False
+    gs = [line_groups.get(f) for f in ranked[:3]]
+    if any(g is None for g in gs):
+        return False
+    ss = [str(g).strip() for g in gs]
+    return bool(ss[0]) and ss[0] == ss[1] == ss[2]
+
+
 def rank_7c_daily_select(candidates: list[dict]) -> list[dict]:
-    """7Cの選出: 上位2車の3着内率合計が閾値以上 ∧ 相手が RANK_7C_LEGS_MIN 点以上。
+    """7Cの選出: 上位2車の3着内率合計が閾値以上 ∧ 相手が RANK_7C_LEGS_MIN 点以上
+    ∧ 低配当パターン（`lowpay_pattern`）でないこと。
 
     candidates: rank_7s_* と同じ生候補 dict のリスト。最低限
       {"p3_sum_top2": float, "legs_7c": list[int]} を持つこと
       （`rank_7c_select_axis` / `rank_7c_select_legs` の結果を候補生成時に載せておく）。
+      `lowpay_pattern` は `rank_7c_is_lowpay_pattern()` の結果。**欠けていたら
+      False 扱い**（旧形式の候補JSONを読んでも落ちないようにするため）。
 
     **他ランクとの重複は排除しない**（上記セクションコメント参照）。
     日次件数の上限も設けない（実測 最大39件/日で暴走の懸念がないため）。
@@ -1517,7 +1566,8 @@ def rank_7c_daily_select(candidates: list[dict]) -> list[dict]:
         (c for c in candidates
          if c.get("p3_sum_top2") is not None
          and float(c["p3_sum_top2"]) >= RANK_7C_P3_SUM_MIN
-         and len(c.get("legs_7c") or []) >= RANK_7C_LEGS_MIN),
+         and len(c.get("legs_7c") or []) >= RANK_7C_LEGS_MIN
+         and not c.get("lowpay_pattern")),
         key=lambda c: -float(c["p3_sum_top2"]),
     )
 

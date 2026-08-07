@@ -1505,14 +1505,19 @@ def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
         detail["skip_reason"] = f"相手{len(legs)}点（{RANK_7C_LEGS_MIN}点未満・低配当回避）"
         return "skip", detail
 
+    # ⚠️ leg_odds のキーは**買い目の文字列**（"2-4-7"）にすること。
+    #    7S/9S/7B と同じ規約で、Discord のメッセージ生成が combos の各要素で
+    #    leg_odds を引くため。3列目の車番をキーにすると全件「取得不可」表示になる
+    #    （2026-08-07 の 7C 初日に実際にそうなった）。
     combos, leg_odds = [], {}
     for t in legs:
         key = frozenset({axis1, axis2, t})
         ov = valid.get(key)
         if ov is None:
             continue
-        combos.append("-".join(map(str, sorted(key))))
-        leg_odds[str(t)] = ov
+        label = "-".join(map(str, sorted(key)))
+        combos.append(label)
+        leg_odds[label] = ov
     if len(combos) < RANK_7C_LEGS_MIN:
         detail["skip_reason"] = f"オッズ取得できた目が{len(combos)}点"
         return "skip", detail
