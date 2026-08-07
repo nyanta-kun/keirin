@@ -86,6 +86,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
+from src.rebuild_stakes import load_morning_boards, stakes_for_combos
 from src.evaluation.void_rules import void_by_dns
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
@@ -249,6 +250,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "race_key": rk, "race_date": date_map.get(rk, ""),
             "axis1": axis1, "axis2": axis2, "axis_sum": axis_sum, "entropy": entropy,
             "others": others, "trio": trio, "actual_top3": actual_top3,
+            "top3_probs": top3_probs,
             "wt_overlap_n": wt_overlap_n, "wt_mark3_overlap_n": wt_mark3_overlap_n,
             "axis1_class": class_map.get(axis1), "axis2_class": class_map.get(axis2),
         })
@@ -258,6 +260,8 @@ def build_rows(model_name: str, date_from: str, date_to: str,
     for c_ in candidates:
         by_day[c_["race_date"]].append(c_)
 
+    # 朝オッズ盤面は 2026-06-08 以降にしか無い。無い期間は p3 単独へ落ちる。
+    morning_boards = load_morning_boards([c["race_key"] for c in candidates])
     rows: list[dict] = []
     for d, day_cands in by_day.items():
         # バックフィルはAM/PMバッチ分割を再現しないため、day_raw=day_cands・
@@ -281,12 +285,14 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             rk = c_["race_key"]
             hit = c_["actual_top3"] in combos
             trio_pay = pm.get(rk, {}).get(("trio", c_["actual_top3"]), 0)
-            # 賭け金は1レース RACE_BUDGET 円を点数で均等割り（2026-08-07 全ランク統一）。
-            # 欠車で相手が減ったレースでも投資額が予算枠に揃うよう、固定単価では
-            # なく実点数から単価を出す。
-            stake = unit_stake(len(combos))
-            pay = trio_pay * stake // 100 if hit else 0
-            bet = len(combos) * stake
+            # 賭け金は1レース RACE_BUDGET 円を**入稿と同じ傾斜配分**で割り振る
+            # （2026-08-07・均等割りから変更）。最終オッズで配分すると先読みになり
+            # 本番より 14.5pt 高く出るので、必ず「朝オッズ×p3、無ければ p3 単独」の
+            # 本番と同じ規則を使う（src/rebuild_stakes.py の docstring 参照）。
+            stakes = stakes_for_combos(axis1, axis2, combos, c_.get("top3_probs") or {},
+                                       morning_boards.get(rk))
+            pay = trio_pay * stakes[c_["actual_top3"]] // 100 if hit else 0
+            bet = sum(stakes.values())
             gate_label = rank_7s_gate_label(c_["wt_overlap_n"], c_.get("axis1_class"), c_.get("axis2_class"))
             rows.append({
                 "race_date": d,

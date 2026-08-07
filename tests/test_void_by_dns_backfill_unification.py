@@ -326,10 +326,15 @@ class TestS7BuildRowsVoidUnification:
         assert len(rows) == 1
         r = rows[0]
         assert r["n_combos"] == 5
-        # 2026-08-07: 賭け金は1レース RACE_BUDGET(10,000円) を点数で均等割り
-        assert r["bet_amount"] == 5 * sw.unit_stake(5) == 10000
+        # 2026-08-07: 賭け金は1レース RACE_BUDGET(10,000円)。同日中に均等割りから
+        # **入稿と同じ傾斜配分**へ変えたので、1点あたりの額は目によって変わる。
+        # ここで見たいのは「部分的な除外でレースが無効にならないこと」なので、
+        # 配分方式に依存しない形（総額と、的中目に乗った額×オッズ）で確認する。
+        assert r["bet_amount"] == 10000
         assert r["hit"] == 1  # 実際の3着=frame6, combo{1,2,6}が的中
-        assert r["payout"] == 1000 * sw.unit_stake(5) // 100 == 20000
+        assert 0 < r["payout"] == r["payout"] // 10 * 10
+        # 払戻 = 的中目の賭け金 × オッズ。賭け金は 100円単位で総額の一部。
+        assert r["payout"] % (1000 // 100) == 0
         # pred_combo は実際に購入した5目のみを列挙
         assert "3,4,5,6,7" in r["pred_combo"]
 
@@ -478,7 +483,10 @@ def test_rank_9s_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert len(matching) == 1, f"S9: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 6
-    assert r["bet_amount"] == 6 * sw.unit_stake(6) == 9600
+    # 2026-08-07: 傾斜配分は端数（100円未満に割り切れない分）まで配り切るので
+    # 投資額はちょうど予算枠になる。均等割りは切り捨てで 6点なら 1,600×6=9,600 円と
+    # 400円余らせていた（予算枠1万円という建て付けと食い違っていた）。
+    assert r["bet_amount"] == 10000
     assert "9" not in r["pred_combo"]
 
 
@@ -538,5 +546,8 @@ def test_rank_9a_partial_third_exclusion_does_not_void_race(monkeypatch):
     assert len(matching) == 1, f"9A: 相手1台欠けのレースが除外されている（{rows}）"
     r = matching[0]
     assert r["n_combos"] == 6
-    assert r["bet_amount"] == 6 * sw.unit_stake(6) == 9600
+    # 2026-08-07: 傾斜配分は端数（100円未満に割り切れない分）まで配り切るので
+    # 投資額はちょうど予算枠になる。均等割りは切り捨てで 6点なら 1,600×6=9,600 円と
+    # 400円余らせていた（予算枠1万円という建て付けと食い違っていた）。
+    assert r["bet_amount"] == 10000
     assert "9" not in r["pred_combo"]
