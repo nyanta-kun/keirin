@@ -629,6 +629,10 @@ def migrate_db():
                 axis1             INTEGER,
                 axis2             INTEGER,
                 netkeirin_race_id TEXT,
+                -- 入稿した買い目と1点ごとの金額（JSON）。傾斜配分の金額は入稿時点の
+                -- 想定オッズから決まり**あとから再現できない**ので入稿の瞬間に保存する。
+                -- 本番は kiseki alembic 202608071800_keirin が正本。
+                bet_detail        TEXT,
                 PRIMARY KEY (race_key, rank_key)
             )
         """)
