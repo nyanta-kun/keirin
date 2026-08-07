@@ -218,3 +218,118 @@ def test_netkeirin_9h1_config_shape():
     assert "multi_bet" not in cfg, "9H1 は単一券種（7H1 の2券種経路と取り違えない）"
     assert "stake_per_line" not in cfg, "賭け金は点数から決めるので固定額は持たない"
     assert cfg["act_type"] == ACT_TYPE_LONGSHOT      # 勝負アイコンは「穴狙い」
+
+
+# ── 発走前のライブ判定（盤面・欠車の扱い）───────────────────────────────
+
+
+def _tf_lookup(cars: list[int]) -> dict:
+    """指定車で作れる全順列のオッズ辞書（盤面のダミー）。"""
+    from itertools import permutations
+
+    from scripts.notify_prerace_wt import _parse_combo_key
+    return {_parse_combo_key("-".join(map(str, p)), True): 100.0
+            for p in permutations(cars, 3)}
+
+
+@pytest.fixture
+def cand_9h1():
+    order = [3, 8, 7, 9, 5, 1, 2, 4, 6]          # モデル3着内率の降順
+    return {"race_key": "20260808_55_08", "venue_name": "和歌山", "race_no": 8,
+            "n_entries": 9, "upset_score": 0.3780, "order": order,
+            "lead": order[4], "lead_name": "X",
+            "legs": sw.rank_9h1_build_legs(_p3(order))}
+
+
+def test_judge_buys_when_board_is_complete(cand_9h1):
+    from scripts.notify_prerace_wt import judge_rank_9h1
+    decision, detail = judge_rank_9h1(cand_9h1, _tf_lookup(list(range(1, 10))))
+    assert decision == "buy"
+    assert detail["dropped"] == 0
+    assert detail["stake"] == 1600 and detail["bet_amount"] == 9600
+    assert detail["bet_amount"] <= sw.RACE_BUDGET
+
+
+def test_judge_skips_when_first_place_car_is_scratched(cand_9h1):
+    """1着固定車が盤面に無い＝レース無効。残りで組み直したりしない。"""
+    from scripts.notify_prerace_wt import judge_rank_9h1
+    others = [c for c in range(1, 10) if c != cand_9h1["lead"]]
+    decision, detail = judge_rank_9h1(cand_9h1, _tf_lookup(others))
+    assert decision == "skip"
+    assert "1着固定" in (detail["skip_reason"] or "")
+
+
+def test_judge_drops_scratched_partners_and_restakes(cand_9h1):
+    """相手が欠けた目だけ落とし、残った点数で賭け金を張り直す。"""
+    from scripts.notify_prerace_wt import judge_rank_9h1
+    board = [c for c in range(1, 10) if c != 6]      # 6番が欠車（買い目には未使用）
+    decision, detail = judge_rank_9h1(cand_9h1, _tf_lookup(board))
+    assert decision == "buy" and detail["dropped"] == 0
+
+    board2 = [c for c in range(1, 10) if c != 9]     # 9番が欠車（3着列に居る）
+    decision2, detail2 = judge_rank_9h1(cand_9h1, _tf_lookup(board2))
+    assert decision2 == "buy"
+    assert detail2["dropped"] > 0
+    assert detail2["bet_amount"] <= sw.RACE_BUDGET
+    assert detail2["stake"] * len(detail2["legs"]) == detail2["bet_amount"]
+
+
+def test_judge_returns_unknown_without_board(cand_9h1):
+    """盤面が取れていないときは skip ではなく『不明』（次回再試行）。"""
+    from scripts.notify_prerace_wt import judge_rank_9h1
+    assert judge_rank_9h1(cand_9h1, {})[0] == "不明"
+
+
+def test_pred_combo_format_matches_between_write_and_judge(cand_9h1):
+    """朝の候補書き込みと発走前判定で pred_combo の形式が一致すること。
+
+    食い違うと**採点と Web 表示が黙って壊れる**（7H1 で同じ性質を守っている）。
+    """
+    import inspect
+
+    from scripts import notify_prerace_wt as npw
+    from scripts import write_candidates_wt as wcw
+    judge_src = inspect.getsource(npw._insert_rank_9h1_pick)
+    write_src = inspect.getsource(wcw._write_paper_candidates)
+    assert '"三単:" + ",".join(detail["legs"])' in judge_src
+    assert '"三単:" + ",".join(legs)' in write_src
+
+
+def test_formation_path_submits_with_longshot_flag():
+    """9H1 は `submit_pick_multi` へ **act_type=穴狙い** で送られること。
+
+    ⚠️ `formation_bet` を分岐条件に入れ忘れると `submit_pick`（軸+相手）へ落ち、
+       `cfg["bet_kind"]` を持たない 9H1 は KeyError で入稿できない。
+       分岐と勝負アイコンの両方をここで固定する。
+    """
+    import inspect
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts import netkeirin_submit_wt as ns
+    from src.netkeirin_client import ACT_TYPE_LONGSHOT
+
+    src = inspect.getsource(ns)
+    assert "if is_multi or is_formation or tilt_source:" in src, \
+        "formation 経路が submit_pick_multi へ回っていない"
+    # act_type は cfg 優先で解決される（9H1 は ACT_TYPE_LONGSHOT を持つ）
+    assert ns.RANK_CONFIGS["9H1"]["act_type"] == ACT_TYPE_LONGSHOT
+    assert ns.RANK_CONFIGS["7H1"]["act_type"] == ACT_TYPE_LONGSHOT
+    assert 'act_type=cfg.get(' in src
+
+
+def test_daily_pipeline_generates_9h1_candidates():
+    """朝・夕の両バッチが 9H1 候補を作ること。
+
+    どちらかが漏れると「候補JSONが無い日は静かに0件」になり、
+    ログにも異常が出ないまま推奨が止まる（7SS の入稿漏れと同型の fail-closed）。
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for name in ("daily_picks_wt.sh", "evening_picks_wt.sh"):
+        text = (root / "scripts" / name).read_text(encoding="utf-8")
+        assert "build_9h1_candidates.py" in text, f"{name} が 9H1 候補を作っていない"
+    ev = (root / "scripts" / "evening_picks_wt.sh").read_text(encoding="utf-8")
+    assert "_night_s9h1_candidates.json" in ev, "夕方分の出力先が _night になっていない"

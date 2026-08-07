@@ -1032,9 +1032,12 @@ def _process_rank(
 
         try:
             assert client is not None
-            if is_multi or tilt_source:
+            if is_multi or is_formation or tilt_source:
                 # 傾斜配分は点ごとに bet_money が違うので、同額どうしをまとめた
                 # 複数行として送る（`kaime` は配列なので submit は1回のまま）。
+                # 🔴 `is_formation`(9H1) もここを通す。単一券種だが軸+相手では
+                #    表現できないフォーメーションなので `submit_pick` は使えない
+                #    （`cfg["bet_kind"]` を持たないため KeyError になる）。
                 ok, msg = client.submit_pick_multi(
                     race_date=race_date, venue_name=venue_name, race_no=race_no,
                     n_cars=cfg["n_cars"], legs=legs, marks=marks,
