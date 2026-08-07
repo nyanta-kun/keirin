@@ -76,6 +76,7 @@ from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import (
     RACE_BUDGET,
     RANK_7H1_TF_UNIT,
+    rank_9h1_stakes,
     rank_7h1_trio_stakes,
     rank_7s_gate_label,
     unit_stake,
@@ -159,6 +160,24 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
                 "買い目は三連単と三連複の併せ買い。"
                 "三連単で大きな配当を狙い、三連複で的中を拾う組み立てにしています。\n\n"
                 "レース直前の最終オッズをご自身でご確認のうえ、ご活用ください。"
+            )},
+    # 9H1（2026-08-08新設・穴推奨「9車・高配当狙い」）。三連単フォーメーション
+    # （1着1車 × 2着2車 × 3着4車 ＝ 6点）の**単一券種**なので、7H1 の multi_bet
+    # ではなく `formation_bet` を使う。
+    # 🔴 **7H1 の直後に置いてある**＝同じ9車レースで 9S/9A と重なったとき 9H1 が取る。
+    #    9H1 は約1件/日と薄いので 9S/9A(3.96件/日) が失う分は小さいが、これは
+    #    「穴推奨を優先する」という商品判断なので、入れ替えたければ定義順を変える。
+    "9H1": {"file_key": "s9h1", "n_cars": 9, "formation_bet": True, "gate_filter": None,
+            "act_type": ACT_TYPE_LONGSHOT,   # 勝負アイコン「穴狙い」
+            "default_comment": (
+                "9車立ての高配当狙いをお届けします。\n\n"
+                "9車立ては7車立てに比べて決着が大きく荒れやすく、"
+                "三連単で500倍を超える決着の出やすさは約2.6倍あります。"
+                "その中から、出走表の構成だけを見て特に荒れやすいと判断したレースを絞りました。\n\n"
+                "買い目は三連単のフォーメーション6点。"
+                "1着はあえて上位評価ではない1車に固定し、配当が伸びる形に寄せています。\n\n"
+                "外れる日が続く買い方です。当たったときの大きさを狙う券種としてご活用ください。"
+                "レース直前の最終オッズをご自身でご確認ください。"
             )},
     # 7SS（2026-08-05新設・entropy不合格 × 軸2車が同一ライン）。
     # ⚠️ 2026-08-02に全廃した旧RANK_7SS（波乱軸選出）とは無関係の別物で名前のみ継承。
@@ -752,6 +771,40 @@ def _trio_box_group(legs_trio: list[str]) -> list[int]:
     return cars
 
 
+def _normalize_formation_candidate(
+    cand: dict, cfg: dict,
+) -> tuple[list[BetLeg], dict[int, str], int, int]:
+    """9H1 候補から (買い目行, 印, ◎車番, ○車番) を返す。
+
+    9H1 は**三連単フォーメーションの単一券種**なので、7H1 の 2券種併買
+    （`_normalize_multi_candidate`）とは別経路にする。賭け金は
+    `strategy_wt.rank_9h1_stakes()`（1レース1万円の予算枠 ÷ 点数）で決める。
+
+    印: ◎ = 1着固定車 / ○▲ = 2着列（モデル3着内率の降順）/ △ = 3着だけの車。
+    """
+    legs_raw = list(cand.get("legs") or [])
+    first, second, third = _trifecta_formation_groups(legs_raw)
+    if len(first) != 1:
+        raise ValueError(f"9H1 の1着は1車固定のはずです: {first}")
+    unit, _total = rank_9h1_stakes(len(legs_raw))
+
+    # 2着列の ○/▲ は候補JSONの order（モデル3着内率の降順）に従う。
+    # bet_id は車番昇順に正規化されるため、買い目の並びに序列を委ねない。
+    order = [int(x) for x in (cand.get("order") or [])]
+    ranked_second = sorted(second, key=lambda c: order.index(c) if c in order else 99)
+    marks: dict[int, str] = {first[0]: "◎"}
+    if ranked_second:
+        marks[ranked_second[0]] = "○"
+    if len(ranked_second) > 1:
+        marks[ranked_second[1]] = "▲"
+    for c in third:
+        marks.setdefault(c, "△")
+
+    legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION, [first, second, third], unit)]
+    axis2 = ranked_second[0] if ranked_second else first[0]
+    return legs, marks, first[0], axis2
+
+
 def _normalize_multi_candidate(
     cand: dict, cfg: dict, race_key: str | None = None,
 ) -> tuple[list[BetLeg], dict[int, str], int, int, str | None]:
@@ -880,6 +933,7 @@ def _process_rank(
     n_submitted = 0
     failures: list[str] = []
     is_multi = bool(cfg.get("multi_bet"))
+    is_formation = bool(cfg.get("formation_bet"))
 
     # 衝突の扱いはランクによって意味が違う。**排他設計のランク**（7SS/7S/7A/7B/9S/
     # 9A/7H1）で衝突が起きたのは想定外なので失敗として可視化する。一方 7C のような
@@ -910,6 +964,9 @@ def _process_rank(
             if is_multi:
                 legs, marks, axis1, axis2_or_p1, tilt_source = _normalize_multi_candidate(
                     cand, cfg, race_key.split("#")[0])
+            elif is_formation:
+                legs, marks, axis1, axis2_or_p1 = _normalize_formation_candidate(
+                    cand, cfg)
             else:
                 axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
                 if cfg.get("tilt_stakes"):
