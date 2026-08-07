@@ -62,7 +62,8 @@ def _legs(order: list[int], k: int, m2: int, m3: int) -> list[str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--year", type=int, default=2025)
+    ap.add_argument("--years", default="2025",
+                    help="集計する年（カンマ区切り）。データを1回だけ読んで使い回す")
     ap.add_argument("--pool", default="6,7,9")
     ap.add_argument("--eval-ne", type=int, default=9)
     ap.add_argument("--sel-q", type=float, default=0.2)
@@ -82,29 +83,47 @@ def main() -> None:
     dates = np.array([r["date"] for r in rows])
     ok = (~np.isnan(s)) & (ne == args.eval_ne)
 
-    # 🔴 閾値は対象年より前の分布で固定する（対象年の結果を見て決めない）
-    prior = ok & (dates < f"{args.year}-01-01")
-    if prior.sum() < 200:
-        print(f"閾値を決めるための {args.year}年より前のデータが不足しています")
-        return
-    thr = np.nanquantile(s[prior], 1 - args.sel_q)
-    print(f"選別閾値 = {args.year}年より前 {prior.sum()}R のスコア上位{args.sel_q:.0%}点"
-          f"（{thr:.4f}）を固定して {args.year}年へ適用")
-
     boards = _boards(args.eval_ne)
     orders = _rank_orders(args.eval_ne)
+    for y in [int(x) for x in args.years.split(",")]:
+        _year_report(y, rows, s, ok, dates, boards, orders, args)
+
+
+def _year_report(year, rows, s, ok, dates, boards, orders, args) -> None:
+    """1年ぶんの月次集計。
+
+    🔴 選別の閾値は**対象年より前**のスコア分布から取り、対象年へはそのまま当てる。
+    ＝「年初にその閾値で運用を始めていたら」の集計になる。
+
+    ⚠️ 2024年だけは前がない（walk-forward の最初の fold が 2024H1 で、それ以前は
+       スコアが存在しない）。その場合のみ**対象年自身のスコア分布**から閾値を取り、
+       見出しに明記する。閾値は「モデルスコアの分位」であって結果を見ていないので
+       着順の先読みにはならないが、当時知り得なかった情報ではある。
+    """
+    prior = ok & (dates < f"{year}-01-01")
+    if prior.sum() >= 200:
+        thr = np.nanquantile(s[prior], 1 - args.sel_q)
+        src = f"{year}年より前 {prior.sum()}R"
+    else:
+        own = ok & (dates >= f"{year}-01-01") & (dates < f"{year + 1}-01-01")
+        if own.sum() < 100:
+            print(f"\n===== {year}年: データ不足 =====")
+            return
+        thr = np.nanquantile(s[own], 1 - args.sel_q)
+        src = f"⚠️ {year}年自身 {own.sum()}R（前年のスコアが無いため）"
+
     n_legs_nominal = args.m2 * (args.m3 - 1)
-    print(f"買い目 = 1着 モデル3着内率{args.k}位固定 × 2着 上位{args.m2}車 "
-          f"× 3着 上位{args.m3}車 = {n_legs_nominal}点 / "
-          f"1レース{RACE_BUDGET:,}円 ÷ {n_legs_nominal}点 = "
-          f"{RACE_BUDGET // n_legs_nominal // UNIT * UNIT:,}円/点\n")
+    print(f"\n===== {year}年 / 1着=モデル3着内率{args.k}位固定 × 2着上位{args.m2}車 "
+          f"× 3着上位{args.m3}車 = {n_legs_nominal}点 "
+          f"({RACE_BUDGET // n_legs_nominal // UNIT * UNIT:,}円/点) =====")
+    print(f"選別閾値 = {src} のスコア上位{args.sel_q:.0%}点（{thr:.4f}）")
 
     months: dict[str, dict] = collections.defaultdict(
         lambda: {"pop": 0, "n": 0, "bet": 0, "hit": 0, "pay": 0, "max": 0,
                  "big": 0, "o500": 0})
     detail: list[tuple] = []
     for i, r in enumerate(rows):
-        if not ok[i] or not r["date"].startswith(str(args.year)):
+        if not ok[i] or not r["date"].startswith(str(year)):
             continue
         months[r["date"][:7]]["pop"] += 1        # その月の母集団（9車・板あり）
         if s[i] < thr:
@@ -148,13 +167,23 @@ def main() -> None:
           f"{tot['hit']/tot['n']*100 if tot['n'] else 0:>7.1f}%"
           f"{tot['pay']:>12,}{tot['pay']/tot['bet']*100 if tot['bet'] else 0:>7.1f}%"
           f"{tot['max']:>11,}{tot['big']:>6}{tot['o500']:>7}")
-    print(f"\n収支 = {tot['pay'] - tot['bet']:+,}円"
-          f"（{tot['n']}レース・{tot['n']/12:.1f}件/月）")
+    n_mo = len(months) or 1
+    print(f"収支 = {tot['pay'] - tot['bet']:+,}円（{tot['n']}レース・"
+          f"{tot['n']/n_mo:.1f}件/月・月次100%超 "
+          f"{sum(1 for v in months.values() if v['bet'] and v['pay'] >= v['bet'])}/{n_mo}）")
+
+    # 平均は1本の万車券に支配されるので、上位k本を除いた回収率を必ず併記する
+    pays = sorted((d[4] for d in detail), reverse=True)
+    for k in (1, 2, 3):
+        if len(pays) > k and tot["bet"]:
+            rest = sum(pays[k:])
+            print(f"  除・上{k}本: 回収率 {rest/tot['bet']*100:5.1f}%  "
+                  f"収支 {rest - tot['bet']:+,}円")
 
     if detail:
-        print("\n--- 的中したレース ---")
+        print("  --- 的中したレース ---")
         for d, rk, combo, odds, pay in sorted(detail):
-            print(f"  {d}  {rk:<18} {combo:<8} {odds:>8.1f}倍  {pay:>9,}円")
+            print(f"    {d}  {rk:<18} {combo:<8} {odds:>8.1f}倍  {pay:>9,}円")
 
 
 if __name__ == "__main__":
