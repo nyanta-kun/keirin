@@ -38,6 +38,22 @@ if ! flock -n 200; then
   exit 0
 fi
 
+# --- 共有ロック: picks_history へ書く処理どうしの競合を防ぐ（2026-08-08）---
+# 上の 200 番は「自分自身の多重起動」しか防がない。picks_history を書き換える
+# 処理は本スクリプトのほかに reconcile_walkforward_tail.sh（毎日08:30・当月分を
+# DELETE→INSERT で再構築）があり、こちらが遅延して 08:30 に食い込むと同じ行を
+# 同時に触る。2026-08-06 の rebuild行×live行 混在と同型の事故になる。
+# 対策は「実行時刻をずらす」だけだったので、構造的な排他を足す。
+# ⚠️ **待つ（-w）**。-n でスキップすると朝の予想生成が黙って丸ごと落ちる。
+#    ロックは単一なのでデッドロックしない（必ず自分のロック→共有ロックの順）。
+SHARED_LOCK="$LOG_DIR/wt_picks_writer.lock"
+exec 201>"$SHARED_LOCK"
+if ! flock -w 1800 201; then
+  echo "[$(date '+%H:%M:%S')] [intraday_results_wt] 共有ロック待ちが30分を超えました（${SHARED_LOCK}）。" \
+    | tee -a "$LOG_DIR/lock_skips.log" >&2
+  exit 1
+fi
+
 # --- KEIRIN_DB_URL 必須チェック（2026-07-31 D-1）---
 # database.py の get_connection() は KEIRIN_DB_URL 未設定時に RuntimeError を送出する
 # 設計だが、本スクリプトの各処理は `|| echo "...失敗（継続）"` で握り潰しているため、
