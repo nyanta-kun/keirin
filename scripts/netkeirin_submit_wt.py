@@ -439,16 +439,75 @@ def _already_submitted(race_keys: list[str]) -> set[tuple[str, str]]:
     return {(r["race_key"], r["rank_key"]) for r in rows}
 
 
+_BET_TYPE_JP = {
+    BET_KIND_TRIO_AXIS2: "3連複",
+    BET_KIND_TRIO_BOX: "3連複",
+    BET_KIND_TRIFECTA_AXIS1: "3連単",
+    BET_KIND_TRIFECTA_FORMATION: "3連単",
+}
+
+
+def build_bet_detail(legs: list[BetLeg], source: str | None = None) -> str:
+    """入稿した買い目と1点ごとの金額を JSON 文字列にする（Web 表示用）。
+
+    🔴 **展開まで済ませて保存する。** 傾斜配分では点ごとに金額が違い、しかも
+       その金額は入稿時点の想定オッズから決まるので、**あとから再現できない**。
+       グループ表記のまま持つと表示側が `expand_bet` 相当を再実装することになり、
+       買い目の解釈が2箇所に分かれる（この種の二重管理はこのリポジトリで
+       繰り返し事故を起こしている）。
+
+    形式:
+        {"total": 10000, "source": "blend",
+         "lines": [{"bet_type": "3連複", "combo": "1=2=5", "stake": 4100}, ...]}
+
+    `source` は金額配分の出どころ（blend / odds / model / equal・
+    `src.stake_allocation` 参照）。均等配分のランクは None。
+    """
+    lines: list[dict[str, Any]] = []
+    for leg in legs:
+        for target in sorted(expand_bet(leg.bet_kind, leg.groups),
+                             key=lambda t: tuple(sorted(t)) if isinstance(t, frozenset) else t):
+            cars = sorted(target) if isinstance(target, frozenset) else list(target)
+            sep = "=" if isinstance(target, frozenset) else "-"
+            lines.append({
+                "bet_type": _BET_TYPE_JP.get(leg.bet_kind, leg.bet_kind),
+                "combo": sep.join(str(c) for c in cars),
+                "stake": int(leg.stake_per_line),
+            })
+    return json.dumps(
+        {"total": sum(x["stake"] for x in lines), "source": source, "lines": lines},
+        ensure_ascii=False,
+    )
+
+
+def _legs_for_record(cfg: dict, axis1: int, axis2_or_p1: int, partners: list[int],
+                     stake: int) -> list[BetLeg]:
+    """`submit_pick`（均等配分）で送る買い目を BetLeg 表現へ揃える。
+
+    記録・表示は `build_bet_detail()` に一本化したいので、傾斜配分経路と
+    同じ形へ寄せる。ここで組む groups は `submit_pick` → `build_bet_id()` が
+    組むものと同一（同 bet_kind の分岐をそのまま写している）。
+    """
+    if cfg["bet_kind"] == BET_KIND_TRIFECTA_AXIS1:
+        groups = [[axis1], list(partners)]
+    else:
+        groups = [[axis1], [axis2_or_p1], list(partners)]
+    return [BetLeg(cfg["bet_kind"], groups, stake)]
+
+
 def _record_submission(
     race_key: str, rank_key: str, session: str, venue_name: str, race_no: int,
     gate_label: str | None, axis1: int, axis2: int, netkeirin_race_id: str,
+    bet_detail: str | None = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO netkeirin_submissions "
-            "(race_key,rank_key,session,venue_name,race_no,gate_label,axis1,axis2,netkeirin_race_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2, netkeirin_race_id),
+            "(race_key,rank_key,session,venue_name,race_no,gate_label,axis1,axis2,"
+            "netkeirin_race_id,bet_detail) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2,
+             netkeirin_race_id, bet_detail),
         )
         conn.commit()
 
@@ -872,8 +931,11 @@ def _process_rank(
             ok, msg = False, f"例外: {e}"
 
         if ok:
+            record_legs = legs if (is_multi or tilt_source) else _legs_for_record(
+                cfg, axis1, axis2_or_p1, partners, _stake_per_line(cfg, len(partners)))
             _record_submission(
                 race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2_or_p1, msg,
+                bet_detail=build_bet_detail(record_legs, tilt_source),
             )
             if claimed_races is not None:
                 claimed_races.add(race_key)
@@ -1012,7 +1074,11 @@ def _process_manual(
         ok, msg = False, f"例外: {e}"
 
     if ok:
-        _record_submission(race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2, msg)
+        record_legs = legs if tilt_source else _legs_for_record(
+            cfg, axis1, axis2, partners, _stake_per_line(cfg, len(partners)))
+        _record_submission(race_key, rank_key, session, venue_name, race_no, gate_label,
+                           axis1, axis2, msg,
+                           bet_detail=build_bet_detail(record_legs, tilt_source))
         print(f"[netkeirin_submit][manual] 入稿成功 {venue_name}{race_no}R ({rank_key}) → {msg}", flush=True)
         return 1, []
     print(f"[netkeirin_submit][manual] 入稿失敗 {venue_name}{race_no}R ({rank_key}): {msg}", flush=True)
