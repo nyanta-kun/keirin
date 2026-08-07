@@ -262,7 +262,7 @@ AM 8:00 （daily_picks_wt.sh・単一バッチ）
 ⚠️ **`RANK_7C` だけは他ランクと論理的に排他ではない**（`wt_overlap_n` を見ないため
 同一レースに併存しうる）。`picks_history.race_key` は `{レースキー}#{suffix}` なので
 行は共存でき、**候補生成・記録の段階では重複を排除しない**。1レース1商品という
-netkeirin の制約は入稿側だけで解決する（優先順位 **7H1 > 7SS > 7S > 7A > 7B > 7C**、
+netkeirin の制約は入稿側だけで解決する（優先順位 **7H1 > 7SS > 7S > 7A > 7C > 7B**、
 `netkeirin_submit_wt.RANK_CONFIGS` の定義順が正本）。
 
 全廃済み: 7SS(`RANK_7SS`・穴レース検知・2026-08-02。live実績 n=16,298・ROI73.5%で

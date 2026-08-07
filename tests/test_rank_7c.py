@@ -353,3 +353,95 @@ def test_backfill_7c_does_not_require_win_or_bad_models():
     from scripts import rebuild_7c_walkforward_pg as rb
     rsrc = inspect.getsource(rb.main)
     assert "require_bad=True" not in rsrc
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 予算定数の単一正本（2026-08-08 レビュー指摘 L-2）
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_rank_budget_constants_derive_from_single_source():
+    """ランク別の予算・単位が `RACE_BUDGET`/`STAKE_UNIT` から導かれること。
+
+    以前は `RANK_7C_BUDGET = 10000` / `RANK_7C_UNIT = 100` のように
+    **同じ値を別途リテラルで再定義**していた。netkeirin 入稿側
+    （`netkeirin_submit_wt.RANK_CONFIGS`）は `RACE_BUDGET` を直接参照するので、
+    全ランク一律で予算を改定したときに「実際に入稿される金額」と
+    「picks_history に記録される賭け金」が**無言で食い違う**。
+
+    値の一致を確かめるだけでは足りない（改定直後は両方10000で通ってしまう）ので、
+    片方を変えたら他方も追随することを確かめる。
+    """
+    import importlib
+    import src.strategy_wt as sw
+
+    assert sw.RANK_7C_BUDGET == sw.RACE_BUDGET
+    assert sw.RANK_7C_UNIT == sw.STAKE_UNIT
+    assert sw.RANK_7H1_BUDGET_CAP == sw.RACE_BUDGET
+    assert sw.RANK_7H1_UNIT == sw.STAKE_UNIT
+
+    # 参照になっているか（リテラル再定義でないか）を実際に確かめる
+    orig_budget, orig_unit = sw.RACE_BUDGET, sw.STAKE_UNIT
+    try:
+        sw.RACE_BUDGET, sw.STAKE_UNIT = 12000, 200
+        reloaded = importlib.reload(sw)
+        assert reloaded.RANK_7C_BUDGET == reloaded.RACE_BUDGET, (
+            "RANK_7C_BUDGET が RACE_BUDGET に追随していない（リテラル再定義に戻された）")
+        assert reloaded.RANK_7H1_BUDGET_CAP == reloaded.RACE_BUDGET
+    finally:
+        importlib.reload(sw)
+
+
+def test_netkeirin_submit_uses_the_same_budget_source():
+    """入稿側の予算も同じ正本を参照していること。"""
+    import src.strategy_wt as sw
+    from scripts.netkeirin_submit_wt import RANK_CONFIGS
+
+    for rank, cfg in RANK_CONFIGS.items():
+        budget = cfg.get("stake_budget")
+        if budget is None:
+            continue
+        assert budget == sw.RACE_BUDGET, (
+            f"{rank} の stake_budget({budget}) が RACE_BUDGET({sw.RACE_BUDGET}) と違う。"
+            " 入稿額と picks_history の記録額が食い違う")
+
+
+def test_documented_priority_order_matches_rank_configs():
+    """ドキュメントに書かれた入稿優先順位が実装と一致すること（2026-08-08）。
+
+    2026-08-07 に 7B を 7C の後ろへ動かした際、`RANK_CONFIGS` の定義順（正本）は
+    正しく変わったのに、**先に書かれていた解説文3箇所が古いまま**残り
+    `7H1 > 7SS > 7S > 7A > 7B > 7C` という逆順を主張していた
+    （CLAUDE.md / docs/system-architecture.md / strategy_wt.py のコメント）。
+
+    CLAUDE.md は AI エージェントが正本として読むファイルなので、ここに誤った
+    順序が書かれていると「ドキュメントに合わせて実装を直す」形で本番の優先順位が
+    壊れうる。文字列として機械的に照合する。
+    """
+    from pathlib import Path
+    from scripts.netkeirin_submit_wt import RANK_ORDER
+
+    seven = [r for r in RANK_ORDER if r.startswith("7")]
+    expected = " > ".join(seven)
+
+    repo = Path(__file__).resolve().parent.parent
+    targets = [
+        repo / "CLAUDE.md",
+        repo / "docs" / "system-architecture.md",
+        repo / "src" / "strategy_wt.py",
+        repo / "scripts" / "netkeirin_submit_wt.py",
+    ]
+    checked = 0
+    for p in targets:
+        text = p.read_text(encoding="utf-8")
+        if "7H1 > 7SS" not in text:
+            continue
+        checked += 1
+        assert expected in text, (
+            f"{p.name} の優先順位表記が実装（{expected}）と食い違う")
+        # 旧・逆順が残っていないこと
+        assert "7A > 7B > 7C" not in text, (
+            f"{p.name} に古い優先順位 '7A > 7B > 7C' が残っている（実装は {expected}）")
+    assert checked == len(targets), (
+        "優先順位を書いているはずのファイルで表記が見つからなかった"
+        f"（照合できたのは {checked}/{len(targets)} 件）。"
+        " 表記を変えたなら本テストの targets も追随させること")

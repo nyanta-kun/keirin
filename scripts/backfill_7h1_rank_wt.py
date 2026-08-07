@@ -52,6 +52,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.build_7h1_candidates import build as build_candidates
+from src.wt_vintage_config import assert_vintage_for_past
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.strategy_wt import RANK_7H1_TF_UNIT, rank_7h1_trio_stakes
@@ -252,6 +253,12 @@ def main() -> None:
     ap.add_argument("--wipe", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    # 過去日に本番モデルを当てると in-sample になるので落とす（2026-08-08）。
+    # 既定値が本番モデル名なので、指定を忘れると**無言で**そうなっていた。
+    _end = args.end
+    if _end:
+        assert_vintage_for_past(_end, {"bad": args.bad_model, "eval": args.eval_model, "favbust": args.favbust_model, "win": args.win_model})
 
     rows = build_rows(args.start, args.end, eval_model=args.eval_model,
                       win_model=args.win_model, bad_model=args.bad_model,

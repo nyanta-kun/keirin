@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.wt_vintage_config import assert_vintage_for_past
 from src.database import get_connection
 from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
@@ -188,6 +189,12 @@ def main() -> None:
                     help="発走時刻を過ぎたレースを除外する（入稿用途で推奨）")
     ap.add_argument("--dry-run", action="store_true", help="ファイルを書かず内容だけ表示")
     args = ap.parse_args()
+
+    # 過去日に本番モデルを当てると in-sample になるので落とす（2026-08-08）。
+    # 既定値が本番モデル名なので、指定を忘れると**無言で**そうなっていた。
+    assert_vintage_for_past(args.date, {"eval": args.model,
+                                        "win": args.win_model,
+                                        "bad": args.bad_model})
 
     cands = build(args.date, args.model, args.win_model, args.future_only,
                   args.bad_model)

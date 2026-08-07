@@ -58,6 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.wt_vintage_config import assert_vintage_for_past
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.rebuild_stakes import load_morning_boards, stakes_for_combos
@@ -331,6 +332,12 @@ def main() -> None:
                     help="書き込み前に対象期間の既存 #9S 行を削除")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    # 過去日に本番モデルを当てると in-sample になるので落とす（2026-08-08）。
+    # 既定値が本番モデル名なので、指定を忘れると**無言で**そうなっていた。
+    _end = args.end
+    if _end:
+        assert_vintage_for_past(_end, {"eval": args.model, "win": args.win_model})
 
     from datetime import date
     end = args.end or date.today().strftime("%Y-%m-%d")
