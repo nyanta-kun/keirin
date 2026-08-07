@@ -114,6 +114,49 @@ def test_同じ開催のレースは第1Rの時刻で一括して振り分けら
     assert {waves[f"D_B_{i}"] for i in (1, 2, 3)} == {WAVE_MORNING}
 
 
+# ── 発走済みレースを出さないこと ──────────────────────────────────────
+
+def _patch_rows(monkeypatch, rows):
+    class _Conn:
+        def execute(self, *a, **k):
+            return self
+
+        def fetchall(self):
+            return rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(sub, "get_connection", lambda: _Conn())
+
+
+def test_発走済みのレースだけを拾う(monkeypatch):
+    """入稿は「まだ売れるレース」にしか意味がない。
+
+    従来は入稿が朝の1回だけで第1レースより前に必ず終わっていたので誰も見ていなかったが、
+    開催単位の波と手動再実行が入ったことで終わったレースへ出しうるようになった。
+    """
+    import time
+    now = time.time()
+    _patch_rows(monkeypatch, [
+        {"race_key": "past", "start_at": str(int(now - 3600))},
+        {"race_key": "future", "start_at": str(int(now + 3600))},
+    ])
+    assert sub._load_started_races("2026-08-07") == {"past"}
+
+
+def test_発走時刻不明は未発走扱い(monkeypatch):
+    """安全側は「出す」。情報が無いことを理由に商品を落とすと黙って商品が消える。"""
+    _patch_rows(monkeypatch, [
+        {"race_key": "unknown", "start_at": None},
+        {"race_key": "broken", "start_at": "not-a-number"},
+    ])
+    assert sub._load_started_races("2026-08-07") == set()
+
+
 def test_発走時刻が全部欠けている開催は朝へ倒れる(monkeypatch):
     rows = [{"race_key": "D_C_1", "venue_id": "C", "start_at": None}]
 
