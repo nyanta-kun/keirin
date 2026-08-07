@@ -175,11 +175,17 @@ def test_daily_select_does_not_dedupe_against_other_ranks():
 # ── netkeirin 入稿の優先順位・賭け金解決 ──────────────────────────────
 
 def test_netkeirin_priority_order():
-    """優先順位 7H1 > 7SS > 7S > 7A > 7B > 7C（2026-08-07 ユーザー指定）。
-    RANK_ORDER は dict の定義順なので、順序が入れ替わると黙って優先度が変わる。"""
+    """優先順位 7H1 > 7SS > 7S > 7A > **7C > 7B**（2026-08-07 ユーザー指定）。
+
+    RANK_ORDER は dict の定義順なので、順序が入れ替わると黙って優先度が変わる。
+
+    ⚠️ 同日中に **7B を 7C の後ろへ移した**。7C との重複では 7C が実質的中率で
+       上回る（39.0% vs 31.6%）一方、7B は 7C が拾わないレースを 3.14件/日 持つ。
+       「重複は 7C・独自は 7B」を優先順位だけで実現している。
+    """
     from scripts import netkeirin_submit_wt as ns
     order = [r for r in ns.RANK_ORDER if r not in ("9S", "9A")]
-    assert order == ["7H1", "7SS", "7S", "7A", "7B", "7C"]
+    assert order == ["7H1", "7SS", "7S", "7A", "7C", "7B"]
 
 
 def test_netkeirin_7c_uses_budget_and_own_axis_keys():
