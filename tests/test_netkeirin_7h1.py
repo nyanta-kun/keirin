@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+import src.strategy_wt as sw
+
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -107,8 +109,11 @@ def test_formation_groups_rejects_bad_format():
         _trifecta_formation_groups([])
 
 
-def test_normalize_multi_candidate_builds_two_legs_and_marks():
-    """候補JSON1件から (三連単F, 三連複BOX) の2行と印が組み上がること。
+def test_normalize_multi_candidate_builds_legs_and_marks():
+    """候補JSON1件から (三連単F + 三連複を目ごとに1行) と印が組み上がること。
+
+    2026-08-07: 三連複は**目ごとに金額が違う**ので 1目=1行（3車のBOX＝1点）で出す。
+    同額でも束ねられない（BOXは車群でしか表現できず任意の部分集合を作れない）。
 
     印はユーザー確定の規則（2026-08-06）:
       ◎=三連単の1着固定車 / ○=2着列1番手 / ▲=2着列2番手 /
@@ -124,12 +129,20 @@ def test_normalize_multi_candidate_builds_two_legs_and_marks():
         "legs_tf": tf, "legs_trio": trio,
         "stake_tf": 900, "stake_trio": 200,
     }
-    legs, marks, axis1, axis2 = _normalize_multi_candidate(cand, RANK_CONFIGS["7H1"])
+    legs, marks, axis1, axis2, source = _normalize_multi_candidate(
+        cand, RANK_CONFIGS["7H1"])
 
-    assert [leg.bet_kind for leg in legs] == [
-        BET_KIND_TRIFECTA_FORMATION, BET_KIND_TRIO_BOX]
-    assert legs[0].stake_per_line == 900
-    assert legs[1].stake_per_line == 200
+    # 先頭が三連単フォーメーション、以降は三連複を1目ずつ
+    assert legs[0].bet_kind == BET_KIND_TRIFECTA_FORMATION
+    assert all(leg.bet_kind == BET_KIND_TRIO_BOX for leg in legs[1:])
+    assert len(legs) - 1 == len(trio)
+    assert all(len(leg.groups[0]) == 3 for leg in legs[1:])   # 3車＝1点
+    # 三連単は固定額の均等。三連複は残りを使い切る。
+    assert legs[0].stake_per_line == sw.RANK_7H1_TF_UNIT
+    assert source == "equal"        # オッズを渡していないので均等へ落ちる
+    total = (legs[0].stake_per_line * len(tf)
+             + sum(leg.stake_per_line for leg in legs[1:]))
+    assert total == sw.RANK_7H1_BUDGET_CAP
 
     assert axis1 == 3 and marks[3] == "◎"
     assert marks[axis2] == "○"
@@ -147,19 +160,34 @@ def test_normalize_multi_candidate_marks_follow_others_order_not_car_number():
     trio, tf = _legs_from_strategy(others, roles)
     cand = {"race_key": "x", "others": others, "legs_tf": tf, "legs_trio": trio,
             "stake_tf": 900, "stake_trio": 200}
-    _, marks, _, _ = _normalize_multi_candidate(cand, RANK_CONFIGS["7H1"])
+    _, marks, _, _, _ = _normalize_multi_candidate(cand, RANK_CONFIGS["7H1"])
     assert marks[5] == "○" and marks[4] == "▲"
 
 
-def test_normalize_multi_candidate_rejects_zero_stake():
+def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
+    """オッズが買う目**すべて**に揃えば払戻が等しくなるよう配分すること。
+
+    ⚠️ 候補JSONの `stake_tf`/`stake_trio` は**もう使わない**（朝の候補生成時点の値で、
+       板が育ってから入稿する3波の設計と時点が食い違うため）。
+    """
+    import scripts.netkeirin_submit_wt as sub
+
     others = [3, 4, 5, 1, 2, 6]
     roles = {3: _ROLE_LEAD_TOP, 4: _OTHER, 5: _OTHER, 1: _OTHER, 2: _OTHER,
              6: _FAV_LINE}
     trio, tf = _legs_from_strategy(others, roles)
+    keys = [frozenset(int(x) for x in c.split("=")) for c in trio]
+    board = {k: 20.0 + 10 * i for i, k in enumerate(keys)}
+    monkeypatch.setattr(sub, "_load_trio_board", lambda rk: board)
+
     cand = {"race_key": "x", "others": others, "legs_tf": tf, "legs_trio": trio,
-            "stake_tf": 0, "stake_trio": 200}
-    with pytest.raises(ValueError):
-        _normalize_multi_candidate(cand, RANK_CONFIGS["7H1"])
+            "stake_tf": 0, "stake_trio": 0}     # 候補JSONの値は無視される
+    legs, _, _, _, source = _normalize_multi_candidate(
+        cand, RANK_CONFIGS["7H1"], "20260807_85_07")
+    assert source == "odds"
+    # 払戻がおおむねそろう（100円単位の丸めぶんだけ差が出る）
+    pays = [leg.stake_per_line * board[frozenset(leg.groups[0])] for leg in legs[1:]]
+    assert max(pays) - min(pays) < max(pays) * 0.35
 
 
 def test_7h1_config_shape():

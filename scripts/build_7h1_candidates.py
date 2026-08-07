@@ -54,7 +54,8 @@ from src.preprocessing.feature_wt import (  # noqa: E402
     build_features_wt, load_raw_data_wt, prepare_X,
 )
 from src.strategy_wt import (  # noqa: E402
-    RANK_7H1_NE, rank_7h1_build_legs, rank_7h1_daily_select, rank_7h1_stakes,
+    RANK_7H1_NE, RANK_7H1_TF_UNIT, rank_7h1_build_legs, rank_7h1_daily_select,
+    rank_7h1_trio_stakes,
 )
 
 
@@ -116,7 +117,13 @@ def build(date_from: str, date_to: str, eval_model: str, win_model: str,
         trio, tf = rank_7h1_build_legs(others, roles)
         if not trio or not tf:
             continue                       # 別ライン先頭が居ない等で買い目が組めない
-        u_trio, u_tf, total = rank_7h1_stakes(len(trio), len(tf))
+        # 🔴 ここで出す金額は**表示用の目安**。実際の配分は入稿時点のオッズで
+        #    決め直す（`netkeirin_submit_wt._normalize_multi_candidate`）。
+        #    候補生成は朝で板が薄く、入稿は開催単位の3波でずれるため。
+        u_tf = RANK_7H1_TF_UNIT
+        _st = rank_7h1_trio_stakes([frozenset(t) for t in trio], None, len(tf))
+        u_trio = min(_st.values()) if _st else 0
+        total = sum(_st.values()) + u_tf * len(tf)
         if not u_trio or not u_tf:
             continue
         m = meta_all[rk]

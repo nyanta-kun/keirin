@@ -54,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.build_7h1_candidates import build as build_candidates
 from src.database import get_connection
 from src.evaluation.backtest_wt import _load_payouts_wt
-from src.strategy_wt import rank_7h1_stakes
+from src.strategy_wt import RANK_7H1_TF_UNIT, rank_7h1_trio_stakes
 
 RANK = "RANK_7H1"
 SUFFIX = "#7H1"
@@ -77,8 +77,10 @@ def _load_boards(race_keys: list[str]) -> tuple[dict[str, set], dict[str, set]]:
     live の `_build_odds_lookup()` と同じく **odds_value が有効な組み合わせのみ**を
     盤面掲載とみなす（欠車を含む目はオッズが出ない）。
     """
-    trio: dict[str, set] = defaultdict(set)
-    tf: dict[str, set] = defaultdict(set)
+    # 2026-08-07: 三連複は**オッズ値まで**要る（払戻均等配分のため）。
+    # 三連単は掲載有無だけ使うが、同じ形にそろえておく。
+    trio: dict[str, dict] = defaultdict(dict)
+    tf: dict[str, dict] = defaultdict(dict)
     if not race_keys:
         return {}, {}
     with get_connection() as c:
@@ -93,7 +95,7 @@ def _load_boards(race_keys: list[str]) -> tuple[dict[str, set], dict[str, set]]:
                 key = _combo_key(combo, ordered=(bt == "trifecta"))
                 if key is None:
                     continue
-                (tf if bt == "trifecta" else trio)[rk].add(key)
+                (tf if bt == "trifecta" else trio)[rk][key] = float(odds)
     return dict(trio), dict(tf)
 
 
@@ -155,15 +157,20 @@ def build_rows(date_from: str, date_to: str, *, eval_model: str, win_model: str,
         if not legs_trio or not legs_tf:
             continue                      # 欠車で買い目が全滅
 
-        u_trio, u_tf, bet = rank_7h1_stakes(len(legs_trio), len(legs_tf))
-        if not u_trio or not u_tf:
-            continue                      # 点数過多で1点100円未満
+        # 三連単は 1点 RANK_7H1_TF_UNIT 円の均等、残りを三連複へ回し
+        # **オッズで払戻が等しくなるよう配分**する（2026-08-07 ユーザー指定）。
+        trio_keys = [_combo_key(t, False) for t in legs_trio]
+        u_tf = RANK_7H1_TF_UNIT
+        trio_stakes = rank_7h1_trio_stakes(
+            trio_keys, {k: trio_lookup[k] for k in trio_keys}, len(legs_tf))
+        bet = sum(trio_stakes.values()) + u_tf * len(legs_tf)
 
         top3 = frozenset(order[:3])
         hit_trio = top3 in {_combo_key(t, False) for t in legs_trio}
         hit_tf = "-".join(map(str, order[:3])) in legs_tf
         # pm のオッズは「100円あたりの払戻」なので賭け金で按分する
-        pay_trio = pm.get(rk, {}).get(("trio", top3), 0) * u_trio // 100 if hit_trio else 0
+        pay_trio = (pm.get(rk, {}).get(("trio", top3), 0) * trio_stakes[top3] // 100
+                    if hit_trio else 0)
         pay_tf = (pm.get(rk, {}).get(("trifecta", tuple(order[:3])), 0) * u_tf // 100
                   if hit_tf else 0)
 
