@@ -61,3 +61,28 @@ data/picks/
 data/prerace_decisions_*.json*
 data/prerace_notified_*.json*
 data/feature_cache/
+
+# 同じ理由で ignore が要る実行時状態ファイル（2026-08-08 追加）。
+# 上の 2026-07-08 の対処は**そのとき判明した2ファイルにしか適用されておらず**、
+# 同じ性質の残り4ファイルが漏れていた。VPS の stash 75件を掘って実際に
+# 持ち去られていたものを洗い出した（`git show 'stash@{N}^3' --stat` の集計）:
+#   data/notify_race_result.lock      21回
+#   data/notified_race_results.json   13回
+#   data/netkeirin_session.json        5回
+#   data/netkeirin_venue_codes.json    5回
+# ⚠️ ignore していないと deploy の `git stash -u` が作業ツリーから消し、
+#    **pop されない**ので永久に戻らない。実害:
+#      - notified_race_results.json … 通知済みの記録が消え、同じレースを再通知しうる
+#      - netkeirin_session.json     … ログインセッションが消え、次の入稿でログインし直しになる
+#      - *.lock                     … 多重実行の抑止が外れる
+data/notified_race_results.json
+data/notify_race_result.lock
+data/netkeirin_session.json
+data/netkeirin_venue_codes.json
+
+# スクレイパの出力（再生成可能・exp_*.py の分析でしか使わない）。
+# 上の4件を手で足したあと、ソース走査のテストがさらにこの2件を検出した
+# ＝「気づいたものだけ足す」運用では取りこぼすことの実例。
+# scrape_physicals_wt.py / scrape_winticket_ex_stats.py が生成する。
+data/player_physicals.csv
+data/player_ex_stats.csv
