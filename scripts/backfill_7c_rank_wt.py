@@ -193,6 +193,7 @@ def build_rows(model_name: str, date_from: str, date_to: str,
             "lowpay_pattern": rank_7c_is_lowpay_pattern(top3_probs, line_groups),
             "entropy": rank_7s_field_entropy(top3_probs),
             "trio": trio, "actual_top3": actual_top3,
+            "top3_probs": top3_probs,
         })
 
     # 朝オッズ盤面は 2026-06-08 以降にしか無い。無い期間は p3 単独へ落ちる。
