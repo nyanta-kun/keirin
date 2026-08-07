@@ -54,18 +54,55 @@ NEW_SENTENCE = (
 # 7C の文面は 買い目の一文のうしろに「3着以内に届きそうにない車は相手から
 # 外しています。」が続くため、一文ごと丸ごと置換すると
 # その説明が【ご購入にあたって】の後ろへ飛んで意味が通らなくなる（実際にやった）。
+# ⚠️ 2026-08-07 にユーザー指示で短縮した。旧版は
+#   「入稿は朝の時点で行うため、…（略）…目安は「各買い目の 賭け金 × オッズ が
+#     投資総額を上回っていること」です。」
+# 「朝の時点」は開催単位の3波入稿（`src/meeting_wave.py`）になって事実と合わなくなり、
+# 「目安は…」は購入者に計算を求める冗長な一文だったため落とした。
 NEW_ADVICE = (
     "【ご購入にあたって】\n"
-    "入稿は朝の時点で行うため、この配分はあくまで想定オッズに基づくものです。"
+    "この配分はあくまで想定オッズに基づくものです。"
     "レース直前の実際のオッズをご自身でご確認いただき、配分を調整いただくと"
-    "精度が上がります。目安は「各買い目の 賭け金 × オッズ が投資総額を"
-    "上回っていること」です。"
+    "精度が上がります。"
 )
 ADVICE_ANCHOR = "【参考データ】"
+ADVICE_HEADER = "【ご購入にあたって】"
 
 
 def targets() -> list[str]:
     return [k for k, cfg in RANK_CONFIGS.items() if cfg.get("tilt_stakes")]
+
+
+def _normalize(cur: str) -> str | None:
+    """現行文面を「あるべき形」へ揃える。変更不要ならそのまま返す。
+
+    **差分ではなく到達点を書く**ので、文面を再度変えたくなったら
+    `NEW_SENTENCE` / `NEW_ADVICE` を直して再実行すればよい（何度流しても同じ結果）。
+    初回移行（「（5点均等）でお届けします。」を含む版）と、
+    移行後の版（【ご購入にあたって】が既にある版）の両方から到達できる。
+
+    買い目の一文がどちらの形でも見つからない場合は None（＝触らない）。
+    """
+    if any(s in cur for s in OLD_SNIPPETS):
+        new = cur
+        for s in OLD_SNIPPETS:
+            new = new.replace(s, NEW_SENTENCE)
+    elif NEW_SENTENCE in cur:
+        new = cur
+    else:
+        return None
+
+    # 既存の【ご購入にあたって】節（次の【…】節または末尾まで）を丸ごと置き換える。
+    if ADVICE_HEADER in new:
+        head, _, rest = new.partition(ADVICE_HEADER)
+        nxt = rest.find("【")
+        tail = rest[nxt:] if nxt >= 0 else ""
+        new = f"{head}{NEW_ADVICE}\n\n{tail}" if tail else f"{head.rstrip()}\n\n{NEW_ADVICE}"
+    elif ADVICE_ANCHOR in new:
+        new = new.replace(ADVICE_ANCHOR, f"{NEW_ADVICE}\n\n{ADVICE_ANCHOR}", 1)
+    else:
+        new = f"{new.rstrip()}\n\n{NEW_ADVICE}"
+    return new.rstrip() + "\n" if cur.endswith("\n") else new.rstrip()
 
 
 def main() -> int:
@@ -87,18 +124,13 @@ def main() -> int:
                 skipped.append(f"{rank}: DBに行が無い（コード既定文が使われる）")
                 continue
             cur = row["comment_template"]
-            hit = next((s for s in OLD_SNIPPETS if s in cur), None)
-            if hit is None:
-                skipped.append(f"{rank}: 差し替え対象の一文が見つからない（手編集済み？）")
+            new = _normalize(cur)
+            if new is None:
+                skipped.append(f"{rank}: 買い目の一文が見つからない（手編集済み？）")
                 continue
-            if NEW_ADVICE[:20] in cur:
-                skipped.append(f"{rank}: すでに差し替え済み")
+            if new == cur:
+                skipped.append(f"{rank}: すでに最新（変更なし）")
                 continue
-            new = cur.replace(hit, NEW_SENTENCE)
-            if ADVICE_ANCHOR in new:
-                new = new.replace(ADVICE_ANCHOR, f"{NEW_ADVICE}\n\n{ADVICE_ANCHOR}", 1)
-            else:
-                new = f"{new}\n\n{NEW_ADVICE}"
             print(f"── {rank} ──\n[before]\n{cur}\n\n[after]\n{new}\n")
             if args.apply:
                 conn.execute(

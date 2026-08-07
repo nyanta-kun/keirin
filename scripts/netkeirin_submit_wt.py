@@ -97,9 +97,10 @@ _DEFAULT_COMMENT_TEMPLATE = (
     "買い目は三連複・軸2車流しです。金額は均等ではなく、当方が想定する発走時オッズに"
     "応じて配分しています。配当が低くなりやすい買い目に厚く、高くなりやすい買い目に"
     "薄く置き、どの目で決まっても払戻が投資を上回ることを狙う組み立てです。\n\n"
-    "入稿は朝の時点で行っているため、この配分はあくまで想定オッズに基づくものです。"
-    "レース直前の実際のオッズをご自身でご確認いただき、配分を調整いただくと精度が"
-    "上がります。目安は「各買い目の 賭け金 × オッズ が投資総額を上回っていること」です。"
+    "【ご購入にあたって】\n"
+    "この配分はあくまで想定オッズに基づくものです。"
+    "レース直前の実際のオッズをご自身でご確認いただき、配分を調整いただくと"
+    "精度が上がります。"
 )
 
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
@@ -1025,6 +1026,13 @@ def main() -> None:
     #   morning = モーニング・デイ / noon = ナイター / evening = ミッドナイト
     parser.add_argument("session", choices=("morning", "noon", "evening"))
     parser.add_argument("--dry-run", action="store_true", help="送信せず生成内容を標準出力に出す")
+    # 🔴 **未公開の下書きを差し替えるための逃げ道**。文面や配分を直したあと、
+    #    既に入稿済みのレースへ出し直したいときだけ使う。netkeirin は同じ
+    #    race_id への再POSTで前の商品を**上書き**する（docs 2.5節）ので、
+    #    公開前なら差し替えになる。公開後に何が起きるかは未検証なので、
+    #    公開済みのレースに対しては使わないこと。
+    parser.add_argument("--force", action="store_true",
+                        help="入稿済みのレースにも再送する（未公開の下書きの差し替え用）")
     parser.add_argument(
         "--race-key", default=None,
         help="指定時はこのレース(race_key)のみをピンポイントで対象にする（それ以外は通常と同一ルール）",
@@ -1098,7 +1106,10 @@ def main() -> None:
         per_rank_raw[rank_key] = raw
         all_race_keys.update(c["race_key"] for c in raw)
 
-    already = _already_submitted(sorted(all_race_keys))
+    already = set() if args.force else _already_submitted(sorted(all_race_keys))
+    if args.force:
+        print('[netkeirin_submit] --force: 入稿済みのレースにも再送します'
+              '（未公開の下書きのみ差し替わります）', flush=True)
 
     submitted_counts: dict[str, int] = {r: 0 for r in RANK_ORDER}
     all_failures: list[str] = []
