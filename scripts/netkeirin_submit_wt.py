@@ -1150,7 +1150,15 @@ def _process_rank(
             ok, msg = False, f"例外: {e}"
 
         if ok:
-            record_legs = legs if (is_multi or tilt_source) else _legs_for_record(
+            # 🔴 `is_formation`(9H1) を外すと **入稿は成功した後に記録で落ちる**。
+            #    submit_pick_multi → 成功 → ここで KeyError('stake_per_line') →
+            #    _record_submission に到達せず、**netkeirin には出ているのに
+            #    netkeirin_submissions に無い**行が生まれ、さらに例外が _process_rank を
+            #    抜けて **その波の後続ランク(7SS/7S/7A/7C/7B)が丸ごと入稿されない**。
+            #    9H1 導入(2026-08-08)から 2026-08-09 朝まで実際に発生した。
+            #    formation/multi は候補正規化側で legs を組み終えているので
+            #    _legs_for_record（軸+相手の均等割り前提）に渡してはいけない。
+            record_legs = legs if (is_multi or is_formation or tilt_source) else _legs_for_record(
                 cfg, axis1, axis2_or_p1, partners, _stake_per_line(cfg, len(partners)))
             _record_submission(
                 race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2_or_p1, msg,
