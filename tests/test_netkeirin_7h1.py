@@ -32,6 +32,7 @@ from src.netkeirin_client import (  # noqa: E402
     ACT_TYPE_LONGSHOT,
     BET_KIND_TRIFECTA_FORMATION,
     BET_KIND_TRIO_BOX,
+    expand_bet,
 )
 from src.preprocessing.favbust_features import (  # noqa: E402
     ROLE_FAV_MATE,
@@ -164,14 +165,13 @@ def test_normalize_multi_candidate_marks_follow_others_order_not_car_number():
     assert marks[5] == "○" and marks[4] == "▲"
 
 
-def _leg_odds(leg, trio_board, sub, race_key):
-    """1点=1行の BetLeg からその点のオッズを引く（三連複=board / 三連単=DB板）。"""
+def _leg_odds(leg, trio_board, tf_board):
+    """1点=1行の BetLeg からその点のオッズを引く（三連複 / 三連単）。"""
     from src.netkeirin_client import BET_KIND_TRIO_BOX
 
     if leg.bet_kind == BET_KIND_TRIO_BOX:
         return trio_board[frozenset(leg.groups[0])]
-    point = tuple(g[0] for g in leg.groups)
-    return sub._load_trifecta_board(race_key)[point]
+    return tf_board[tuple(g[0] for g in leg.groups)]
 
 
 def test_normalize_multi_candidate_falls_back_when_odds_incomplete(monkeypatch):
@@ -216,6 +216,12 @@ def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
     keys = [frozenset(int(x) for x in c.split("=")) for c in trio]
     board = {k: 20.0 + 10 * i for i, k in enumerate(keys)}
     monkeypatch.setattr(sub, "_load_trio_board", lambda rk: board)
+    # 🔴 三連単板も**明示的に**与える。ここを実DBに任せると、板を持つ環境では
+    #    ダッチ経路・持たない環境（CI）ではフォールバック経路と、同じテストが
+    #    環境によって別の物を検査してしまう。
+    tf_points = expand_bet(BET_KIND_TRIFECTA_FORMATION, _trifecta_formation_groups(tf))
+    tf_board = {p: 60.0 + 5 * i for i, p in enumerate(sorted(tf_points))}
+    monkeypatch.setattr(sub, "_load_trifecta_board", lambda rk: tf_board)
 
     cand = {"race_key": "x", "others": others, "legs_tf": tf, "legs_trio": trio,
             "stake_tf": 0, "stake_trio": 0}     # 候補JSONの値は無視される
@@ -231,8 +237,7 @@ def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
     assert total <= sw.RANK_7H1_BUDGET_CAP
     assert all(leg.stake_per_line <= 5_000 for leg in legs)
     # 採用したどの目が来ても予算の1.3倍以上が返る（ダッチの不変条件）
-    pays = [leg.stake_per_line * _leg_odds(leg, board, sub, "20260807_85_07")
-            for leg in legs]
+    pays = [leg.stake_per_line * _leg_odds(leg, board, tf_board) for leg in legs]
     assert min(pays) >= total * 1.3
 
 
