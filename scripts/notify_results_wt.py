@@ -1262,8 +1262,13 @@ def _main_inner(date):
                     if h1_hit:
                         p7h1r += h1_pay
                         p7h1h += 1
+                # ⚠️ trio_payout / trifecta_payout は **全ランク共通で「100円あたりの
+                #    確定配当」**（賭け金に依存しない生の値・migrate_picks_history_stake.py
+                #    の docstring が正本）。7H1 はここに券種別の実払戻額を入れていたため、
+                #    同じ列が他ランクと違う意味になり、Web が「✓¥19,780 複¥19,780」と
+                #    同じ額を2度出していた（2026-08-08 是正）。実額は payout に入っている。
                 history.append((target_date, f"{rk}#7H1", "RANK_7H1", h1_pred, h1_n,
-                                int(h1_hit), h1_pay, h1_pay_trio, h1_pay_tf, h1_bet,
+                                int(h1_hit), h1_pay, h1_trio_odds, h1_tf_odds, h1_bet,
                                 not is_buy, None,
                                 *gap_map.get(rk, (None, None, None)), None))
                 continue
@@ -1326,8 +1331,10 @@ def _main_inner(date):
                     if h9_hit:
                         p9h1r += h9_pay
                         p9h1h += 1
+                # trio_payout は常に0（単一券種）。trifecta_payout は他ランクと同じく
+                # 100円あたりの配当（実額は payout）。
                 history.append((target_date, f"{rk}#9H1", "RANK_9H1", h9_pred, h9_n,
-                                int(h9_hit), h9_pay, 0, h9_pay, h9_bet,
+                                int(h9_hit), h9_pay, 0, h9_tf_odds, h9_bet,
                                 not is_buy, None,
                                 *gap_map.get(rk, (None, None, None)), None))
                 continue
