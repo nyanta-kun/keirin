@@ -1082,7 +1082,10 @@ def _process_rank(
             comment = f"{comment}\n\n{entry_table}"
 
         if dry_run:
-            if is_multi:
+            # 🔴 `is_formation`(9H1) を落とすと **preview だけ** _stake_per_line で
+            #    落ちる。本番経路は通るので気づきにくく、「本番で何が出るか確かめる
+            #    道具」が肝心のときに使えない。legs を組み終えた経路は全部ここで出す。
+            if is_multi or is_formation:
                 detail = "\n".join(
                     f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
                     for leg in legs)
