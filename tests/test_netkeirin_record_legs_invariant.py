@@ -90,3 +90,16 @@ def test_guardにis_formationが含まれている():
     assert "legs if (is_multi or is_formation or tilt_source) else _legs_for_record" in src, (
         "record_legs の guard から is_formation が消えている"
     )
+
+
+def test_dry_run側のguardにもis_formationが含まれている():
+    """preview の分岐にも is_formation が要る。
+
+    本番経路(`record_legs`)だけ直すと **dry-run だけが落ちる**状態になり、
+    「本番で何が出るか確かめる道具」が肝心のときに使えない
+    （2026-08-09 に実際にこの状態になった）。
+    """
+    src = (Path(__file__).parent.parent / "scripts" / "netkeirin_submit_wt.py").read_text()
+    assert "if is_multi or is_formation:" in src, (
+        "dry-run の detail 分岐から is_formation が消えている"
+    )
