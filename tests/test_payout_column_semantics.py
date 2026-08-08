@@ -132,3 +132,46 @@ def test_guard_catches_the_original_7h1_shape():
     assert "h1_pay_tf" not in odds_names
     assert "h1_trio_odds" in odds_names
     assert "h1_tf_odds" in odds_names
+
+
+# ---------------------------------------------------------------------------
+# 過去分再構築（backfill_*_rank_wt.py）も同じ契約に従うこと
+#
+# ⚠️ ここが抜けていると、あとで実行する再構築が本番の是正を**巻き戻す**。
+#    実際 backfill_7h1_rank_wt.py は notify_results_wt と同じ誤り（実額を書く）を
+#    持っており、7H1 の過去分再構築が予定されていた（2026-08-08 是正）。
+# ---------------------------------------------------------------------------
+
+_BACKFILLS = sorted((ROOT / "scripts").glob("backfill_*_rank_wt.py"))
+
+
+def _dict_payout_args(path: Path) -> list[tuple[str, str, set[str]]]:
+    """dict リテラル中の trio_payout / trifecta_payout の (キー, 式, 参照名)。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for k, v in zip(node.keys, node.values):
+            if isinstance(k, ast.Constant) and k.value in ("trio_payout", "trifecta_payout"):
+                names = {n.id for n in ast.walk(v) if isinstance(n, ast.Name)}
+                out.append((str(k.value), ast.unparse(v), names))
+    return out
+
+
+def test_backfills_write_odds_not_amounts():
+    """再構築スクリプトも配当（pm 由来）を書くこと。"""
+    assert _BACKFILLS, "backfill_*_rank_wt.py を1本も見つけられていない"
+
+    bad: list[str] = []
+    for path in _BACKFILLS:
+        odds_names = _odds_variable_names(ast.parse(path.read_text(encoding="utf-8")))
+        for key, expr, names in _dict_payout_args(path):
+            if expr == "0" or (names & odds_names):
+                continue
+            bad.append(f"{path.name}: {key} = {expr}")
+
+    assert not bad, (
+        "再構築が配当列へ実額を書いている。これを直さないと過去分の再実行が\n"
+        "本番の是正を巻き戻す:\n  " + "\n  ".join(bad)
+    )

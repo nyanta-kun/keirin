@@ -170,10 +170,10 @@ def build_rows(date_from: str, date_to: str, *, eval_model: str, win_model: str,
         hit_trio = top3 in {_combo_key(t, False) for t in legs_trio}
         hit_tf = "-".join(map(str, order[:3])) in legs_tf
         # pm のオッズは「100円あたりの払戻」なので賭け金で按分する
-        pay_trio = (pm.get(rk, {}).get(("trio", top3), 0) * trio_stakes[top3] // 100
-                    if hit_trio else 0)
-        pay_tf = (pm.get(rk, {}).get(("trifecta", tuple(order[:3])), 0) * u_tf // 100
-                  if hit_tf else 0)
+        trio_odds = pm.get(rk, {}).get(("trio", top3), 0)
+        tf_odds = pm.get(rk, {}).get(("trifecta", tuple(order[:3])), 0)
+        pay_trio = trio_odds * trio_stakes[top3] // 100 if hit_trio else 0
+        pay_tf = tf_odds * u_tf // 100 if hit_tf else 0
 
         rows.append({
             "race_date": c["race_date"],
@@ -183,8 +183,12 @@ def build_rows(date_from: str, date_to: str, *, eval_model: str, win_model: str,
             "n_combos": len(legs_trio) + len(legs_tf),
             "hit": int(hit_trio or hit_tf),
             "payout": int(pay_trio + pay_tf),
-            "trio_payout": int(pay_trio),
-            "trifecta_payout": int(pay_tf),
+            # ⚠️ trio_payout / trifecta_payout は **全ランク共通で「100円あたりの確定配当」**
+            #    （賭け金非依存の生値）。ここに実払戻額を入れていたため、同じ列が
+            #    他ランクと違う意味になり Web が実額と配当を混ぜて表示していた
+            #    （2026-08-08 是正・notify_results_wt 側と対）。実額は payout に入る。
+            "trio_payout": int(trio_odds),
+            "trifecta_payout": int(tf_odds),
             "bet_amount": int(bet),
         })
     return rows
