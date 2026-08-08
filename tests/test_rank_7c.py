@@ -184,8 +184,21 @@ def test_netkeirin_priority_order():
        「重複は 7C・独自は 7B」を優先順位だけで実現している。
     """
     from scripts import netkeirin_submit_wt as ns
-    order = [r for r in ns.RANK_ORDER if r not in ("9S", "9A")]
+    # 9車ランクは7車ランクと母集団が排他なので、優先順位の検査から外す
+    order = [r for r in ns.RANK_ORDER if r not in ("9S", "9A", "9H1")]
     assert order == ["7H1", "7SS", "7S", "7A", "7C", "7B"]
+
+
+def test_netkeirin_priority_order_9car():
+    """9車の優先順位 9H1 > 9S > 9A（2026-08-08・9H1 新設時のユーザー判断）。
+
+    同じ9車レースで重なったら**穴推奨の 9H1 が取る**。9H1 は約1件/日と薄いので
+    9S/9A（3.96件/日）が失う分は小さい。入れ替えたければ RANK_CONFIGS の定義順を
+    変える（RANK_ORDER はその導出なので、片方だけ直すことはできない）。
+    """
+    from scripts import netkeirin_submit_wt as ns
+    order = [r for r in ns.RANK_ORDER if r in ("9S", "9A", "9H1")]
+    assert order == ["9H1", "9S", "9A"]
 
 
 def test_netkeirin_7c_uses_budget_and_own_axis_keys():

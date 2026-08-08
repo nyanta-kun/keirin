@@ -428,6 +428,21 @@ def _write_paper_candidates(target_date: str) -> None:
                      "三複:" + ",".join(trio) + " / 三単:" + ",".join(tf),
                      None, len(trio) + len(tf)))
 
+    # 9H1（穴推奨・9車高配当／三連単フォーメーション単一券種・2026-08-08 追加）。
+    # 7H1 と同じく朝に bet_amount=0 の暫定行を置き、発走前判定が上書きする。
+    # ⚠️ pred_combo の形式は notify_prerace_wt._insert_rank_9h1_pick と
+    #    **完全に一致**させること（採点・Web 表示が同じ文字列を前提にしている）。
+    # ⚠️ 9H1 も他ランク（9S/9A）と同一レースに併存しうるので
+    #    「1レース1ランク」ガードを掛けてはいけない。
+    for c in _load((f"wave_picks_wt_{target_date}_s9h1_candidates.json",
+                    f"wave_picks_wt_{target_date}_night_s9h1_candidates.json")):
+        rk = c.get("race_key")
+        legs = c.get("legs") or []
+        if not rk or not legs:
+            continue
+        rows.append((f"{rk}#9H1", "RANK_9H1", "三単:" + ",".join(legs),
+                     None, len(legs)))
+
     if not rows:
         return
     inserted = 0
@@ -445,7 +460,7 @@ def _write_paper_candidates(target_date: str) -> None:
     except Exception as e:
         print(f"[write_candidates_wt] ペーパー候補書き込み失敗: {e}", flush=True)
         return
-    print(f"[write_candidates_wt] ペーパー候補(7S/7A/7SS/7B/9S/9A/7H1) {inserted}/{len(rows)} 件書き込み", flush=True)
+    print(f"[write_candidates_wt] ペーパー候補(7S/7A/7SS/7B/9S/9A/7H1/9H1) {inserted}/{len(rows)} 件書き込み", flush=True)
 
     # Mac（SQLiteモード）から実行された場合の VPS PG ミラー
     db_url = os.environ.get("KEIRIN_DB_URL")

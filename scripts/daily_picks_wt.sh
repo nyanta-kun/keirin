@@ -239,6 +239,15 @@ echo "[$(date '+%H:%M:%S')] 予想生成（winticket・7+車専用 gami≥5倍+g
   2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
   || echo "[$(date '+%H:%M:%S')] 7H1候補生成に失敗（他ランクには影響しないため継続）"
 
+# --- 9H1（穴推奨・9車高配当）候補生成（2026-08-08 新設）---
+# 7H1 と同じく入口が独立している。こちらはレース単位の波乱スコア
+# （lgbm_upset_screen・6/7/9車の統合学習）でレースを選ぶ。
+# ⚠️ ここも本番モデル（全期間学習）を使う。当日のレースは未来なので honest。
+# 9車立ては1日10件前後しかなく、選別後は 0〜3件/日。0件の日は正常。
+.venv/bin/python3 scripts/build_9h1_candidates.py --date "$TODAY" \
+  2>&1 | tee -a "$LOG_DIR/picks_wt_${TODAY}.log" \
+  || echo "[$(date '+%H:%M:%S')] 9H1候補生成に失敗（他ランクには影響しないため継続）"
+
 # 「朝夕の推奨」Discord通知（notify_picks.py）は2026-07-31にユーザー要望により廃止。
 # 発走15分前の個別通知（notify_prerace_wt.py）のみ残す。
 

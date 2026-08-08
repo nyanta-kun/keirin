@@ -106,6 +106,12 @@ PROD_FILES=(
   "lgbm_wt_eval.pkl" "lgbm_wt_eval.meta.json"
   "lgbm_wt_win_eval.pkl" "lgbm_wt_win_eval.meta.json"
   "lgbm_wt_favbust.pkl" "lgbm_wt_favbust.meta.json"
+  # 2026-08-08 追加: RANK_9H1 の波乱スコアモデル（レース単位・6/7/9車統合学習・31特徴）。
+  # meta.json は無い（save_model は .pkl のみ書く）。
+  # 配布されないと build_9h1_candidates.py が落ち、daily_picks_wt.sh は
+  # `|| echo ...継続` で握り潰すので **ログ1行だけ残して 9H1 が永久に0件**になる。
+  # 抜けは tests/test_model_sync_coverage.py が機械的に検出する。
+  "lgbm_upset_screen.pkl"
 )
 # CI（GitHub Actions）がデプロイ時に取得する最小セット。
 # GitHub Actions は Mac のローカルファイルへ到達できないため、

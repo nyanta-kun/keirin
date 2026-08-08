@@ -47,8 +47,10 @@ import live_report_wt as lr
 # 2026-08-07: ベースモデル RANK_7C（終日の二軸）を新設。既存ランクとは
 # **論理的に排他ではない**（wt_overlap_n を見ない）唯一の予想ベース系ランクで、
 # 重複排除は netkeirin 入稿側だけで行う。
+# 2026-08-08: 穴推奨 RANK_9H1（9車・高配当狙い）を新設。7H1 とは**車数で母集団が
+# 完全に排他**（7H1=7車ちょうど / 9H1=9車ちょうど）。
 CURRENT_RANK_NAMES = {"RANK_7SS", "RANK_7S", "RANK_7A", "RANK_7B", "RANK_9S",
-                      "RANK_9A", "RANK_7H1", "RANK_7C"}
+                      "RANK_9A", "RANK_7H1", "RANK_7C", "RANK_9H1"}
 
 # 全廃済み（picks_history に存在しない）ランク。
 ABOLISHED_RANK_NAMES = {
