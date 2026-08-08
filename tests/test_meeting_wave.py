@@ -175,3 +175,54 @@ def test_発走時刻が全部欠けている開催は朝へ倒れる(monkeypatc
 
     monkeypatch.setattr(sub, "get_connection", lambda: _Conn())
     assert sub._load_meeting_waves("2026-06-08")["D_C_1"] == WAVE_MORNING
+
+
+# ── 前倒しに訂正された開催の救済（2026-08-08 レビュー指摘 M-6）─────────────
+
+def test_waves_due_by_includes_earlier_waves():
+    """自分の波 + それより前の波を対象にすること。
+
+    波は毎回 `wt_races.start_at` から都度再計算されるため、発走時刻が
+    **前倒しに訂正**されると開催が通過済みの波へ移り、「自分の波と一致するもの」
+    だけを見る実装では**その日どの回からも入稿されずに終わる**。
+    """
+    from src.meeting_wave import (
+        WAVE_MORNING, WAVE_NIGHT, WAVE_NOON, waves_due_by,
+    )
+    assert waves_due_by(WAVE_MORNING) == (WAVE_MORNING,)
+    assert waves_due_by(WAVE_NOON) == (WAVE_MORNING, WAVE_NOON)
+    assert waves_due_by(WAVE_NIGHT) == (WAVE_MORNING, WAVE_NOON, WAVE_NIGHT)
+
+
+def test_waves_due_by_never_includes_later_waves():
+    """🔴 後の波を含めてはいけない。
+
+    含めるとミッドナイトを朝に入稿してしまい、「板が育ってから出す」という
+    波の存在理由そのものが壊れる（推奨で買う点すべてにオッズがある割合は
+    ミッドナイトだと朝の時点で 17.5% しかない）。
+    """
+    from src.meeting_wave import WAVES, waves_due_by
+    for i, w in enumerate(WAVES):
+        due = waves_due_by(w)
+        assert set(due).isdisjoint(WAVES[i + 1:]), f"{w} が後の波を含んでいる: {due}"
+
+
+def test_waves_due_by_tolerates_unknown_wave():
+    """未知の波名でも落ちない（自分だけを返す）。"""
+    from src.meeting_wave import waves_due_by
+    assert waves_due_by("__unknown__") == ("__unknown__",)
+
+
+def test_submit_uses_due_waves_not_exact_match():
+    """入稿側が `== want_wave` ではなく `in due_waves` で絞っていること。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "scripts"
+           / "netkeirin_submit_wt.py").read_text(encoding="utf-8")
+    # 候補を絞り込んでいる行（waves.get(...) を評価している行）だけを見る。
+    # ログ用の件数カウントは `== want_wave` のままでよいので全文検索にしない。
+    filters = [ln for ln in src.splitlines()
+               if "waves.get(" in ln and not ln.lstrip().startswith("#")]
+    assert filters, "候補を波で絞り込んでいる行が見つからない"
+    for ln in filters:
+        assert "in due_waves" in ln, (
+            f"波の完全一致で絞り込んでいる（前倒し訂正で取りこぼす）: {ln.strip()!r}")

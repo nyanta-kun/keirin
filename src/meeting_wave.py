@@ -66,6 +66,32 @@ def wave_of_first_hour(first_race_hour: int | float | None) -> str:
     return WAVE_MORNING
 
 
+def waves_due_by(session_wave: str) -> tuple[str, ...]:
+    """その回の入稿で**対象にすべき**波（自分の波 + 取りこぼした過去の波）。
+
+    背景（2026-08-08 レビュー指摘 M-6）:
+      波は毎回 `wt_races.start_at` から**都度**再計算される。そのため発走時刻が
+      **前倒しに訂正**されると、開催が通過済みの波へ移ってしまい、
+      「自分の波と一致するもの」だけを見る実装では**その日どの回からも
+      入稿されずに終わる**。
+
+      例: 当初12:30発走（朝は noon 判定で対象外）→ 昼までに10:30へ訂正
+          → 昼の時点で morning と再判定 → `== "noon"` のフィルタから外れる。
+
+      逆（後ろへ動く）は後続の回が拾うので穴にならない。前倒しだけが落ちる。
+
+    そこで自分の波より**前の波も対象に含める**。二重入稿は
+    `_already_submitted()` が、終わったレースへの入稿は `_load_started_races()` が
+    それぞれ止めるので、拾い直しても副作用は無い。
+
+    ⚠️ 逆に「後の波」を含めてはいけない。板が育つのを待つという波の目的そのもの
+       （ミッドナイトを朝に出すと傾斜配分がほぼ効かない）が壊れる。
+    """
+    if session_wave not in WAVES:
+        return (session_wave,)
+    return WAVES[: WAVES.index(session_wave) + 1]
+
+
 def parse_wave(value: str | None) -> str | None:
     """CLI 引数などの文字列を波名へ正規化する。未知なら None。"""
     if not value:

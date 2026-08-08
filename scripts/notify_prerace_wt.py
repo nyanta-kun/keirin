@@ -2142,6 +2142,30 @@ def judge_rank_7h1(cand: dict, trio_lookup: dict, tf_lookup: dict) -> tuple[str,
         detail["skip_reason"] = f"1着固定{head}番が盤面に無い（欠車）"
         return "skip", detail
 
+    # 🔴 本命（＝バストすると読んだ相手）自身が欠車したら見送る（2026-08-08 追加）。
+    # 他ランク（7S/9S/7C/7B）は全て「軸が盤面に不在」を明示的に skip 扱いにしているが、
+    # 7H1 だけこの防御が無かった。買い目は設計上 fav を一切含まない（本命ラインを
+    # 丸ごと落とす）ので、fav が消えても組み合わせ自体は残り6車で成立してしまい、
+    # そのまま "buy" になり得た。
+    #
+    # だが 7H1 の選別は「**7車ちょうどの盤面で本命1車が沈む**」というレース構造の
+    # 予測（favbust モデル）に依存している。fav 自身が欠車した時点でその前提が
+    # 崩れ、実質6車レースというモデルが想定していない状況になる。
+    #
+    # ⚠️ 盤面は三連複(frozenset キー)と三連単(tuple キー)の**両方**から作る。
+    #   `_parse_combo_key` は ordered=False で frozenset を返すので、
+    #   tuple だけを見ると三連複側を1件も拾えず board が空になり、
+    #   このガードが**無言で素通り**する（実装時に実際に踏んだ）。
+    fav = cand.get("fav")
+    board: set[int] = set()
+    for lookup in (trio_lookup, tf_lookup):
+        for k in lookup:
+            if isinstance(k, (tuple, frozenset)):
+                board |= {int(x) for x in k}
+    if fav is not None and board and int(fav) not in board:
+        detail["skip_reason"] = f"本命{fav}番が盤面に無い（欠車）"
+        return "skip", detail
+
     legs_trio = [t for t in legs_trio_all
                  if _parse_combo_key(t, False) in trio_lookup]
     legs_tf = [t for t in legs_tf_all if _parse_combo_key(t, True) in tf_lookup]
