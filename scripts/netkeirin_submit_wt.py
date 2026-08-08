@@ -73,6 +73,7 @@ from src.meeting_wave import (
     wave_of_first_hour,
     waves_due_by,
 )
+from src.dutch_allocation import dutch_allocate
 from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import (
     RACE_BUDGET,
@@ -548,10 +549,16 @@ def build_bet_detail(legs: list[BetLeg], source: str | None = None,
                 "stake": int(leg.stake_per_line),
                 "odds": round(float(o), 1) if o else None,
             })
-    return json.dumps(
-        {"total": sum(x["stake"] for x in lines), "source": source, "lines": lines},
-        ensure_ascii=False,
-    )
+    payload = {"total": sum(x["stake"] for x in lines), "source": source, "lines": lines}
+    # ダッチ配分のときは保証倍率も一緒に残す（仕様書 §6 の前向き計測）。
+    # 🔴 picks_history に列を足さずここへ入れているのは、**スキーマ変更を伴わずに
+    #    記録したいから**。列が必要になったらここから移送できる。
+    if source and source.startswith("dutch:") and lines:
+        total = payload["total"]
+        rets = [x["stake"] * x["odds"] / total for x in lines if x.get("odds") and total]
+        if rets:
+            payload["dutch_min_return"] = round(min(rets), 4)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _legs_for_record(cfg: dict, axis1: int, axis2_or_p1: int, partners: list[int],
@@ -780,7 +787,7 @@ def _trio_box_group(legs_trio: list[str]) -> list[int]:
 
 
 def _normalize_formation_candidate(
-    cand: dict, cfg: dict,
+    cand: dict, cfg: dict, race_key: str | None = None,
 ) -> tuple[list[BetLeg], dict[int, str], int, int]:
     """9H1 候補から (買い目行, 印, ◎車番, ○車番) を返す。
 
@@ -808,9 +815,61 @@ def _normalize_formation_candidate(
     for c in third:
         marks.setdefault(c, "△")
 
-    legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION, [first, second, third], unit)]
+    # ダッチ配分（2026-08-09・仕様書 §2B）。朝オッズが揃わない／条件不成立なら
+    # 従来の均等（rank_9h1_stakes）へフォールバックする。
+    tf_board = _load_trifecta_board(race_key) if race_key else {}
+    tf_points = sorted(expand_bet(BET_KIND_TRIFECTA_FORMATION, [first, second, third]))
+    dutch_legs, _dutch = _dutch_point_legs(tf_points, [], tf_board, {})
+    legs = dutch_legs or [BetLeg(BET_KIND_TRIFECTA_FORMATION, [first, second, third], unit)]
     axis2 = ranked_second[0] if ranked_second else first[0]
     return legs, marks, first[0], axis2
+
+
+def _dutch_point_legs(
+    tf_points: list[tuple[int, ...]],
+    trio_points: list[frozenset],
+    tf_odds: dict,
+    trio_odds: dict,
+) -> tuple[list[BetLeg], object]:
+    """高配当ランク(7H1/9H1)の買い目をダッチ配分し、**1点=1行**の BetLeg にする。
+
+    仕様書 §2B。低オッズ目を切って「当たれば必ず予算を上回る」形へ寄せる。
+    的中率ランク(7C/7A/7S)には**絶対に使わない**（人気の目が的中の源泉のため）。
+
+    ⚠️ EV(Σp·o)≥1.3 の判定は**まだ効いていない**。候補JSON(`legs_tf`/`legs_trio`)に
+       点ごとの的中確率が無く、submit 時点で honest に計算できないため
+       `probs=None` を渡している（`reason='ok_no_ev_check'`）。EV を効かせるには
+       候補生成側で点ごとの確率を JSON へ出す必要がある。
+
+    🔴 **買う点すべてにオッズが揃っているときだけダッチにする。** 一部でも欠けると
+       「安い目だから切った」のか「オッズが取れなかったから消えた」のか区別できず、
+       券種がまるごと落ちる（三連単オッズだけ無い → 7H1 が三連複単券種になる）。
+       欠けたら行を返さず、呼び出し側の従来配分へフォールバックさせる。
+
+    returns (買い目行, DutchResult)。買わない判断のときは行が空リストになる。
+    """
+    wanted = [("tf", p) for p in tf_points] + [("trio", t) for t in trio_points]
+    odds: dict = {}
+    for key in wanted:
+        o = (tf_odds if key[0] == "tf" else trio_odds).get(key[1])
+        if not o:
+            return [], dutch_allocate({}, probs=None, budget=RACE_BUDGET)
+        odds[key] = float(o)
+
+    result = dutch_allocate(odds, probs=None, budget=RACE_BUDGET)
+    if not result.buy:
+        return [], result
+
+    legs: list[BetLeg] = []
+    for key, stake in sorted(result.stakes.items(), key=lambda kv: str(kv[0])):
+        kind, target = key
+        if kind == "tf":
+            # 1点だけの三連単は「各着に1車ずつのフォーメーション」で表せる
+            legs.append(BetLeg(BET_KIND_TRIFECTA_FORMATION,
+                               [[target[0]], [target[1]], [target[2]]], stake))
+        else:
+            legs.append(BetLeg(BET_KIND_TRIO_BOX, [sorted(target)], stake))
+    return legs, result
 
 
 def _normalize_multi_candidate(
@@ -843,6 +902,7 @@ def _normalize_multi_candidate(
     first, second, third = tf_groups
     if len(first) != 1:
         raise ValueError(f"7H1 の1着は1車固定のはずです: {first}")
+
     # 2着列は候補生成側で「プール上位2車」の順序を持つが、bet_id は昇順に
     # 正規化される。印の ○/▲ は候補JSONの others（モデル3着内率の降順）の
     # 並びに従う＝表示上の序列を買い目の順序に依存させない。
@@ -859,12 +919,23 @@ def _normalize_multi_candidate(
     for c in trio_cars:          # BOXだけで買っている車も買い目に入っている
         marks.setdefault(c, "△")
 
+    axis2 = ranked_second[0] if ranked_second else first[0]
+
+    # ── ダッチ配分（2026-08-09・仕様書 §2B）──────────────────────────────
+    # 朝オッズが**全点**に揃えば低オッズ目を切って「当たれば予算超え」の形へ寄せる。
+    # 揃わない／条件不成立なら**従来の配分へフォールバック**する（見送りにはしない。
+    # 朝オッズ欠損は約半数あり、そこを全部落とすと入稿が消える＝仕様書 §7）。
+    tf_board = _load_trifecta_board(race_key) if race_key else {}
+    tf_points = sorted(expand_bet(BET_KIND_TRIFECTA_FORMATION, tf_groups))
+    dutch_legs, dutch = _dutch_point_legs(tf_points, trio_legs, tf_board, board)
+    if dutch_legs:
+        return dutch_legs, marks, first[0], axis2, f"dutch:{dutch.reason}"
+
     # 三連複は目ごとに金額が違うので **1目 = 1行**（3車のBOX＝1点）で出す。
     # 同額でも束ねられない（BOXは車群でしか表現できず、任意の部分集合を作れない）。
     legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION, tf_groups, stake_tf)]
     for t in sorted(trio_legs, key=lambda x: sorted(x)):
         legs.append(BetLeg(BET_KIND_TRIO_BOX, [sorted(t)], trio_stakes[t]))
-    axis2 = ranked_second[0] if ranked_second else first[0]
     return legs, marks, first[0], axis2, source
 
 
@@ -978,7 +1049,7 @@ def _process_rank(
                     cand, cfg, race_key.split("#")[0])
             elif is_formation:
                 legs, marks, axis1, axis2_or_p1 = _normalize_formation_candidate(
-                    cand, cfg)
+                    cand, cfg, race_key.split("#")[0])
             else:
                 axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
                 if cfg.get("tilt_stakes"):
