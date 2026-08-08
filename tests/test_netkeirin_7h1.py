@@ -164,6 +164,43 @@ def test_normalize_multi_candidate_marks_follow_others_order_not_car_number():
     assert marks[5] == "○" and marks[4] == "▲"
 
 
+def _leg_odds(leg, trio_board, sub, race_key):
+    """1点=1行の BetLeg からその点のオッズを引く（三連複=board / 三連単=DB板）。"""
+    from src.netkeirin_client import BET_KIND_TRIO_BOX
+
+    if leg.bet_kind == BET_KIND_TRIO_BOX:
+        return trio_board[frozenset(leg.groups[0])]
+    point = tuple(g[0] for g in leg.groups)
+    return sub._load_trifecta_board(race_key)[point]
+
+
+def test_normalize_multi_candidate_falls_back_when_odds_incomplete(monkeypatch):
+    """オッズが一部でも欠けたらダッチにせず従来配分へ戻す。
+
+    🔴 欠けたままダッチに入れると「安いから切った」のか「板が無いから消えた」のか
+       区別できず、**三連単オッズだけ無いときに 7H1 が三連複単券種になる**。
+    """
+    import scripts.netkeirin_submit_wt as sub
+
+    others = [3, 4, 5, 1, 2, 6]
+    roles = {3: _ROLE_LEAD_TOP, 4: _OTHER, 5: _OTHER, 1: _OTHER, 2: _OTHER,
+             6: _FAV_LINE}
+    trio, tf = _legs_from_strategy(others, roles)
+    keys = [frozenset(int(x) for x in c.split("=")) for c in trio]
+    board = {k: 20.0 + 10 * i for i, k in enumerate(keys)}
+    monkeypatch.setattr(sub, "_load_trio_board", lambda rk: board)
+    monkeypatch.setattr(sub, "_load_trifecta_board", lambda rk: {})   # 三連単板が無い
+
+    cand = {"race_key": "x", "others": others, "legs_tf": tf, "legs_trio": trio,
+            "stake_tf": 0, "stake_trio": 0}
+    legs, _, _, _, source = _normalize_multi_candidate(
+        cand, RANK_CONFIGS["7H1"], "20260807_85_07")
+    assert not source.startswith("dutch:")
+    # 2券種のまま（三連単の行が残っている）
+    kinds = {leg.bet_kind for leg in legs}
+    assert BET_KIND_TRIFECTA_FORMATION in kinds
+
+
 def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
     """オッズが買う目**すべて**に揃えば払戻が等しくなるよう配分すること。
 
@@ -184,18 +221,19 @@ def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
             "stake_tf": 0, "stake_trio": 0}     # 候補JSONの値は無視される
     legs, _, _, _, source = _normalize_multi_candidate(
         cand, RANK_CONFIGS["7H1"], "20260807_85_07")
-    assert source == "odds"
-    # 払戻がおおむねそろう（100円単位の丸めぶんだけ差が出る）。
-    # ⚠️ 許容幅は**三連複へ回る予算の粗さ**で決まる。2026-08-08 に三連単単価を
-    #    500→900円へ戻した結果、三連複の枠が 6,000→2,800円＝100円単位で28個しか
-    #    配れなくなり、丸め誤差が相対的に倍増した（実測の最大乖離 45%）。
-    #    「完全に揃う」ことではなく「オッズの逆数へ寄せている」ことを守るテスト
-    #    なので、単価を変えたらここも合わせて見直すこと。
-    pays = [leg.stake_per_line * board[frozenset(leg.groups[0])] for leg in legs[1:]]
-    assert max(pays) - min(pays) < max(pays) * 0.60
-    # 均等割りだったときより明確に揃っている（＝傾斜が効いている）ことは確かめる
-    flat = [sw.RANK_7H1_UNIT * board[frozenset(leg.groups[0])] for leg in legs[1:]]
-    assert (max(pays) - min(pays)) / max(pays) < (max(flat) - min(flat)) / max(flat)
+
+    # 【2026-08-09・STEP3 §2B】オッズが全点に揃うとダッチ配分になる。
+    # ダッチは低オッズ目を切ったうえで**採用した目の払戻を予算の1.3倍以上**に
+    # そろえるので、旧「傾斜配分」より強い条件になる。守る中身は同じ
+    # （オッズの逆数へ寄せる）だが、1点=1行になり券種混在で並ぶ点が違う。
+    assert source.startswith("dutch:")
+    total = sum(leg.stake_per_line for leg in legs)
+    assert total <= sw.RANK_7H1_BUDGET_CAP
+    assert all(leg.stake_per_line <= 5_000 for leg in legs)
+    # 採用したどの目が来ても予算の1.3倍以上が返る（ダッチの不変条件）
+    pays = [leg.stake_per_line * _leg_odds(leg, board, sub, "20260807_85_07")
+            for leg in legs]
+    assert min(pays) >= total * 1.3
 
 
 def test_7h1_config_shape():

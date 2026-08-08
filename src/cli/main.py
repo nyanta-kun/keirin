@@ -13,6 +13,41 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.database import init_db
 from src.scraper.pipeline import CollectionPipeline, setup_logging
 
+
+def _load_recent_7a_axis_sums(out_dir: Path, target_date: str, days: int = 0) -> list[float]:
+    """直近の 7A **プール**（ゲート前）の axis_sum を集める。
+
+    低配当見送りゲートの閾値を取るための母集団。**購入実績ではなくプールを読む**
+    （購入実績＝ゲート通過分だけなので、そこから分位を取ると閾値が毎日切り下がる）。
+
+    ファイルが無い日は単に飛ばす。読めない日があっても候補生成は止めない。
+    """
+    from src.strategy_wt import RANK_7A_TOP2_GATE_LOOKBACK_DAYS
+
+    import json as _json
+
+    days = days or RANK_7A_TOP2_GATE_LOOKBACK_DAYS
+    try:
+        base = date.fromisoformat(target_date)
+    except ValueError:
+        return []
+    out: list[float] = []
+    for i in range(1, days + 1):
+        d = (base - timedelta(days=i)).isoformat()
+        for suffix in ("_s7a_pool.json", "_night_s7a_pool.json"):
+            p = out_dir / f"wave_picks_wt_{d}{suffix}"
+            if not p.exists():
+                continue
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for c in _json.load(f):
+                        if c.get("axis_sum") is not None:
+                            out.append(float(c["axis_sum"]))
+            except (OSError, ValueError):
+                continue
+    return out
+
+
 # 7+車 3連複のガミ閾値（レース単位: min(全目) < この値 → レース見送り。doc52）
 # 2026-07-10 に買い目カット方式(SS/S)を廃止し doc48 のレース単位セマンティクスへ回帰。
 # notify_prerace_wt.py / write_candidates_wt.py の GAMI_THRESHOLD と揃えること。
@@ -1275,6 +1310,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         line_score_features, race_signals,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
+        rank_7a_top2_threshold, rank_7a_top2_gate,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
         rank_7c_is_lowpay_pattern,
@@ -1976,13 +2012,33 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         # ── 7A候補（S7の境界ランク・3ゲート中1つだけ不合格・2026-07-27導入）──
         # 同じ rank_7s_raw_candidates（軸選定成功した全7車候補）から、S7とは論理的に
         # 排他な「惜しいレース」を選出する（詳細は strategy_wt.rank_7a_daily_select 参照）
-        rank_7a_candidates = rank_7a_daily_select(rank_7s_raw_candidates)
+        #
+        # 【2026-08-09・低配当レース見送りゲート】axis_sum 下位 q20 だけ購入する。
+        # 🔴 閾値の母集団は **ゲート前のプール** でなければならない。購入実績
+        #    （＝ゲート通過分だけ）から分位を取ると母集団が毎日切り下がり、
+        #    閾値が際限なく下がって件数が消える。そのため pool を別ファイルへ残す。
+        rank_7a_pool = rank_7a_daily_select(rank_7s_raw_candidates)
+        rank_7a_pool_suffix = "_night_s7a_pool.json" if is_night else "_s7a_pool.json"
+        rank_7a_pool_path = (Path(output_path).parent
+                             / f"wave_picks_wt_{target_date}{rank_7a_pool_suffix}")
+        with open(rank_7a_pool_path, "w", encoding="utf-8") as f:
+            json.dump(rank_7a_pool, f, ensure_ascii=False, indent=2)
+
+        history = _load_recent_7a_axis_sums(Path(output_path).parent, target_date)
+        history += [c["axis_sum"] for c in rank_7a_pool if c.get("axis_sum") is not None]
+        top2_threshold = rank_7a_top2_threshold(history)
+        rank_7a_candidates, rank_7a_skipped = rank_7a_top2_gate(rank_7a_pool, top2_threshold)
+
         rank_7a_suffix = "_night_s7a_candidates.json" if is_night else "_s7a_candidates.json"
         rank_7a_path = Path(output_path).parent / f"wave_picks_wt_{target_date}{rank_7a_suffix}"
         with open(rank_7a_path, "w", encoding="utf-8") as f:
             json.dump(rank_7a_candidates, f, ensure_ascii=False, indent=2)
         click.echo(f"[保存先] {rank_7a_path}  (7A候補 {len(rank_7a_candidates)}件/{len(rank_7s_raw_candidates)}件中"
                    f"・境界ランク/ペーパー検証)")
+        click.echo(f"[7Aゲート] axis_sum<={top2_threshold:.4f} (n_hist={len(history)}) "
+                   f"→ 購入{len(rank_7a_candidates)}件 / 見送り{len(rank_7a_skipped)}件"
+                   f" (プール{len(rank_7a_pool)}件・見送り率"
+                   f"{len(rank_7a_skipped) / len(rank_7a_pool) * 100 if rank_7a_pool else 0:.1f}%)")
 
         # ── 7B候補（◎◯一致 × 順序も一致 × 準決勝・三連複3点・2026-08-05 定義入替）──
         # 7SS/7S/7A が wt_overlap_n∈{0,1} なのに対し 7B は wt_overlap_n==2 のみを取る

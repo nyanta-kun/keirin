@@ -891,9 +891,98 @@ def rank_9s_daily_select(candidates: list[dict]) -> list[dict]:
 RANK_7A_STAKE = unit_stake(5)  # 2,000円/点（7車5点=10,000円/レース）
 RANK_9A_STAKE = unit_stake(7)  # 1,400円/点（9車7点=9,800円/レース）
 
+# ───────────────────────────────────────────────────────────────────────────
+# 7A 低配当レース見送りゲート（2026-08-09 新設・STEP1C で確定）
+#
+# `axis_sum`（= 軸2車の pred_top3_pct 合計 = 仕様書の `top2_sum`）が高いレースは
+# 本命集中＝低配当になりやすい。**下位 q20（高配当側20%）だけ買う**。
+#
+# STEP1C 実測（walk-forward の honest 確率・掃引〜2025-12末／確認2026年）:
+#   7A  現行 ROI 83.5% → q20 90.6%（掃引） / 85.8% → 91.1%（確認・閾値は掃引窓で固定）
+#   7C  どの閾値でも改善せず（掃引はむしろ −6.0pt）→ ゲート導入しない
+#   7S  窓で符号反転（掃引 +8.8pt → 確認 −1.0pt）→ ゲート導入しない
+#
+# ⚠️ **90〜98% はまだ 100% 割れ**＝損が薄まるだけで勝ちではない。出走を約80%削る
+#    （4.3→約0.9レース/日）売上とのトレードオフを承知の上での採用（ユーザー判断）。
+#
+# ⚠️ **閾値は固定値にしない。** モデルを差し替えると axis_sum の分布ごと動くため、
+#    固定値だと選抜率が知らないうちに変わる（このリポジトリで繰り返している事故）。
+#    直近母集団の分位点から毎回引き直す。
+# ───────────────────────────────────────────────────────────────────────────
 
-def rank_7a_daily_select(candidates: list[dict]) -> list[dict]:
+RANK_7A_TOP2_GATE_Q = 0.20
+"""買う分位。下位 q20（＝高配当側20%）だけ購入する。"""
+
+RANK_7A_TOP2_GATE_MIN_N = 40
+"""分位点を信用する最小標本数。これ未満はフォールバック閾値を使う。
+
+7A のプールは約3.4件/日なので 40 件 ≒ 12日。100件(≒30日)にすると導入直後の
+1ヶ月がまるごとフォールバック運用になり、下の較正ズレを長く引きずる。
+"""
+
+RANK_7A_TOP2_GATE_FALLBACK = 1.432
+"""履歴が足りないときの閾値。
+
+🔴 **STEP1C が出した 1.424 をそのまま使ってはいけない。** あの値は walk-forward
+   ヴィンテージモデルの pp3 から出した q20 で、**本番モデルが出す axis_sum とは
+   分布が違う**。実測（本番モデルで 2026-06-20〜08-08 のプールを再生成・n=36）では
+   1.424 は上位 16.7% しか通さず、q20 は 1.432 だった。
+   ここは「STEP1C の数値」ではなく「**本番モデルのプール分布**」で較正すること。
+
+⚠️ n=36 の暫定値。プールJSONが貯まれば `rank_7a_top2_threshold()` の動的分位が
+   引き継ぐので、この定数が効くのは導入後 12 日ほどだけ。
+"""
+
+RANK_7A_TOP2_GATE_LOOKBACK_DAYS = 90
+"""分位点を取る直近母集団の日数。"""
+
+
+def rank_7a_top2_threshold(
+    history: list[float],
+    q: float = RANK_7A_TOP2_GATE_Q,
+    min_n: int = RANK_7A_TOP2_GATE_MIN_N,
+    fallback: float = RANK_7A_TOP2_GATE_FALLBACK,
+) -> float:
+    """直近母集団の axis_sum から q 分位のゲート閾値を返す。
+
+    history: 直近の 7A 候補（または採用実績）の axis_sum の並び。順序は問わない。
+
+    標本が min_n 未満なら fallback を返す。**空リストでも必ず有限値を返す**
+    （閾値が None になると呼び出し側が「ゲート無効」と解釈して全件通してしまう）。
+    """
+    vals = sorted(v for v in history if v is not None)
+    if len(vals) < min_n:
+        return fallback
+    idx = min(int(q * len(vals)), len(vals) - 1)
+    return float(vals[idx])
+
+
+def rank_7a_top2_gate(candidates: list[dict], threshold: float) -> tuple[list[dict], list[dict]]:
+    """7A 候補を低配当見送りゲートに掛け、(購入する候補, 見送る候補) を返す。
+
+    見送り側には `skip_reason='7A_top2_gate'` と判定に使った閾値を書き込む
+    （なぜ落ちたかが後から読めないと、件数が減ったときに原因を切り分けられない）。
+    """
+    keep: list[dict] = []
+    skip: list[dict] = []
+    for c in candidates:
+        if c.get("axis_sum") is not None and c["axis_sum"] <= threshold:
+            keep.append(c)
+        else:
+            c["skip_reason"] = "7A_top2_gate"
+            c["top2_gate_threshold"] = round(threshold, 4)
+            skip.append(c)
+    return keep, skip
+
+
+def rank_7a_daily_select(
+    candidates: list[dict], top2_threshold: float | None = None
+) -> list[dict]:
     """7Aの選出: S7の2ゲート(axis_sum/entropy)のうちちょうど1つだけ不合格の候補。
+
+    top2_threshold を渡すと **低配当レース見送りゲート**（2026-08-09・STEP1C）を
+    適用し、axis_sum がこの値以下の候補だけを返す。None なら従来どおり全件。
+    閾値は `rank_7a_top2_threshold()` で直近母集団から動的に取ること。
 
     candidates: 各要素は最低限
       {"axis_sum": float, "entropy": float, "wt_overlap_n": int | None} を持つ dict。
@@ -922,6 +1011,8 @@ def rank_7a_daily_select(candidates: list[dict]) -> list[dict]:
         ent_ok = c.get("entropy", float("inf")) <= RANK_7S_ENTROPY_MAX
         if (not axis_ok) and ent_ok:
             pool.append(c)
+    if top2_threshold is not None:
+        pool, _ = rank_7a_top2_gate(pool, top2_threshold)
     return sorted(pool, key=lambda c: c["axis_sum"])
 
 
