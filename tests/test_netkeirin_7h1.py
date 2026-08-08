@@ -185,9 +185,17 @@ def test_normalize_multi_candidate_uses_odds_when_available(monkeypatch):
     legs, _, _, _, source = _normalize_multi_candidate(
         cand, RANK_CONFIGS["7H1"], "20260807_85_07")
     assert source == "odds"
-    # 払戻がおおむねそろう（100円単位の丸めぶんだけ差が出る）
+    # 払戻がおおむねそろう（100円単位の丸めぶんだけ差が出る）。
+    # ⚠️ 許容幅は**三連複へ回る予算の粗さ**で決まる。2026-08-08 に三連単単価を
+    #    500→900円へ戻した結果、三連複の枠が 6,000→2,800円＝100円単位で28個しか
+    #    配れなくなり、丸め誤差が相対的に倍増した（実測の最大乖離 45%）。
+    #    「完全に揃う」ことではなく「オッズの逆数へ寄せている」ことを守るテスト
+    #    なので、単価を変えたらここも合わせて見直すこと。
     pays = [leg.stake_per_line * board[frozenset(leg.groups[0])] for leg in legs[1:]]
-    assert max(pays) - min(pays) < max(pays) * 0.35
+    assert max(pays) - min(pays) < max(pays) * 0.60
+    # 均等割りだったときより明確に揃っている（＝傾斜が効いている）ことは確かめる
+    flat = [sw.RANK_7H1_UNIT * board[frozenset(leg.groups[0])] for leg in legs[1:]]
+    assert (max(pays) - min(pays)) / max(pays) < (max(flat) - min(flat)) / max(flat)
 
 
 def test_7h1_config_shape():
