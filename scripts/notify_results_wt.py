@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.notify.discord import send
 from src.evaluation.backtest_wt import _load_payouts_wt
 from src.database import get_connection
+from src.submitted_stakes import resolve_payout
 from src.strategy_wt import (
     CURRENT_PAPER_RANKS, ABOLISHED_PAPER_RANKS, rank_7c_unit_stake,
     RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE, RANK_9S_STAKE, RANK_9A_STAKE,
@@ -597,6 +598,28 @@ def _main_inner(date):
         if _pk not in picks:
             picks[_pk] = ("RANK_7H1", "", "")
 
+    # 9H1=穴推奨・9車高配当（2026-08-08導入）:
+    # decisions キー {rk}#9H1（decision=buy）を picks に注入する（slot="nine_9h1"）。
+    # ⚠️ **三連単フォーメーションの単一券種**。7H1 と違い `legs` 1本だけを見る。
+    for _key, _dec in decisions.items():
+        if not _key.endswith("#9H1") or _dec.get("decision") != "buy":
+            continue
+        if not _dec.get("legs"):
+            continue
+        _rk = _key[:-4]
+        if not _rk.startswith(dc):
+            continue
+        try:
+            _, _code, _rno = _rk.split("_")
+        except ValueError:
+            continue
+        _venue = code2name.get(_code)
+        if _venue is None:
+            continue
+        _pk = (_venue, int(_rno), "nine_9h1")
+        if _pk not in picks:
+            picks[_pk] = ("RANK_9H1", "", "")
+
     # 9A=S9の境界ランク（ペーパートレード検証・2026-07-27導入）:
     # decisions キー {rk}#9A（decision=buy）を picks に注入する（slot="nine_9a"）。
     for _key, _dec in decisions.items():
@@ -673,6 +696,7 @@ def _main_inner(date):
     results_7a = []           # 7A=S7の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
     results_7b = []           # 7B=◎◯一致×順序/相手不一致（ペーパー）行 — ヘッダー合計には含めず別集計（2026-08-03導入）
     results_7h1 = []          # 7H1=穴推奨・本命バスト型（2券種）行 — ヘッダー合計には含めず別集計（2026-08-06導入）
+    results_9h1 = []          # 9H1=穴推奨・9車高配当（三連単単一券種）行 — 同上（2026-08-08導入）
     results_7c = []           # 7C=ベースモデル・終日の二軸（ペーパー）行 — ヘッダー合計には含めず別集計（2026-08-07導入）
     results_9a = []           # 9A=S9の境界ランク（ペーパー）行 — ヘッダー合計には含めず別集計（2026-07-27導入）
     p7ssb = p7ssr = p7ssh = 0  # 7+車 旧SSランク 合計
@@ -697,6 +721,7 @@ def _main_inner(date):
     # 7B（◎◯一致×順序/相手不一致・相手絞り3点・2026-08-03導入。ヘッダー合計には含めない）
     p7bb = p7br = p7bh = 0
     p7h1b = p7h1r = p7h1h = 0   # 7H1（穴推奨）の 購入額 / 払戻 / 的中数
+    p9h1b = p9h1r = p9h1h = 0   # 9H1（穴推奨・9車）の 購入額 / 払戻 / 的中数
     # 7C（ベースモデル・終日の二軸・2026-08-07導入。ヘッダー合計には含めない）
     # ⚠️ **賭け金が可変**（予算枠÷点数）なので購入額は decision の stake から積む。
     p7cb = p7cr = p7ch = 0
@@ -795,8 +820,9 @@ def _main_inner(date):
                     except (TypeError, ValueError):
                         continue
                     rank_7s_hit = any(cs == rank_7s_top3 for cs in rank_7s_combos)
-                    rank_7s_pay = rank_7s_trio_pay * rank_7s_stake // 100 if rank_7s_hit else 0
-                    rank_7s_bet = len(rank_7s_combos) * rank_7s_stake
+                    rank_7s_pay, rank_7s_bet = resolve_payout(
+                        conn, rk, "7S", hit=rank_7s_hit, winning_key=rank_7s_top3,
+                        odds_payout=rank_7s_trio_pay, fallback_stake=rank_7s_stake, n_combos=len(rank_7s_combos))
                     rank_7s_n_combos = len(rank_7s_combos)
                     rank_7s_thirds = sorted(
                         next(iter(cs - {rank_7s_axis1, rank_7s_axis2}))
@@ -892,8 +918,9 @@ def _main_inner(date):
                     except (TypeError, ValueError):
                         continue
                     rank_9s_hit = any(cs == rank_9s_top3 for cs in rank_9s_combos)
-                    rank_9s_pay = rank_9s_trio_pay * rank_9s_stake // 100 if rank_9s_hit else 0
-                    rank_9s_bet = len(rank_9s_combos) * rank_9s_stake
+                    rank_9s_pay, rank_9s_bet = resolve_payout(
+                        conn, rk, "9S", hit=rank_9s_hit, winning_key=rank_9s_top3,
+                        odds_payout=rank_9s_trio_pay, fallback_stake=rank_9s_stake, n_combos=len(rank_9s_combos))
                     rank_9s_n_combos = len(rank_9s_combos)
                     rank_9s_thirds = sorted(
                         next(iter(cs - {rank_9s_axis1, rank_9s_axis2}))
@@ -976,8 +1003,9 @@ def _main_inner(date):
                     except (TypeError, ValueError):
                         continue
                     a7_hit = any(cs == a7_top3 for cs in a7_combos)
-                    a7_pay = a7_trio_pay * a7_stake // 100 if a7_hit else 0
-                    a7_bet = len(a7_combos) * a7_stake
+                    a7_pay, a7_bet = resolve_payout(
+                        conn, rk, "7A", hit=a7_hit, winning_key=a7_top3,
+                        odds_payout=a7_trio_pay, fallback_stake=a7_stake, n_combos=len(a7_combos))
                     a7_n_combos = len(a7_combos)
                     a7_thirds = sorted(
                         next(iter(cs - {a7_axis1, a7_axis2}))
@@ -1046,8 +1074,9 @@ def _main_inner(date):
                     except (TypeError, ValueError):
                         continue
                     b7_hit = any(cs == b7_top3 for cs in b7_combos)
-                    b7_pay = b7_trio_pay * b7_stake // 100 if b7_hit else 0
-                    b7_bet = len(b7_combos) * b7_stake
+                    b7_pay, b7_bet = resolve_payout(
+                        conn, rk, "7B", hit=b7_hit, winning_key=b7_top3,
+                        odds_payout=b7_trio_pay, fallback_stake=b7_stake, n_combos=len(b7_combos))
                     b7_n_combos = len(b7_combos)
                     b7_thirds = sorted(
                         next(iter(cs - {b7_axis1, b7_axis2}))
@@ -1122,8 +1151,9 @@ def _main_inner(date):
                     c7_stake = int(dec_7c.get("stake")
                                    or rank_7c_unit_stake(c7_n_combos))
                     c7_hit = any(cs == c7_top3 for cs in c7_combos)
-                    c7_pay = c7_trio_pay * c7_stake // 100 if c7_hit else 0
-                    c7_bet = c7_n_combos * c7_stake
+                    c7_pay, c7_bet = resolve_payout(
+                        conn, rk, "7C", hit=c7_hit, winning_key=c7_top3,
+                        odds_payout=c7_trio_pay, fallback_stake=c7_stake, n_combos=c7_n_combos)
                     c7_thirds = sorted(
                         next(iter(cs - {c7_axis1, c7_axis2}))
                         for cs in c7_combos if len(cs - {c7_axis1, c7_axis2}) == 1)
@@ -1238,6 +1268,70 @@ def _main_inner(date):
                                 *gap_map.get(rk, (None, None, None)), None))
                 continue
 
+            if _slot == "nine_9h1":
+                # ── 9H1（穴推奨・9車の高配当狙い・2026-08-08導入）採点 ──
+                # judge_rank_9h1/_process_rank_9h1_candidates と対。正本は
+                # decisions の {rk}#9H1。返還処理なし。
+                #
+                # ⚠️ **三連単フォーメーションの単一券種**（6点）。7H1 と違い
+                #    券種は1つなので払戻は trifecta_payout だけに入り、
+                #    trio_payout は常に0（kiseki 側 Web もそれを前提にしている）。
+                dec_h9 = decisions.get(rk + "#9H1")
+                if not dec_h9 or dec_h9.get("decision") not in ("buy", "skip"):
+                    print(f"[notify_results_wt] 9H1判定記録なし {rk}: 不計上", flush=True)
+                    continue
+                is_buy = dec_h9.get("decision") == "buy" and bool(dec_h9.get("legs"))
+                h9_rows = conn.execute(
+                    "SELECT frame_no FROM wt_entries WHERE race_key=? "
+                    "AND finish_order BETWEEN 1 AND 3 ORDER BY finish_order", (rk,)
+                ).fetchall()
+                h9_order = [int(r[0]) for r in h9_rows]
+                if len(h9_order) < 3:
+                    continue
+                h9_key = tuple(h9_order[:3])
+                h9_tf_odds = pm.get(rk, {}).get(("trifecta", h9_key), 0)
+
+                if is_buy:
+                    h9_legs = [str(t) for t in dec_h9.get("legs") or []]
+                    h9_n = len(h9_legs)
+                    h9_unit = int(dec_h9.get("stake") or 0)
+                    h9_hit = "-".join(map(str, h9_key)) in h9_legs
+                    h9_pay, h9_bet = resolve_payout(
+                        conn, rk, "9H1", hit=h9_hit, winning_key=h9_key,
+                        odds_payout=h9_tf_odds, fallback_stake=h9_unit, n_combos=h9_n)
+                    if not h9_bet:
+                        h9_bet = int(dec_h9.get("bet_amount") or 0)
+                    h9_pred = "三単:" + ",".join(h9_legs)
+                else:
+                    h9_hit = False
+                    h9_pay = 0
+                    h9_bet = 0
+                    h9_n = 0
+                    h9_pred = "見送り"
+                h9_tstr = ptime
+                _h9_stt = start_map.get(rk)
+                if _h9_stt:
+                    try:
+                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                        h9_tstr = _dt.fromtimestamp(
+                            int(_h9_stt), tz=_tz(_td(hours=9))).strftime("%H:%M")
+                    except (ValueError, TypeError):
+                        pass
+                if is_buy:
+                    h9_mark = f"◎ 三単 ¥{h9_pay:,}" if h9_hit else "×"
+                    results_9h1.append(
+                        f"[9H1] {venue} {race_no}R {h9_tstr}"
+                        f"  実:{'-'.join(map(str, h9_order[:3]))}  {h9_mark}")
+                    p9h1b += h9_bet
+                    if h9_hit:
+                        p9h1r += h9_pay
+                        p9h1h += 1
+                history.append((target_date, f"{rk}#9H1", "RANK_9H1", h9_pred, h9_n,
+                                int(h9_hit), h9_pay, 0, h9_pay, h9_bet,
+                                not is_buy, None,
+                                *gap_map.get(rk, (None, None, None)), None))
+                continue
+
             if _slot == "nine_9a":
                 # ── 9A（S9の境界ランク・ペーパートレード検証・2026-07-27導入）採点 ──
                 # judge_rank_9s/_process_rank_9s_candidates と同一ロジック（_process_rank_9a_candidates）。
@@ -1270,8 +1364,9 @@ def _main_inner(date):
                     except (TypeError, ValueError):
                         continue
                     a9_hit = any(cs == a9_top3 for cs in a9_combos)
-                    a9_pay = a9_trio_pay * a9_stake // 100 if a9_hit else 0
-                    a9_bet = len(a9_combos) * a9_stake
+                    a9_pay, a9_bet = resolve_payout(
+                        conn, rk, "9A", hit=a9_hit, winning_key=a9_top3,
+                        odds_payout=a9_trio_pay, fallback_stake=a9_stake, n_combos=len(a9_combos))
                     a9_n_combos = len(a9_combos)
                     a9_thirds = sorted(
                         next(iter(cs - {a9_axis1, a9_axis2}))
@@ -1550,11 +1645,12 @@ def _main_inner(date):
     # 7H1（穴推奨・本命バスト型・2026-08-06導入）。三連単+三連複の2券種を合算した行。
     # 既存6ランク（予想ベース）とは目的が違うのでヘッダー合計には含めない。
     h1_line = _rank_line("7H1(穴推奨/2券種)", len(results_7h1), p7h1b, p7h1r, p7h1h)
+    h9_line = _rank_line("9H1(穴推奨/9車)", len(results_9h1), p9h1b, p9h1r, p9h1h)
     # 7C（ベースモデル・終日の二軸・2026-08-07導入）。件数が最多になるランク。
     c7_line = _rank_line("7C(ベース/相手可変)", len(results_7c), p7cb, p7cr, p7ch)
     # 7SS（波乱軸選出・RANK_7SS）は 2026-08-02 に全廃したため Discord 行も削除した。
     for _l in (s1_line, old7ssp_line, old7ss_line, s7s_line, a7_line, b7_line,
-               c7_line, h1_line, r_line, ss_line, s_line):
+               c7_line, h1_line, h9_line, r_line, ss_line, s_line):
         if _l:
             rank_lines.append(_l)
 
@@ -1563,7 +1659,7 @@ def _main_inner(date):
         msg += "\n" + "\n".join(rank_lines)
     msg += "\n```\n" + "\n".join(
         total_7plus + results_7plus_s1 + results_7plus_s7 + results_7a + results_7b
-        + results_7c + results_7h1) + "\n```"
+        + results_7c + results_7h1 + results_9h1) + "\n```"
 
     if skipped_dns:
         msg += f"\n※欠車返還によりレース無効: {skipped_dns}件（軸欠車/全相手欠車・損益不計上）"
@@ -1611,6 +1707,7 @@ def _main_inner(date):
           f"7A(ペーパー) {len(results_7a)}R 的中{p7ah} / "
           f"7B(ペーパー) {len(results_7b)}R 的中{p7bh} / "
           f"7H1(穴推奨) {len(results_7h1)}R 的中{p7h1h} / "
+          f"9H1(穴推奨/9車) {len(results_9h1)}R 的中{p9h1h} / "
           f"S9(ペーパー) {len(results_s9)}R / "
           f"9A(ペーパー) {len(results_9a)}R 的中{p9ah} / "
           f"旧SS {len(results_7plus_ss)}R / 旧S {len(results_7plus_s)}R / 欠車無効{skipped_dns}件")
