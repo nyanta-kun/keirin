@@ -66,9 +66,10 @@ def test_marquee_comment_has_no_self_promotion_block() -> None:
     ランク別テンプレート（`update_netkeirin_templates.COMMENT_TEMPLATES`）とは
     **別に定義されている**ので、片方だけ消すと看板レースにだけ宣伝が残る。
     """
-    for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績"):
+    for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績",
+                   "【この買い目について】", "{stake_note}", "【このレースについて】"):
         assert banned not in _MARQUEE_COMMENT_TEMPLATE, (
-            f"看板レース用の文面に削除済みの宣伝文（{banned}）が復活している"
+            f"看板レース用の文面に削除済みの記載（{banned}）が復活している"
         )
 
 
