@@ -1,5 +1,11 @@
 """netkeirin の商品文面を傾斜配分の説明へ差し替える（2026-08-07）。
 
+⚠️ **2026-08-09 に `scripts/update_netkeirin_templates.py` へ置き換わった。実行不要。**
+   現行の文面は配分の説明を `{stake_note}` で持つため、本スクリプトが探す
+   `NEW_SENTENCE` 等の固定文はもう存在しない（`_normalize` が None を返して
+   何も触らない＝安全な no-op）。履歴として残してあるだけ。
+
+
 ## なぜスクリプトが要るのか
 
 文面は `keirin.netkeirin_settings.comment_template`（DB）が正で、**行があれば
