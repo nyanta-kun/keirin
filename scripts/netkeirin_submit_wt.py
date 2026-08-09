@@ -261,7 +261,10 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
     #    stake_per_line ではなく stake_budget を持つ。
     "7C":  {"file_key": "s7c", "n_cars": 7, "bet_kind": BET_KIND_TRIO_AXIS2,     "stake_budget": RACE_BUDGET, "gate_filter": None,
             "axis_keys": ("axis1_7c", "axis2_7c"),
-            "partners_key": "legs_7c",
+            # 🔴 **買う相手**は `legs_7c_buy`（三連単=相手全部 / 三連複=上位2点）。
+            #    `legs_7c` は選別用の全リスト（4〜5点）で、そのまま買うと
+            #    2026-08-09 の絞り込みが効かない。取り違えると別の買い目になる。
+            "partners_key": "legs_7c_buy",
             "overlap_expected": True,
             "tilt_stakes": True,
             # 単勝率で三連単へ切り替える（2026-08-09・`RANK_7C_TRIFECTA_PW_MIN`）。

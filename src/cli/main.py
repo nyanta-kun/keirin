@@ -1279,7 +1279,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         rank_7a_top2_threshold, rank_7a_top2_gate, load_7a_pool_axis_sums,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
-        rank_7c_is_lowpay_pattern, rank_7c_use_trifecta,
+        rank_7c_is_lowpay_pattern, rank_7c_use_trifecta, rank_7c_buy_plan,
         RANK_7C_P3_SUM_MIN, RANK_7C_LEGS_MIN,
         rank_7ss_daily_select, rank_7ss_same_line,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
@@ -1905,6 +1905,11 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     legs_7c = []
                 # 低配当パターン（上位3車が抜けている ∧ その3車が同一ライン）は見送る。
                 lowpay_7c = rank_7c_is_lowpay_pattern(top3_probs, _lg)
+                # 買い方（券種と買う相手）を決める。**単一正本は rank_7c_buy_plan**。
+                # 三連複側だけ p3_sum ゲートが掛かるので、ここで None になる
+                # ＝そのレースは 7C として買わない（`rank_7c_daily_select` が落とす）。
+                _plan_7c = (rank_7c_buy_plan(top3_probs, win_probs, sel_7c[0], legs_7c)
+                            if sel_7c else None)
 
                 # 7SS（2026-08-05新設）判定用。軸2車が同一ラインか。
                 same_line = rank_7ss_same_line(axis1, axis2, _lg)
@@ -1948,6 +1953,11 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                                if sel_7c else None),
                     "trifecta_7c": bool(
                         sel_7c and rank_7c_use_trifecta(win_probs, sel_7c[0])),
+                    # 実際に買う相手（2026-08-09）。三連単は相手全部、三連複は
+                    # 上位2点。**選別に使う `legs_7c`（4点未満は見送り）とは別物**
+                    # なので混同しないこと。買わないレースは None。
+                    "legs_7c_buy": (_plan_7c[1] if _plan_7c else None),
+                    "bet_kind_7c": (_plan_7c[0] if _plan_7c else None),
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)

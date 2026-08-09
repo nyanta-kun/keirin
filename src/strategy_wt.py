@@ -385,6 +385,35 @@ RANK_7C_LEGS_MIN = 4
 #      （RANK_7C_P3_SUM_MIN と同じ理由）。
 RANK_7C_TRIFECTA_PW_MIN = 0.70
 
+# 🔴 三連複側だけに掛ける追加ゲートと相手点数（2026-08-09 検証・ユーザー要望
+#    「対象を半分程度に当てやすいレースへ厳選し、その上で ROI を確保する買い目」）。
+#
+#   三連単へ切り替えるレース（`RANK_7C_TRIFECTA_PW_MIN` 以上）には**掛けない**。
+#   そちらは単独で ROI 82.9/86.2%（掃引/確認）と最良で、絞る理由が無い。
+#
+#   構成: pw1>=0.70 → 三連単 順序固定（相手全部）
+#         それ以外  → p3_sum_top2 >= 1.55 のみ買い、**相手は上位2点**
+#         どちらでもない → 見送り
+#
+#   13,960R での実測（掃引 / 確認）:
+#     網羅       100%      → 53.3%
+#     実質的中   31.66/31.98 → 33.63/33.00   (+1.69pt [+0.54, +2.80]・有意)
+#     ROI        75.79/76.77 → 78.48/79.65   (+2.77pt [−0.06, +5.59])
+#     ガミ率     45.3/45.8   → 約18%
+#
+#   ⚠️ **相手2点は「絞る」とセットでしか効かない。** 相手2点だけだと
+#      実質的中 +2.74pt / ROI −1.35pt。p3_sum ゲートと組んで初めて ROI も正になる。
+#   ⚠️ ROI 差は 95%CI の下限が −0.06 で**有意ではない**。採用根拠は
+#      「実質的中が有意に上がり、ROI が悪化しないこと」であって ROI 改善ではない。
+#   ⚠️ 閾値 1.50/1.55/1.60 のいずれでも両窓で正（ナイフエッジではない）が、
+#      1.60 では確認窓の実質的中が落ちる（31.58%）ので 1.55 を採る。
+RANK_7C_TRIO_P3_SUM_MIN = 1.55
+
+# 三連複で買う相手の点数（3着内率の降順に上位から）。
+# ⚠️ `RANK_7C_LEGS_MIN`（4点未満は見送り）とは別物。あちらは
+#    「相手が絞れる＝配当が付かない」を弾く**選別**で、こちらは**買う点数**。
+RANK_7C_TRIO_LEGS = 2
+
 # 🔴 低配当パターンの除外（2026-08-07 追加・ユーザー発見）。
 #   **「複勝率の3位と4位が大きく離れている（＝上位3車が抜けている）」かつ
 #     「その上位3車が同一ライン」**のレースは見送る。
@@ -1858,6 +1887,34 @@ def rank_7c_use_trifecta(
     return float(win_probs.get(axis1, 0.0)) >= pw_min
 
 
+def rank_7c_buy_plan(
+    top3_probs: dict[int, float], win_probs: dict[int, float] | None,
+    axis1: int, legs: list[int],
+) -> tuple[str, list[int]] | None:
+    """7Cの買い方を決める。`(bet_kind, 買う相手)` か、買わないなら None。
+
+    top3_probs / win_probs: {frame_no: 確率}（0-1 スケール）
+    axis1: `rank_7c_select_axis` の第1要素
+    legs:  `rank_7c_select_legs` の結果（3着内率の降順・4〜5点）
+
+    🔴 **ここが 7C の買い方の単一正本**。候補生成・発走前判定・入稿・Web が
+       同じ関数を通すこと。片方だけ直すと「表示と入稿の食い違い」になる
+       （このリポジトリが繰り返し踏んでいる事故）。
+
+    根拠と実測値は `RANK_7C_TRIFECTA_PW_MIN` / `RANK_7C_TRIO_P3_SUM_MIN` の
+    定義部を参照。
+    """
+    if not legs:
+        return None
+    if rank_7c_use_trifecta(win_probs, axis1):
+        # 三連単は絞らない（相手全部・順序固定）。点数を変えると効果が消える。
+        return "trifecta", list(legs)
+    p3_sum = sum(sorted(top3_probs.values(), reverse=True)[:2])
+    if p3_sum < RANK_7C_TRIO_P3_SUM_MIN:
+        return None
+    return "trio", list(legs[:RANK_7C_TRIO_LEGS])
+
+
 def rank_7c_is_lowpay_pattern(
     top3_probs: dict[int, float], line_groups: dict[int, object] | None,
     gap34_min: float = RANK_7C_LOWPAY_GAP34_MIN,
@@ -1903,6 +1960,12 @@ def rank_7c_daily_select(candidates: list[dict]) -> list[dict]:
          if c.get("p3_sum_top2") is not None
          and float(c["p3_sum_top2"]) >= RANK_7C_P3_SUM_MIN
          and len(c.get("legs_7c") or []) >= RANK_7C_LEGS_MIN
+         # 🔴 買い方が決まらないレースは買わない（2026-08-09）。三連複側の
+         #    追加ゲート `RANK_7C_TRIO_P3_SUM_MIN` はここで効く。
+         #    ⚠️ 旧形式の候補JSON（`legs_7c_buy` を持たない）は落とさない。
+         #      キーが無い＝判定不能であって「買わない」ではないため、
+         #      当日リカバリで旧JSONを読んだときに商品が全滅するのを防ぐ。
+         and ("legs_7c_buy" not in c or c.get("legs_7c_buy"))
          and not c.get("lowpay_pattern")),
         key=lambda c: -float(c["p3_sum_top2"]),
     )

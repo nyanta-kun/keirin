@@ -45,6 +45,7 @@ from src.strategy_wt import (
     RANK_9H1_SCORE_MIN,
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
     RANK_7C_NE, RANK_7C_LEGS_MIN, rank_7c_select_legs, rank_7c_unit_stake,
+    RANK_7C_TRIO_P3_SUM_MIN, RANK_7C_TRIO_LEGS,
     unit_stake,
     rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_STAKE,
@@ -1522,7 +1523,21 @@ def judge_rank_7c(cand: dict, trio_lookup: dict,
     #    「オッズ取得できた目が N点」で黙って見送りになる。買い方が変わっただけで
     #    母集団まで変わってはいけない（点数・賭け金も三連複と同一が採用根拠）。
     #    三連単オッズは**表示のためだけ**に引き、取れなくても見送らない。
+    # 🔴 券種は**朝の生予測で確定した真偽値**を読む（段階1の設計）。ここで
+    #    win_probs から再判定してはいけない（候補JSONは win_probs を持たない
+    #    ので静かに全件 False になる／根拠の二重管理にもなる）。
     use_trifecta = bool(cand.get("trifecta_7c"))
+    if not use_trifecta:
+        # 三連複側だけの追加ゲート（2026-08-09）。三連単は絞らない。
+        _p3sum = cand.get("p3_sum_top2")
+        if _p3sum is None or float(_p3sum) < RANK_7C_TRIO_P3_SUM_MIN:
+            detail["skip_reason"] = (
+                f"二軸の3着内率合計が{RANK_7C_TRIO_P3_SUM_MIN}未満（三連複側のゲート）")
+            return "skip", detail
+        # 買うのは上位2点だけ。盤面から再計算した legs に対して掛ける
+        # （欠車で相手が変われば買う2点も変わるべきなので、朝の
+        #  `legs_7c_buy` は使わない）。
+        legs = legs[:RANK_7C_TRIO_LEGS]
     combos, leg_odds = [], {}
     for t in legs:
         key = frozenset({axis1, axis2, t})
@@ -1543,7 +1558,12 @@ def judge_rank_7c(cand: dict, trio_lookup: dict,
             label = "-".join(map(str, sorted(key)))
             leg_odds[label] = ov
         combos.append(label)
-    if len(combos) < RANK_7C_LEGS_MIN:
+    # 🔴 必要点数は**買う点数**で判定する。`RANK_7C_LEGS_MIN`(=4) は
+    #    「相手が4点未満なら配当が付かないので見送る」という**選別**の閾値で、
+    #    三連複側を上位2点に絞った後（2026-08-09）にここへ流用すると
+    #    **常に見送りになる**。実際にそれで全件 skip になった。
+    min_pts = RANK_7C_LEGS_MIN if use_trifecta else RANK_7C_TRIO_LEGS
+    if len(combos) < min_pts:
         detail["skip_reason"] = f"オッズ取得できた目が{len(combos)}点"
         return "skip", detail
 

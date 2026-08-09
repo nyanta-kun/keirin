@@ -205,7 +205,9 @@ def test_netkeirin_7c_uses_budget_and_own_axis_keys():
     from scripts import netkeirin_submit_wt as ns
     cfg = ns.RANK_CONFIGS["7C"]
     assert cfg["axis_keys"] == ("axis1_7c", "axis2_7c")
-    assert cfg["partners_key"] == "legs_7c"
+    # 🔴 買う相手は `legs_7c_buy`（三連単=全部 / 三連複=上位2点・2026-08-09）。
+    #    選別用の `legs_7c`（4〜5点）を読むと絞り込みが効かない。
+    assert cfg["partners_key"] == "legs_7c_buy"
     assert cfg["stake_budget"] == sw.RACE_BUDGET
     assert "stake_per_line" not in cfg      # 固定額と併記すると取り違える
     assert cfg["overlap_expected"] is True  # 衝突は想定内＝失敗集計に混ぜない
@@ -245,10 +247,11 @@ def test_netkeirin_7c_normalizes_with_its_own_axes():
     """`axis1`（3ヘッド軸）が併存していても 7C は自分の軸を使うこと。"""
     from scripts import netkeirin_submit_wt as ns
     cand = {"axis1": 1, "axis2": 2, "axis1_7c": 5, "axis2_7c": 6,
-            "legs_7c": [3, 4, 7, 1]}
+            "legs_7c": [3, 4, 7, 1], "legs_7c_buy": [3, 4]}
     a1, a2, partners, marks = ns._normalize_candidate(cand, ns.RANK_CONFIGS["7C"])
     assert (a1, a2) == (5, 6)
-    assert partners == [3, 4, 7, 1]
+    # 買うのは `legs_7c_buy`。選別用の `legs_7c` を読んではいけない。
+    assert partners == [3, 4]
     assert marks == {5: "◎", 6: "○"}
 
 
@@ -285,9 +288,10 @@ def test_judge_buys_and_sets_variable_stake(cand_7c):
     from scripts.notify_prerace_wt import judge_rank_7c
     decision, detail = judge_rank_7c(cand_7c, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
     assert decision == "buy"
-    assert detail["thirds"] == [1, 3, 4, 6]        # 7番(0.05)は足切り
-    assert len(detail["combos"]) == 4
-    assert detail["stake"] == sw.rank_7c_unit_stake(4) == 2500
+    # 2026-08-09: 三連複側は**上位2点だけ**買う（足切り後の [1,3,4,6] の先頭2つ）。
+    assert detail["thirds"] == [1, 3]
+    assert len(detail["combos"]) == 2
+    assert detail["stake"] == sw.rank_7c_unit_stake(2) == 5000
 
 
 def test_judge_keys_leg_odds_by_combo_label():
@@ -336,9 +340,11 @@ def test_judge_returns_unknown_without_board(cand_7c):
 def test_judge_recomputes_legs_from_board_not_morning_json(cand_7c):
     """朝の legs_7c を鵜呑みにせず盤面と確率から引き直すこと。"""
     from scripts.notify_prerace_wt import judge_rank_7c
-    cand_7c["legs_7c"] = [1, 3]                   # 朝の値が壊れていても
+    cand_7c["legs_7c"] = [6, 4]                   # 朝の値が壊れていても
     decision, detail = judge_rank_7c(cand_7c, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
-    assert decision == "buy" and detail["thirds"] == [1, 3, 4, 6]
+    # 盤面と確率から引き直した順（1,3,4,6）の上位2点になること。
+    # 朝の値をそのまま使っていれば [6, 4] になるので取り違えを検出できる。
+    assert decision == "buy" and detail["thirds"] == [1, 3]
 
 
 # ── walk-forward 再構築の登録漏れ防止 ───────────────────────────────
