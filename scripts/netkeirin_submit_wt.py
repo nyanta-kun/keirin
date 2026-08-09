@@ -268,26 +268,15 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             # 候補JSONの真偽値だけを読む。**点数は三連複と同じ**（1着=軸1 /
             # 2着=軸2 / 3着=相手流し）で、増やすと効果が消える。
             "trifecta_switch_key": "trifecta_7c",
-            # 🔴 切替時は文面も差し替える。既定文（7Aと共有）は
-            #    「買い目は三連複・軸2車流しです」と書いてあり、該当レース
-            #    （実測 16.9%）で**買っていない券種を説明する**ことになる。
-            #    7B で旧文面が現行条件と正反対だった事故と同型。
-            "trifecta_comment": (
-                "{shape_note}\n\n"
-                "【二軸】\n"
-                "本レースで照らし出した二軸は、◎{axis1}番・○{axis2}番です。\n\n"
-                "【この買い目について】\n"
-                "当方の指数で◎{axis1}番の1着率が特に高く出たレースです。"
-                "そこで通常の三連複ではなく、**三連単で1着を◎{axis1}番、"
-                "2着を○{axis2}番に指定**し、3着だけを相手に流しました。\n"
-                "点数は三連複のときと同じです。着順を指定するぶん外れやすくなりますが、"
-                "当たったときに投資を下回る（いわゆるガミ）ことが大きく減ります。\n"
-                "{stake_note}\n\n"
-                "【ご購入にあたって】\n"
-                "レース直前の実際のオッズをご自身でご確認のうえ、ご活用ください。\n\n"
-                "【参考データ】\n"
-                "出走選手全員の1着率・3着内率です。買い目の参考にご活用ください。"
-            ),
+            # 🔴 **専用文面は持たない。** 当初は「既定文が『買い目は三連複・軸2車
+            #    流しです』と書いてあり、切替レース（実測 16.9%）で買っていない
+            #    券種を説明することになる」ため専用文面を用意していたが、
+            #    2026-08-09 に【この買い目について】を全ランクから削除した結果、
+            #    既定文は**券種に一切言及しなくなった**ので不要になった。
+            #    ⚠️ したがって本ランクは **DBテンプレートが更新済みであることが前提**。
+            #       `scripts/update_netkeirin_templates.py --apply` を流す前に
+            #       切替を有効化すると、三連単なのに「三連複・軸2車流し」と
+            #       説明する商品が出る。
             # タイトル・文面は **7A と同じ既定テンプレート**を使う（ユーザー指示
             # 2026-08-07）。したがって default_comment は持たない。
             },
@@ -1224,10 +1213,8 @@ def _process_rank(
             target_date=target_date, axis1=axis1, axis2=axis2_or_p1, shape=shape,
             shape_note=shape_note, stake_note=stake_note,
         )
-        # 三連単へ切り替えたレースだけ文面を差し替える（買い目と説明を一致させる）。
         comment = _apply_template(
-            (cfg.get("trifecta_comment") if use_trifecta else None) or comment_template,
-            venue_name=venue_name, race_no=race_no, rank_key=rank_key,
+            comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
             target_date=target_date, axis1=axis1, axis2=axis2_or_p1, shape=shape,
             shape_note=shape_note, stake_note=stake_note,
         )

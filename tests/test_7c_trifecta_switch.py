@@ -87,25 +87,26 @@ def test_switch_depends_only_on_axis1_win_prob() -> None:
     assert rank_7c_use_trifecta({}, 1) is False
 
 
-def test_7c_declares_switch_key_and_trifecta_comment() -> None:
-    """切替キーを持つランクは、必ず三連単用の文面も持つ。"""
+def test_switching_ranks_have_no_bet_kind_claim_in_comment() -> None:
+    """切替キーを持つランクの文面が、券種を断定していないこと。
+
+    同じランクが三連複と三連単を出し分けるので、**どちらかを名指しした瞬間に
+    片方で嘘になる**。2026-08-09 に【この買い目について】を全ランクから削除した
+    結果、既定文（DBテンプレート）は券種に言及しなくなり専用文面が不要になった。
+
+    ⚠️ ランク固有の `default_comment` を後から足すときはここに引っかかる。
+       券種を書きたくなったら、切替を前提に**両方成り立つ書き方**にすること。
+    """
     for rank_key, cfg in RANK_CONFIGS.items():
         if not cfg.get("trifecta_switch_key"):
             continue
-        tpl = cfg.get("trifecta_comment")
-        assert tpl, f"{rank_key}: trifecta_switch_key があるのに trifecta_comment が無い"
-        # 「三連複ではなく三連単」と対比する書き方は許す。禁じるのは
-        # **買った買い目を三連複だと説明する**言い回し。
-        for bad in ("買い目は三連複", "三連複・軸2車流し"):
+        assert "trifecta_comment" not in cfg, (
+            f"{rank_key}: 専用文面は廃止済み（既定文が券種に言及しないため不要）"
+        )
+        tpl = cfg.get("default_comment") or ""
+        for bad in ("買い目は三連複", "三連複・軸2車流し", "買い目は三連単"):
             assert bad not in tpl, (
-                f"{rank_key}: 三連単で入稿するのに文面が『{bad}』と説明している"
-            )
-        assert "三連単" in tpl
-        # 【予想者より】は 2026-08-09 にユーザー指示で全ランクから削除済み。
-        # この文面は他と別定義なので、ここにも検査を置かないと復活する。
-        for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績"):
-            assert banned not in tpl, (
-                f"{rank_key}: 削除済みの宣伝文（{banned}）が復活している"
+                f"{rank_key}: 券種を出し分けるランクの文面が『{bad}』と断定している"
             )
 
 
