@@ -121,6 +121,23 @@ def build_features_wt(df: pd.DataFrame) -> pd.DataFrame:
     # 1着モデル用ターゲット（Phase B・2026-07-19〜。win_flag=1着のみ、DNF/2着以下は0）
     df["win_flag"] = (df["finish_order"].notna()
                       & (df["finish_order"] == 1)).astype(int)
+    # 連帯モデル用ターゲット（2026-08-09 新設・ユーザー発案）。
+    # top2_flag = 2着以内。**DNF/失格(finish_order=0) は含めない**（win_flag と同じ扱い）。
+    #
+    # 🔴 これが無いと「軸2を2着に置くのか3着に置くのか」をモデルが答えられない。
+    #    3ヘッド(1着/3着内/着外)では並び順しか出せず、三連単の着順構成や
+    #    二車複・二車単（定義上「2着以内」の券種）を3着内率で代用するしかなかった。
+    #    win/top2/top3 が揃うと着順ごとの確率へ分解できる:
+    #        P(1着) = win
+    #        P(2着) = top2 − win
+    #        P(3着) = top3 − top2
+    #
+    # ⚠️ **定義をここで明示すること。** bad6_flag は本番モデルが使う定義を作る
+    #    コードがリポジトリに存在せず、2026-08-05 に実測で同定する羽目になった
+    #    （下記コメント参照）。同じ轍を踏まないよう、定義とテストを最初から置く。
+    df["top2_flag"] = (df["finish_order"].notna()
+                       & (df["finish_order"] >= 1)
+                       & (df["finish_order"] <= 2)).astype(int)
     # 大敗モデル用ターゲット（3ヘッド軸選定・2026-08-04〜／列の追加は 2026-08-05）。
     # 軸2 = argmax( z(3着内率) − 0.3×z(大敗率) ) の第2項に使う。
     #
@@ -948,6 +965,7 @@ FEATURE_COLS_WT = [
 TARGET_COL_WT = "top3_flag"
 WIN_TARGET_COL_WT = "win_flag"
 BAD_TARGET_COL_WT = "bad6_flag"
+TOP2_TARGET_COL_WT = "top2_flag"
 
 
 def prepare_X(df: pd.DataFrame) -> pd.DataFrame:
