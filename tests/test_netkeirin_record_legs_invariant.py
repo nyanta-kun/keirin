@@ -80,26 +80,37 @@ def test_9h1は組み立て済み経路であること():
     assert _is_prebuilt_legs(cfg)
 
 
-def test_guardにis_formationが含まれている():
-    """`_process_rank` の guard 式に is_formation が残っていることを確認する。
+def test_record_legsのguardがlegsの有無で判定している():
+    """`record_legs` の guard が **legs の有無**で判定していることを確認する。
 
+    2026-08-09 にフラグ列挙（`is_multi or is_formation or tilt_source`）から
+    `legs if legs else ...` へ変更した。列挙方式は「legs を組む経路」が増えるたびに
+    追記が要り、9H1 追加時に実際に漏れて本番障害になった（このファイルの由来）。
+    `legs` の有無で見れば、経路が増えても自動的に正しい側へ入る。
+
+    ⚠️ **フラグ列挙へ戻さないこと。** 戻すと同じ事故が再発する。
     ⚠️ ソースを読む検査。実際に `_process_rank` を通す統合テストは
-       NetkeirinClient の実通信を伴うため、ここでは guard 式の存在だけを固定する。
+       NetkeirinClient の実通信を伴うため、ここでは guard 式の形だけを固定する。
     """
     src = (Path(__file__).parent.parent / "scripts" / "netkeirin_submit_wt.py").read_text()
-    assert "legs if (is_multi or is_formation or tilt_source) else _legs_for_record" in src, (
-        "record_legs の guard から is_formation が消えている"
+    assert "record_legs = legs if legs else _legs_for_record" in src, (
+        "record_legs の guard が `legs if legs else ...` になっていない"
     )
 
 
-def test_dry_run側のguardにもis_formationが含まれている():
-    """preview の分岐にも is_formation が要る。
+def test_dry_run側のguardもlegsの有無で判定している():
+    """preview の分岐も本番と同じ条件で判定する。
 
-    本番経路(`record_legs`)だけ直すと **dry-run だけが落ちる**状態になり、
+    本番経路(`record_legs`)だけ直すと **dry-run だけが落ちる/食い違う**状態になり、
     「本番で何が出るか確かめる道具」が肝心のときに使えない
     （2026-08-09 に実際にこの状態になった）。
+
+    ⚠️ 条件が本番と**同じ形**であることが要点。2026-08-09 に 7C の三連単切替を
+       入れた際、preview がフラグ列挙のままだったため
+       **三連単を組んだのに三連複と同じ「賭け金=N円/点」表示**になり、
+       買い目の種類が変わったことが preview から読み取れなかった。
     """
     src = (Path(__file__).parent.parent / "scripts" / "netkeirin_submit_wt.py").read_text()
-    assert "if is_multi or is_formation:" in src, (
-        "dry-run の detail 分岐から is_formation が消えている"
+    assert "if legs and not tilt_source:" in src, (
+        "dry-run の detail 分岐が legs の有無で判定していない"
     )

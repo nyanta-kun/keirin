@@ -312,8 +312,12 @@ def test_formation_path_submits_with_longshot_flag():
     from src.netkeirin_client import ACT_TYPE_LONGSHOT
 
     src = inspect.getsource(ns)
-    assert "if is_multi or is_formation or tilt_source:" in src, \
-        "formation 経路が submit_pick_multi へ回っていない"
+    # 2026-08-09: フラグ列挙から **legs の有無** による分岐へ変更した。
+    # formation 経路は `_normalize_formation_candidate` が legs を組むので
+    # 引き続き submit_pick_multi 側へ入る。列挙方式は経路が増えるたびに
+    # 追記が要り、9H1 追加時に実際に漏れたのでここへは戻さないこと。
+    assert "if legs:" in src, \
+        "legs を組んだ経路が submit_pick_multi へ回っていない"
     # act_type は cfg 優先で解決される（9H1 は ACT_TYPE_LONGSHOT を持つ）
     assert ns.RANK_CONFIGS["9H1"]["act_type"] == ACT_TYPE_LONGSHOT
     assert ns.RANK_CONFIGS["7H1"]["act_type"] == ACT_TYPE_LONGSHOT

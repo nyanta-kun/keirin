@@ -264,6 +264,19 @@ RANK_CONFIGS: dict[str, dict[str, Any]] = {
             "partners_key": "legs_7c",
             "overlap_expected": True,
             "tilt_stakes": True,
+            # 単勝率で三連単へ切り替える（2026-08-09・`RANK_7C_TRIFECTA_PW_MIN`）。
+            # 候補JSONの真偽値だけを読む。**点数は三連複と同じ**（1着=軸1 /
+            # 2着=軸2 / 3着=相手流し）で、増やすと効果が消える。
+            "trifecta_switch_key": "trifecta_7c",
+            # 🔴 **専用文面は持たない。** 当初は「既定文が『買い目は三連複・軸2車
+            #    流しです』と書いてあり、切替レース（実測 16.9%）で買っていない
+            #    券種を説明することになる」ため専用文面を用意していたが、
+            #    2026-08-09 に【この買い目について】を全ランクから削除した結果、
+            #    既定文は**券種に一切言及しなくなった**ので不要になった。
+            #    ⚠️ したがって本ランクは **DBテンプレートが更新済みであることが前提**。
+            #       `scripts/update_netkeirin_templates.py --apply` を流す前に
+            #       切替を有効化すると、三連単なのに「三連複・軸2車流し」と
+            #       説明する商品が出る。
             # タイトル・文面は **7A と同じ既定テンプレート**を使う（ユーザー指示
             # 2026-08-07）。したがって default_comment は持たない。
             },
@@ -661,11 +674,17 @@ def _legs_for_record(cfg: dict, axis1: int, axis2_or_p1: int, partners: list[int
     return [BetLeg(cfg["bet_kind"], groups, stake)]
 
 
-def _bet_detail_odds(race_key: str, cfg: dict) -> dict:
-    """買い目に添えるオッズ。三連複はどのランクも要り、三連単は 7H1 だけ。"""
+def _bet_detail_odds(race_key: str, cfg: dict, use_trifecta: bool = False) -> dict:
+    """買い目に添えるオッズ。
+
+    ⚠️ **cfg だけで決めてはいけない。** 7C は同じ cfg のまま単勝率で三連複と
+       三連単を切り替えるため、cfg 由来の判定だと切替時に三連単オッズが欠け、
+       `bet_detail` が買った目のオッズを持たない行になる（Web が空表示になる）。
+       実際に何を買ったかを `use_trifecta` で受け取る。
+    """
     base = str(race_key).split("#")[0]
     odds: dict = dict(_load_trio_board(base))
-    if cfg.get("multi_bet"):
+    if cfg.get("multi_bet") or cfg.get("formation_bet") or use_trifecta:
         odds.update(_load_trifecta_board(base))
     return odds
 
@@ -785,6 +804,30 @@ def _build_tilted_legs(
     legs = [BetLeg(BET_KIND_TRIO_AXIS2, [[axis1], [axis2], cars], stake)
             for stake, cars in group_by_stake(stakes)]
     return legs, source, stakes
+
+
+def _build_trifecta_head_legs(
+    cfg: dict, axis1: int, axis2: int, partners: list[int],
+) -> tuple[list[BetLeg], dict[int, str]]:
+    """三連単「1着=軸1 / 2着=軸2 / 3着=相手流し」を1行のフォーメーションで組む。
+
+    `BET_KIND_TRIFECTA_FORMATION` の groups は [1着列, 2着列, 3着列] で、
+    `expand_bet` は {(a,b,c)} を返す。[[axis1],[axis2],partners] なら
+    **三連複と同じ len(partners) 点**になる（これが要点）。
+
+    🔴 **点数を増やしてはいけない。** この予算方式では「ガミ ⟺ 的中オッズ < 点数」
+       なので、点数を増やすとガミ境界も一緒に上がり、三連単化の意味が消える。
+       検証では 2k点/4k点の案がいずれも実質的中を落とした
+       （`RANK_7C_TRIFECTA_PW_MIN` の定義部を参照）。
+
+    ⚠️ **傾斜配分はしない**（均等割り）。採用根拠となった検証が均等割り前提。
+       三連単の板は三連複より薄く、朝の時点では配分の推定が当てにならない。
+    """
+    unit = _stake_per_line(cfg, len(partners))
+    legs = [BetLeg(BET_KIND_TRIFECTA_FORMATION,
+                   [[axis1], [axis2], list(partners)], unit)]
+    marks = {**{c: "△" for c in partners}, axis1: "◎", axis2: "○"}
+    return legs, marks
 
 
 def _normalize_candidate(cand: dict, cfg: dict) -> tuple[int, int, list[int], dict[int, str]]:
@@ -1128,6 +1171,7 @@ def _process_rank(
         partners: list[int] = []
         tilt_source: str | None = None
         tilt_stakes_map: dict[int, int] = {}
+        use_trifecta = False
         try:
             if is_multi:
                 legs, marks, axis1, axis2_or_p1, tilt_source = _normalize_multi_candidate(
@@ -1137,7 +1181,15 @@ def _process_rank(
                     cand, cfg, race_key.split("#")[0])
             else:
                 axis1, axis2_or_p1, partners, marks = _normalize_candidate(cand, cfg)
-                if cfg.get("tilt_stakes"):
+                # 三連単への切替（`trifecta_switch_key` を持つランクのみ）。
+                # 判定済みの真偽値を候補JSONから読むだけにして、ここで
+                # win_probs から再判定しない（朝の予想と入稿の根拠がずれるため）。
+                switch_key = cfg.get("trifecta_switch_key")
+                if switch_key and cand.get(switch_key):
+                    legs, marks = _build_trifecta_head_legs(
+                        cfg, axis1, axis2_or_p1, partners)
+                    use_trifecta = True
+                elif cfg.get("tilt_stakes"):
                     legs, tilt_source, tilt_stakes_map = _build_tilted_legs(
                         race_key, cfg, axis1, axis2_or_p1, partners)
                     # 🔴 印を submit_pick が内部で作っていたものと**同じ**にする。
@@ -1174,9 +1226,10 @@ def _process_rank(
             # 🔴 `is_formation`(9H1) を落とすと **preview だけ** _stake_per_line で
             #    落ちる。本番経路は通るので気づきにくく、「本番で何が出るか確かめる
             #    道具」が肝心のときに使えない。legs を組み終えた経路は全部ここで出す。
-            if is_multi or is_formation:
+            if legs and not tilt_source:
                 detail = "\n".join(
                     f"  {leg.bet_kind}: {leg.groups} × {leg.stake_per_line:,}円/点"
+                    + f"（{len(expand_bet(leg.bet_kind, leg.groups))}点）"
                     for leg in legs)
             elif tilt_source:
                 detail = (
@@ -1207,7 +1260,12 @@ def _process_rank(
 
         try:
             assert client is not None
-            if is_multi or is_formation or tilt_source:
+            # 🔴 判定は **legs を組み終えたか** だけで行う（ランク名や個別フラグを
+            #    列挙しない）。`submit_pick` は `cfg["bet_kind"]` で券種を決めるので、
+            #    7C の三連単切替のように **cfg と実際の買い目が食い違う**ケースを
+            #    ここへ流すと、三連単を組んだのに**三連複が入稿される**。
+            #    フラグ列挙は 9H1 で実際に事故（2026-08-09 朝）を起こした型。
+            if legs:
                 # 傾斜配分は点ごとに bet_money が違うので、同額どうしをまとめた
                 # 複数行として送る（`kaime` は配列なので submit は1回のまま）。
                 # 🔴 `is_formation`(9H1) もここを通す。単一券種だが軸+相手では
@@ -1250,12 +1308,14 @@ def _process_rank(
             #    9H1 導入(2026-08-08)から 2026-08-09 朝まで実際に発生した。
             #    formation/multi は候補正規化側で legs を組み終えているので
             #    _legs_for_record（軸+相手の均等割り前提）に渡してはいけない。
-            record_legs = legs if (is_multi or is_formation or tilt_source) else _legs_for_record(
+            #    ここも上の送信分岐と同じく **legs の有無**だけで判定する。
+            record_legs = legs if legs else _legs_for_record(
                 cfg, axis1, axis2_or_p1, partners, _stake_per_line(cfg, len(partners)))
             _record_submission(
                 race_key, rank_key, session, venue_name, race_no, gate_label, axis1, axis2_or_p1, msg,
                 bet_detail=build_bet_detail(
-                    record_legs, tilt_source, _bet_detail_odds(race_key, cfg)),
+                    record_legs, tilt_source,
+                    _bet_detail_odds(race_key, cfg, use_trifecta)),
             )
             if claimed_races is not None:
                 claimed_races.add(race_key)
