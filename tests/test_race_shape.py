@@ -223,13 +223,21 @@ def test_comment_body_starts_with_the_race_note_not_the_axes():
             assert banned not in head, f"{rank}: プレビュー部分に {banned} がある"
 
 
-def test_comment_body_keeps_the_cta_above_the_auto_appended_table():
-    """出走表は本文末尾へ自動追記されるので、集客導線は【参考データ】より前に置く。"""
+def test_comment_body_has_no_self_promotion_block():
+    """【予想者より】（実績の宣伝・お気に入り登録の依頼）を含まない。
+
+    2026-08-09 にユーザー指示で全ランクから削除した。**復活させないこと。**
+    以前は「集客導線は【参考データ】より前に置く」として本文へ挟んでいたので、
+    テンプレートを触るときに戻してしまいやすい。
+    """
     from scripts.update_netkeirin_templates import COMMENT_TEMPLATES
     for rank, tpl in COMMENT_TEMPLATES.items():
-        assert tpl.index("【予想者より】") < tpl.index("【参考データ】"), rank
-        assert "ウマい！" in tpl, f"{rank}: お気に入り登録の導線が無い"
+        for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績"):
+            assert banned not in tpl, f"{rank}: 削除済みの宣伝文（{banned}）が復活している"
         assert "オッズ" in tpl, f"{rank}: 最終オッズ確認の一文が無い"
+        assert tpl.rstrip().endswith("参考にご活用ください。"), (
+            f"{rank}: 出走表は本文末尾へ自動追記されるので【参考データ】が最後であること"
+        )
 
 
 def test_comment_body_does_not_mention_semifinals_for_7b():
