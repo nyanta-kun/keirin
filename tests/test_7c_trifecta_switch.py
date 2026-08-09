@@ -101,6 +101,12 @@ def test_7c_declares_switch_key_and_trifecta_comment() -> None:
                 f"{rank_key}: 三連単で入稿するのに文面が『{bad}』と説明している"
             )
         assert "三連単" in tpl
+        # 【予想者より】は 2026-08-09 にユーザー指示で全ランクから削除済み。
+        # この文面は他と別定義なので、ここにも検査を置かないと復活する。
+        for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績"):
+            assert banned not in tpl, (
+                f"{rank_key}: 削除済みの宣伝文（{banned}）が復活している"
+            )
 
 
 def _process_rank_source() -> ast.FunctionDef:
