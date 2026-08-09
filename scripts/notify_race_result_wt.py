@@ -163,6 +163,7 @@ def _build_message(t: dict, base: str) -> str:
     top3 = [(int(_g(e, "frame_no")), _g(e, "name"), _g(e, "prediction_mark"))
             for e in ents
             if _g(e, "finish_order") and 1 <= int(_g(e, "finish_order")) <= 3]
+    order3 = tuple(f for f, _, _ in top3)   # 着順（1着,2着,3着）。三連単の判定に要る
     order = " − ".join(
         f"**{f}** {n}{MARK.get(m, '')}" for f, n, m in top3)
     top3_set = {f for f, _, _ in top3}
@@ -172,16 +173,33 @@ def _build_message(t: dict, base: str) -> str:
     for p in picks:
         rank = _g(p, "rank").replace("RANK_", "")
         combo = _g(p, "pred_combo") or ""
-        axis_part = combo.split("-")[0] if "-" in combo else ""
-        axes = [int(x) for x in axis_part.replace("=", ",").split(",")
-                if x.strip().isdigit()]
-        legs = ([int(x) for x in combo.split("-", 1)[1].split(",")
-                 if x.strip().isdigit()] if "-" in combo else [])
-        n_in = len(set(axes) & top3_set)
-        third = list(top3_set - set(axes))
-        hit = n_in == 2 and len(third) == 1 and third[0] in legs
+        # 🔴 `三単:` 付きは**着順まで当てて初めて的中**（7C の三連単切替・2026-08-09）。
+        #    順不同で判定すると着順違いを的中として通知してしまう。
+        #    表記は `三単:{1着}-{2着}-{3着候補,...}` で、軸の区切りが `=` ではなく `-`。
+        is_tf = combo.startswith("三単:")
+        body = combo.split(":", 1)[1] if ":" in combo else combo
+        axis_part = body.split("-")[0] if "-" in body else ""
+        legs = ([int(x) for x in body.split("-", 1)[1].split(",")
+                 if x.strip().isdigit()] if "-" in body else [])
+        if is_tf:
+            head = [int(x) for x in body.split("-")[:2] if x.strip().isdigit()]
+            legs = ([int(x) for x in body.split("-")[2].split(",")
+                     if x.strip().isdigit()] if len(body.split("-")) >= 3 else [])
+            axes = head
+            hit = (len(order3) == 3 and len(head) == 2
+                   and order3[0] == head[0] and order3[1] == head[1]
+                   and order3[2] in legs)
+            n_in = len(set(axes) & top3_set)
+        else:
+            axes = [int(x) for x in axis_part.replace("=", ",").split(",")
+                    if x.strip().isdigit()]
+            n_in = len(set(axes) & top3_set)
+            third = list(top3_set - set(axes))
+            hit = n_in == 2 and len(third) == 1 and third[0] in legs
         if hit:
             mark = "🎯 **的中**"
+        elif is_tf and n_in == 2:
+            mark = "😖 軸2車は3着内・着順/相手外し"
         elif n_in == 2:
             mark = "😖 軸的中・相手外し"
         else:

@@ -398,8 +398,15 @@ def _write_paper_candidates(target_date: str) -> None:
         legs = c.get("legs_7c") or []
         if not rk or axis1 is None or axis2 is None or not legs:
             continue
-        rows.append((f"{rk}#7C", "RANK_7C",
-                     f"{axis1}={axis2}-" + ",".join(str(x) for x in legs), None, 0))
+        # 🔴 単勝率で三連単へ切り替えるレース（`trifecta_7c`・2026-08-09）は
+        #    **表記も変える**。順不同の `軸1=軸2-相手` のままだと、実際には
+        #    着順指定で買っている商品を順不同と偽ることになる。
+        #    表記は発走前判定（notify_prerace_wt）が作る pred_combo と同一規約。
+        if c.get("trifecta_7c"):
+            pred = "三単:" + f"{axis1}-{axis2}-" + ",".join(str(x) for x in legs)
+        else:
+            pred = f"{axis1}={axis2}-" + ",".join(str(x) for x in legs)
+        rows.append((f"{rk}#7C", "RANK_7C", pred, None, 0))
 
     # 7H1（穴推奨・本命バスト型／唯一の2券種ランク・2026-08-07 追加）。
     #
