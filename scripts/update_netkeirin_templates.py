@@ -205,12 +205,18 @@ def main() -> int:
             if not args.apply:
                 continue
             if cur is None:
-                # 行が無いランクは fail-open で入稿対象なので enabled=1 で作る
+                # 行が無いランクは fail-open で入稿対象なので enabled を真で作る
                 # （既存の挙動を変えない）。
+                # 🔴 **bool を渡すこと**。`src/database.py` の SQLite 用 DDL は
+                #    `enabled INTEGER` だが、本番 PostgreSQL の列は boolean で、
+                #    1 を渡すと `DatatypeMismatch: column "enabled" is of type
+                #    boolean but expression is of type integer` で落ちる
+                #    （2026-08-09 に実際に踏んだ。UPDATE は通るので、行を新規作成する
+                #    ときだけ出る＝dry-run でも気づけない）。
                 conn.execute(
                     "INSERT INTO netkeirin_settings "
                     "(rank_key, enabled, title_template, comment_template) "
-                    "VALUES (?, ?, ?, ?)", (rank, 1, new_title, new_comment))
+                    "VALUES (?, ?, ?, ?)", (rank, True, new_title, new_comment))
             else:
                 conn.execute(
                     "UPDATE netkeirin_settings SET title_template = ?, "
