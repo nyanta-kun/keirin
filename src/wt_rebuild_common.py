@@ -38,6 +38,9 @@ wipe成功後にinsertが失敗すると picks_history が空のまま残るリ�
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from src.database import get_connection
 from src.models.trainer import MODEL_DIR
 from src.notify.discord import send as _discord_send
@@ -108,6 +111,40 @@ def notify_discord_warning(content: str) -> None:
             print(f"[wt_rebuild_common] Discord通知に失敗しました。内容: {content}")
     except Exception as exc:  # noqa: BLE001 - 通知失敗はrebuild続行を妨げない
         print(f"[wt_rebuild_common] Discord通知で例外が発生しました: {exc}\n内容: {content}")
+
+
+_ZERO_ROW_STATE = Path(__file__).resolve().parent.parent / "data" / "logs" / "zero_row_notified.json"
+"""「0件で wipe を見送った」通知の既報状態。`data/logs/` は .gitignore 済み。"""
+
+
+def _zero_row_should_notify(rank_label: str, per_window_rows: list) -> bool:
+    """0件見送りを Discord へ通知すべきか。**同じランク・同じ月は1回だけ**。
+
+    🔴 ここで DB を見てはいけない。「0件のときは picks_history に一切触れない」は
+       `rebuild_pg_atomic` の明示的な安全性質で、既存行を数えるだけでも破れる
+       （test_rebuild_pg_atomic_zero_total_rows_never_touches_db）。
+
+    ⚠️ 窓の終端は毎日進む（tail は前日まで）ので、窓の**開始**を鍵にする。
+       終端まで鍵に含めると毎日「別の状況」と見なされ、抑制の意味が無くなる。
+
+    ⚠️ 状態ファイルが読めない/書けないときは **通知する側に倒す**（fail-open）。
+       黙らせる方に倒すと、本当の異常まで気づけなくなる。
+    """
+    anchor = per_window_rows[0][0] if per_window_rows else "-"
+    key = f"{rank_label}:{anchor}"
+    try:
+        state = {}
+        if _ZERO_ROW_STATE.exists():
+            state = json.loads(_ZERO_ROW_STATE.read_text(encoding="utf-8"))
+        if state.get(key):
+            return False      # 同じランク・同じ月は既報
+        state[key] = True
+        _ZERO_ROW_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _ZERO_ROW_STATE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[wt_rebuild_common] 0件通知の既報判定に失敗（通知します）: {exc}")
+        return True
 
 
 # 2026-08-06: 7H1（唯一の2券種ランク）のため trifecta_payout を追加した。
@@ -199,7 +236,12 @@ def rebuild_pg_atomic(
             f"終了します（安全側・picks_historyが空のまま残る事故を防止）。"
         )
         print(msg)
-        notify_discord_warning(f"⚠️ **{msg}**")
+        # 🔴 **挙動（wipeしない）は変えない。通知だけを絞る。**
+        #    9S のように候補がほぼ出ないランクは毎朝ここへ来るため、
+        #    毎日同じ内容を Discord へ流すと警告全体が無視されるようになる。
+        #    同じランク・同じ月は1回だけ通知する（ログには毎回残る）。
+        if _zero_row_should_notify(rank_label, per_window_rows):
+            notify_discord_warning(f"⚠️ **{msg}**")
         return
 
     if dry_run:
