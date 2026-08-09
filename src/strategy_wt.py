@@ -957,6 +957,82 @@ def rank_7a_top2_threshold(
     return float(vals[idx])
 
 
+def load_7a_pool_axis_sums(
+    picks_dir, before_date: str, days: int = RANK_7A_TOP2_GATE_LOOKBACK_DAYS
+) -> list[float]:
+    """`_s7a_pool.json`（ゲート**前**のプール）から直近 days 日の axis_sum を集める。
+
+    live（候補生成）と rebuild（過去分再構築）で**同じ母集団**を見るための共有実装。
+    ここが2箇所に分かれると、同じ日付でも live と rebuild で閾値が変わって
+    picks_history が毎朝書き換わる。
+
+    ファイルが無い日は飛ばす。読めない日があっても呼び出し元を止めない。
+    """
+    import json as _json
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+    from pathlib import Path as _Path
+
+    try:
+        base = _date.fromisoformat(before_date)
+    except ValueError:
+        return []
+    out: list[float] = []
+    for i in range(1, days + 1):
+        d = (base - _timedelta(days=i)).isoformat()
+        for suffix in ("_s7a_pool.json", "_night_s7a_pool.json"):
+            p = _Path(picks_dir) / f"wave_picks_wt_{d}{suffix}"
+            if not p.exists():
+                continue
+            try:
+                with open(p, encoding="utf-8") as f:
+                    for c in _json.load(f):
+                        if c.get("axis_sum") is not None:
+                            out.append(float(c["axis_sum"]))
+            except (OSError, ValueError):
+                continue
+    return out
+
+
+def rank_7a_gate_chronological(
+    pool: list[dict], seed_history: list[tuple[str, float]] | None = None
+) -> list[dict]:
+    """プールを**日付順に**ゲートへ通す（過去分再構築用）。
+
+    その日の閾値は「**その日より前**の直近 RANK_7A_TOP2_GATE_LOOKBACK_DAYS 日の
+    プール」から取る。live と同じ規則で、当日以降を覗かない（look-ahead しない）。
+
+    seed_history: (race_date, axis_sum) の並び。窓をまたいで再構築するときに
+      直前の窓のプールを引き渡すために使う。**呼び出し中に追記される**ので、
+      複数窓を時系列順に処理すれば履歴が途切れない。
+
+    ⚠️ ここで `rank_7a_top2_threshold` に渡す履歴が空だとフォールバック定数になる。
+       窓の先頭だけフォールバックで走るのは避けられないが、seed_history を渡せば
+       2窓目以降は連続する。
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    history: list[tuple[str, float]] = seed_history if seed_history is not None else []
+    by_date: dict[str, list[dict]] = {}
+    for c in pool:
+        by_date.setdefault(c.get("race_date", ""), []).append(c)
+
+    kept: list[dict] = []
+    for d in sorted(by_date):
+        try:
+            cutoff = (_date.fromisoformat(d) - _timedelta(days=RANK_7A_TOP2_GATE_LOOKBACK_DAYS)
+                      ).isoformat()
+        except ValueError:
+            cutoff = ""
+        trailing = [v for (dd, v) in history if cutoff <= dd < d]
+        thr = rank_7a_top2_threshold(trailing)
+        keep, _ = rank_7a_top2_gate(by_date[d], thr)
+        kept.extend(keep)
+        history.extend((d, c["axis_sum"]) for c in by_date[d] if c.get("axis_sum") is not None)
+    return kept
+
+
 def rank_7a_top2_gate(candidates: list[dict], threshold: float) -> tuple[list[dict], list[dict]]:
     """7A 候補を低配当見送りゲートに掛け、(購入する候補, 見送る候補) を返す。
 

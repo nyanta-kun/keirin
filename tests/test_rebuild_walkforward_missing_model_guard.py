@@ -72,8 +72,10 @@ def rebuild_module(request, monkeypatch):
     build_rows_calls: list[tuple] = []
 
     # bad_model_name: 3ヘッド軸のランクが渡してくる（既定 None で2ヘッドのランクも通す）。
+    # pool_history: 7A の低配当見送りゲートが窓をまたいで母集団を引き継ぐために
+    # 駆動側が渡す（2026-08-09）。ダブル側で受けないと TypeError になる。
     def fake_build_rows(eval_model, date_from, date_to, win_model_name,
-                        bad_model_name=None):
+                        bad_model_name=None, pool_history=None):
         build_rows_calls.append((eval_model, date_from, date_to, win_model_name))
         return []  # 行の中身自体は本テストの関心事ではない
 

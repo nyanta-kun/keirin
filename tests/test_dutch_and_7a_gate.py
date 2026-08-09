@@ -19,6 +19,7 @@ from src.dutch_allocation import (
 from src.strategy_wt import (
     RANK_7A_TOP2_GATE_FALLBACK,
     rank_7a_daily_select,
+    rank_7a_gate_chronological,
     rank_7a_top2_gate,
     rank_7a_top2_threshold,
 )
@@ -122,3 +123,44 @@ class TestRank7aTop2Gate:
         ]
         got = rank_7a_daily_select(cands, top2_threshold=1.6)
         assert [c["axis_sum"] for c in got] == [1.5]
+
+
+class TestRank7aGateChronological:
+    """過去分再構築のゲートが look-ahead しないこと。"""
+
+    def _pool(self):
+        # 3日分。日ごとに axis_sum が違う
+        out = []
+        for d, vals in [("2026-01-01", [1.40, 1.60]),
+                        ("2026-01-02", [1.35, 1.70]),
+                        ("2026-01-03", [1.33, 1.90])]:
+            out += [{"race_date": d, "axis_sum": v} for v in vals]
+        return out
+
+    def test_履歴が無い初日はフォールバック閾値で判定する(self):
+        got = rank_7a_gate_chronological(self._pool()[:2])
+        # fallback=1.432 → 1.40 は通り 1.60 は落ちる
+        assert [c["axis_sum"] for c in got] == [1.40]
+
+    def test_その日以降のプールを閾値に使わない(self):
+        """未来日の axis_sum が閾値に混ざると look-ahead になる。"""
+        hist: list[tuple[str, float]] = []
+        rank_7a_gate_chronological(self._pool(), hist)
+        # 1日目の判定時点では履歴が空でなければならない（後から積まれる）
+        assert hist[0][0] == "2026-01-01"
+        assert all(d <= "2026-01-03" for d, _ in hist)
+
+    def test_seed_historyは呼び出し後に伸びる(self):
+        hist: list[tuple[str, float]] = []
+        rank_7a_gate_chronological(self._pool(), hist)
+        assert len(hist) == 6      # プール全件が母集団として積まれる
+
+    def test_窓をまたいで履歴が引き継がれる(self):
+        hist: list[tuple[str, float]] = []
+        rank_7a_gate_chronological(self._pool()[:2], hist)
+        n_after_first = len(hist)
+        rank_7a_gate_chronological(self._pool()[2:], hist)
+        assert len(hist) > n_after_first
+
+    def test_ゲートを外すとプール全件が返る(self):
+        assert len(rank_7a_gate_chronological(self._pool(), [])) < len(self._pool())

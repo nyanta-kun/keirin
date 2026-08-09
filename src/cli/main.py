@@ -14,40 +14,6 @@ from src.database import init_db
 from src.scraper.pipeline import CollectionPipeline, setup_logging
 
 
-def _load_recent_7a_axis_sums(out_dir: Path, target_date: str, days: int = 0) -> list[float]:
-    """直近の 7A **プール**（ゲート前）の axis_sum を集める。
-
-    低配当見送りゲートの閾値を取るための母集団。**購入実績ではなくプールを読む**
-    （購入実績＝ゲート通過分だけなので、そこから分位を取ると閾値が毎日切り下がる）。
-
-    ファイルが無い日は単に飛ばす。読めない日があっても候補生成は止めない。
-    """
-    from src.strategy_wt import RANK_7A_TOP2_GATE_LOOKBACK_DAYS
-
-    import json as _json
-
-    days = days or RANK_7A_TOP2_GATE_LOOKBACK_DAYS
-    try:
-        base = date.fromisoformat(target_date)
-    except ValueError:
-        return []
-    out: list[float] = []
-    for i in range(1, days + 1):
-        d = (base - timedelta(days=i)).isoformat()
-        for suffix in ("_s7a_pool.json", "_night_s7a_pool.json"):
-            p = out_dir / f"wave_picks_wt_{d}{suffix}"
-            if not p.exists():
-                continue
-            try:
-                with open(p, encoding="utf-8") as f:
-                    for c in _json.load(f):
-                        if c.get("axis_sum") is not None:
-                            out.append(float(c["axis_sum"]))
-            except (OSError, ValueError):
-                continue
-    return out
-
-
 # 7+車 3連複のガミ閾値（レース単位: min(全目) < この値 → レース見送り。doc52）
 # 2026-07-10 に買い目カット方式(SS/S)を廃止し doc48 のレース単位セマンティクスへ回帰。
 # notify_prerace_wt.py / write_candidates_wt.py の GAMI_THRESHOLD と揃えること。
@@ -1310,7 +1276,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         line_score_features, race_signals,
         rank_7s_daily_select, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
         rank_7s_wt_overlap_n, rank_7a_daily_select,
-        rank_7a_top2_threshold, rank_7a_top2_gate,
+        rank_7a_top2_threshold, rank_7a_top2_gate, load_7a_pool_axis_sums,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
         rank_7c_is_lowpay_pattern,
@@ -2024,7 +1990,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         with open(rank_7a_pool_path, "w", encoding="utf-8") as f:
             json.dump(rank_7a_pool, f, ensure_ascii=False, indent=2)
 
-        history = _load_recent_7a_axis_sums(Path(output_path).parent, target_date)
+        history = load_7a_pool_axis_sums(Path(output_path).parent, target_date)
         history += [c["axis_sum"] for c in rank_7a_pool if c.get("axis_sum") is not None]
         top2_threshold = rank_7a_top2_threshold(history)
         rank_7a_candidates, rank_7a_skipped = rank_7a_top2_gate(rank_7a_pool, top2_threshold)
