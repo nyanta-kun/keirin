@@ -124,6 +124,41 @@ _DEFAULT_COMMENT_TEMPLATE = (
     "精度が上がります。"
 )
 
+# --- 看板レース（決勝・特選クラス）専用の文面（2026-08-09 新設・`--marquee`）---
+# 🔴 **通常ランクの文面をそのまま使ってはいけない。** 7A/9A の既定文面は
+#    「本命が割れ、相手次第で配当が伸びるレースだけを絞ってお届けしています。
+#      毎日は出ません。」と書いてある。看板レースは
+#    (1) **必ず出す**方針なので「毎日は出ません」が嘘になり、
+#    (2) 断然人気がいる決勝（例 2026-08-09 和歌山12R は軸1の3着内率 95.6%）でも
+#        出すため「本命が割れ」が事実と逆になる。
+#    7B で旧文面が現行条件と正反対だった事故（2026-08-06 是正）と同じ型なので、
+#    **看板レース用は独立した文面を持たせる**。
+#
+# ⚠️ この文面では**レースの拮抗度について何も断定しない**。看板レースには
+#    Q1_loose（拮抗）も Q4_chalk（断然）も混ざるため、どちらかに寄せた瞬間に
+#    半分のレースで嘘になる。レース個別の見立ては `{shape_note}` が担う。
+_MARQUEE_TITLE_TEMPLATE = "{race_type}の二軸｜{shape}"
+_MARQUEE_COMMENT_TEMPLATE = (
+    "{shape_note}\n\n"
+    "【二軸】\n"
+    "本レースで照らし出した二軸は、◎{axis1}番・○{axis2}番です。\n\n"
+    "【このレースについて】\n"
+    "本日の注目が集まる一戦です。当方は、こうしたレースこそ見立てをお届けしたいと考え、"
+    "決勝・特選クラスは毎回お出しする方針にしています。\n\n"
+    "【この買い目について】\n"
+    "買い目は三連複・軸2車流しです。\n"
+    "{stake_note}\n\n"
+    "【ご購入にあたって】\n"
+    "レース直前の実際のオッズをご自身でご確認いただき、必要に応じて配分を"
+    "調整いただくと精度が上がります。\n\n"
+    "【予想者より】\n"
+    "これまでの的中実績はプロフィールで公開しています。参考になりましたら"
+    "「ウマい！」とお気に入り登録をいただけると励みになります。\n\n"
+    "【参考データ】\n"
+    "出走選手全員の1着率・3着内率です。三連単で購入される際の着順・買い目の"
+    "参考にご活用ください。"
+)
+
 # ランク定義。file_key は候補JSON（wave_picks_wt_{date}[_night]_{file_key}_candidates.json）の
 # サフィックス。gate_filter は None なら候補全件対象、'S' なら rank_7s_gate_label() で絞り込む。
 # S1は2026-07-31にdf31431でユーザー判断により全廃済み（picks_history のS1行も削除済み）。
@@ -386,9 +421,10 @@ def _stake_note_for(rank_key: str, legs: list[BetLeg]) -> str:
 def _apply_template(
     template: str, *, venue_name: str, race_no: int, rank_key: str, target_date: str,
     axis1: int, axis2: int, shape: str = "", shape_note: str = "",
-    stake_note: str = "",
+    stake_note: str = "", race_type: str = "",
 ) -> str:
-    """{venue}{race_no}{rank}{date}{axis1}{axis2}{shape}{shape_note}{stake_note} を置換する。
+    """{venue}{race_no}{rank}{date}{axis1}{axis2}{shape}{shape_note}{stake_note}{race_type}
+    を置換する。
     str.format ではなく固定辞書の逐次 str.replace を使う（未定義の{...}をユーザーが
     書いても例外にせず素通しするため）。
     """
@@ -402,6 +438,9 @@ def _apply_template(
         "{shape}": shape,
         "{shape_note}": shape_note,
         "{stake_note}": stake_note,
+        # 看板レース用（`--marquee`）。決勝/特選/ガールズ決勝 等をそのまま入れる。
+        # 通常経路では空文字なので、既存テンプレートに影響しない。
+        "{race_type}": race_type,
     }
     out = template
     for k, v in repl.items():
@@ -1238,11 +1277,15 @@ def _process_rank(
 MANUAL_ALLOWED_RANKS = ("7S", "7A", "7B", "9S", "9A")
 
 
-def _resolve_race_info(race_key: str) -> tuple[str, int, int] | None:
-    """race_keyから (venue_name, race_no, n_entries) を候補JSON非依存で解決する。"""
+def _resolve_race_info(race_key: str) -> tuple[str, int, int, str] | None:
+    """race_keyから (venue_name, race_no, n_entries, race_type) を候補JSON非依存で解決する。
+
+    race_type は看板レース用テンプレートの `{race_type}` に使う（「決勝」「特選」
+    「ガールズ決勝」等）。NULL のときは空文字を返す。
+    """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT venue_id, race_no, n_entries FROM wt_races WHERE race_key = ?",
+            "SELECT venue_id, race_no, n_entries, race_type FROM wt_races WHERE race_key = ?",
             (race_key,),
         ).fetchone()
         if row is None:
@@ -1251,18 +1294,22 @@ def _resolve_race_info(race_key: str) -> tuple[str, int, int] | None:
             "SELECT name FROM venue_info WHERE venue_code = ?", (row["venue_id"],),
         ).fetchone()
         venue_name = vrow["name"] if vrow else str(row["venue_id"])
-    return venue_name, int(row["race_no"]), int(row["n_entries"])
+    return venue_name, int(row["race_no"]), int(row["n_entries"]), (row["race_type"] or "")
 
 
 def _process_manual(
     race_key: str, rank_key: str, axis1: int, axis2: int, target_date: str, session: str,
-    race_date, settings: dict[str, dict], dry_run: bool,
+    race_date, settings: dict[str, dict], dry_run: bool, marquee: bool = False,
 ) -> tuple[int, list[str]]:
     """手動指定（推奨外レースへのランク選択入稿）。候補JSON検索を一切経由しない。
 
     ON/OFF（_global含む）・重複送信防止(already_submitted)は通常経路と同じルールを
     適用する。gate_filterはSS/S自動判定用のため参照しない（rank_key自体がユーザーの
     明示選択のため）。
+
+    marquee=True のときは看板レース（決勝・特選クラス）専用のタイトル・文面を使う。
+    通常ランクの文面は「毎日は出ません」「本命が割れ」と書いてあり、
+    **必ず出す**看板レースでは事実と食い違うため（_MARQUEE_COMMENT_TEMPLATE 参照）。
     """
     if rank_key not in MANUAL_ALLOWED_RANKS:
         return 0, [f"{race_key}: 未対応ランク {rank_key}"]
@@ -1275,7 +1322,7 @@ def _process_manual(
     info = _resolve_race_info(race_key)
     if info is None:
         return 0, [f"{race_key}: レース情報が見つかりません"]
-    venue_name, race_no, n_entries = info
+    venue_name, race_no, n_entries, race_type = info
     if n_entries != cfg["n_cars"]:
         return 0, [f"{race_key}: 車数不一致（{n_entries}車 / {rank_key}は{cfg['n_cars']}車想定）"]
     if axis1 == axis2 or not (1 <= axis1 <= n_entries) or not (1 <= axis2 <= n_entries):
@@ -1285,12 +1332,19 @@ def _process_manual(
     gate_label = cfg["gate_filter"]
 
     setting = settings.get(rank_key)
-    title_template = (setting or {}).get("title_template") or _DEFAULT_TITLE_TEMPLATE
-    # ランク固有の既定コメント（cfg["default_comment"]）があればそれを既定にする。
-    # 7B は買い目構造が「5点流し」ではなく「相手3点」で、共通既定文の説明が
-    # 事実と食い違うため必須（設定画面で上書きされていればそちらが優先）。
-    comment_template = ((setting or {}).get("comment_template")
-                        or cfg.get("default_comment") or _DEFAULT_COMMENT_TEMPLATE)
+    if marquee:
+        # 🔴 看板レースは設定画面のランク別テンプレートを**使わない**。
+        #    設定側は「絞って出す」前提の文面なので、必ず出す看板レースに流用すると
+        #    ランク設定を編集するたびに看板の文面まで嘘に戻る。
+        title_template = _MARQUEE_TITLE_TEMPLATE
+        comment_template = _MARQUEE_COMMENT_TEMPLATE
+    else:
+        title_template = (setting or {}).get("title_template") or _DEFAULT_TITLE_TEMPLATE
+        # ランク固有の既定コメント（cfg["default_comment"]）があればそれを既定にする。
+        # 7B は買い目構造が「5点流し」ではなく「相手3点」で、共通既定文の説明が
+        # 事実と食い違うため必須（設定画面で上書きされていればそちらが優先）。
+        comment_template = ((setting or {}).get("comment_template")
+                            or cfg.get("default_comment") or _DEFAULT_COMMENT_TEMPLATE)
 
     # 手動入稿も自動入稿と**同じ商品**なので配分方式を揃える。
     # 片方だけ均等のままだと、共通の文面「想定オッズに応じて配分しています」が
@@ -1310,12 +1364,12 @@ def _process_manual(
     title = _apply_template(
         title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
         target_date=target_date, axis1=axis1, axis2=axis2, shape=shape,
-        shape_note=shape_note, stake_note=stake_note,
+        shape_note=shape_note, stake_note=stake_note, race_type=race_type,
     )
     comment = _apply_template(
         comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
         target_date=target_date, axis1=axis1, axis2=axis2, shape=shape,
-        shape_note=shape_note, stake_note=stake_note,
+        shape_note=shape_note, stake_note=stake_note, race_type=race_type,
     )
     entry_table = _build_entry_table(race_key, {axis1: "◎", axis2: "○"})
     if entry_table:
@@ -1393,6 +1447,10 @@ def main() -> None:
         "--manual-rank-key", default=None, choices=MANUAL_ALLOWED_RANKS,
         help="指定時は候補JSON検索を経由せず--axis1/--axis2で手動入稿する（--race-key必須）",
     )
+    parser.add_argument(
+        "--marquee", action="store_true",
+        help="看板レース（決勝・特選クラス）専用のタイトル・文面で入稿する（--manual-rank-key と併用）",
+    )
     parser.add_argument("--axis1", type=int, default=None, help="--manual-rank-key指定時の軸1車番")
     parser.add_argument("--axis2", type=int, default=None, help="--manual-rank-key指定時の軸2車番")
     args = parser.parse_args()
@@ -1405,6 +1463,12 @@ def main() -> None:
         print(f"[netkeirin_submit] {target_date} {session}: 全体OFF（スキップ）", flush=True)
         return
 
+    # `--marquee` は手動入稿専用。自動経路で渡されても黙って無視されると
+    # 「看板用の文面で出したつもりが通常文面で出ていた」に気づけないので落とす。
+    if args.marquee and not args.manual_rank_key:
+        print("[netkeirin_submit] --marquee は --manual-rank-key と併用してください", flush=True)
+        raise SystemExit(1)
+
     if args.manual_rank_key:
         if not args.race_key or args.axis1 is None or args.axis2 is None:
             print("[netkeirin_submit] --manual-rank-key には --race-key/--axis1/--axis2 が必須です", flush=True)
@@ -1412,6 +1476,7 @@ def main() -> None:
         n, failures = _process_manual(
             args.race_key, args.manual_rank_key, args.axis1, args.axis2,
             target_date, session, race_date, settings, args.dry_run,
+            marquee=args.marquee,
         )
         if args.dry_run:
             print(f"[dry-run][manual] {target_date} {session}: 完了（生成{n}件）", flush=True)
