@@ -98,17 +98,18 @@ def test_marquee_template_placeholders_are_all_substituted(template: str) -> Non
     assert not left, f"置換されなかったプレースホルダが残っています: {left}"
 
 
-def test_marquee_title_uses_race_type() -> None:
-    """タイトルは通常ランク（「厳選の二軸｜…」）と区別が付く形にする。
+def test_marquee_title_is_the_fixed_phrase() -> None:
+    """タイトルは固定文字列「本日の二軸」（2026-08-09 ユーザー指示）。
 
-    看板レースだけ別商品として並ぶことが購入者に伝わらないと、
-    タイトルを分けた意味が無い。
+    ⚠️ 当初は「{race_type}の二軸｜{shape}」で種別とレース形を出していたが、
+       看板レースは商品名を揃える方針に変更した。**変数を戻さないこと。**
+       どのレースでも同じ文字列になるので、`_apply_template` を通しても不変。
     """
-    assert "{race_type}" in _MARQUEE_TITLE_TEMPLATE
+    assert _MARQUEE_TITLE_TEMPLATE == "本日の二軸"
     title = _apply_template(
         _MARQUEE_TITLE_TEMPLATE,
         venue_name="佐世保", race_no=12, rank_key="7A", target_date="2026-08-09",
         axis1=5, axis2=1, shape="別線に妙味", shape_note="", stake_note="",
         race_type="ガールズ決勝",
     )
-    assert title.startswith("ガールズ決勝"), title
+    assert title == "本日の二軸", title
