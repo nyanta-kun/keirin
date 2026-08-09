@@ -247,3 +247,50 @@ def test_rebuild_pg_atomic_exception_mid_loop_propagates_for_rollback(monkeypatc
     per_window_rows = [("2026-08-01", "2026-08-01", [_row()])]
     with pytest.raises(RuntimeError, match="simulated insert failure"):
         wrc.rebuild_pg_atomic("RANK_TEST", _COND, per_window_rows, dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# 0件wipe見送りの通知抑制（2026-08-09）
+#   挙動（wipeしない）は変えず、Discord通知だけを絞る。
+#   9S のように候補がほぼ出ないランクが毎朝同じ警告を流すと、
+#   警告そのものが読まれなくなるため。
+# ---------------------------------------------------------------------------
+
+def test_zero_row_初回は通知し2回目は抑制する(tmp_path, monkeypatch):
+    import src.wt_rebuild_common as m
+    monkeypatch.setattr(m, "_ZERO_ROW_STATE", tmp_path / "s.json")
+    win = [("2026-08-01", "2026-08-08", [])]
+    assert m._zero_row_should_notify("RANK_9S", win) is True
+    assert m._zero_row_should_notify("RANK_9S", win) is False
+
+
+def test_zero_row_窓の終端が進んでも抑制が効く(tmp_path, monkeypatch):
+    """tail の窓は終端が毎日進む。終端を鍵にすると毎日通知が出てしまう。"""
+    import src.wt_rebuild_common as m
+    monkeypatch.setattr(m, "_ZERO_ROW_STATE", tmp_path / "s.json")
+    assert m._zero_row_should_notify("RANK_9S", [("2026-08-01", "2026-08-08", [])]) is True
+    assert m._zero_row_should_notify("RANK_9S", [("2026-08-01", "2026-08-09", [])]) is False
+
+
+def test_zero_row_月が変われば再通知する(tmp_path, monkeypatch):
+    import src.wt_rebuild_common as m
+    monkeypatch.setattr(m, "_ZERO_ROW_STATE", tmp_path / "s.json")
+    assert m._zero_row_should_notify("RANK_9S", [("2026-08-01", "2026-08-08", [])]) is True
+    assert m._zero_row_should_notify("RANK_9S", [("2026-09-01", "2026-09-08", [])]) is True
+
+
+def test_zero_row_ランクが違えば独立して通知する(tmp_path, monkeypatch):
+    import src.wt_rebuild_common as m
+    monkeypatch.setattr(m, "_ZERO_ROW_STATE", tmp_path / "s.json")
+    win = [("2026-08-01", "2026-08-08", [])]
+    assert m._zero_row_should_notify("RANK_9S", win) is True
+    assert m._zero_row_should_notify("RANK_9A", win) is True
+
+
+def test_zero_row_状態ファイルが壊れていても通知する側に倒す(tmp_path, monkeypatch):
+    """fail-open。黙らせる方に倒すと本当の異常まで気づけなくなる。"""
+    import src.wt_rebuild_common as m
+    bad = tmp_path / "s.json"
+    bad.write_text("{ これはJSONではない", encoding="utf-8")
+    monkeypatch.setattr(m, "_ZERO_ROW_STATE", bad)
+    assert m._zero_row_should_notify("RANK_9S", [("2026-08-01", "2026-08-08", [])]) is True
