@@ -77,9 +77,11 @@ def test_trifecta_point_count_equals_full_legs() -> None:
     board = _trio_board(list(range(1, 8)))
     _, tf = judge_rank_7c(_cand(True), board)
     _, trio = judge_rank_7c(_cand(False), board)
-    assert len(tf["combos"]) == 4          # 足切り後の相手そのまま
-    assert len(trio["combos"]) == 2        # 三連複は上位2点
-    assert tf["stake"] == 2500 and trio["stake"] == 5000
+    # このフィクスチャは相手の落差が全て 0.15 未満なので三連複も総流し＝同点数。
+    # （差があるレースでは三連複だけが縮む。`test_7c_buy_plan.py` で検査）
+    assert len(tf["combos"]) == 4
+    assert len(trio["combos"]) == 4
+    assert tf["stake"] == trio["stake"] == 2500
 
 
 def test_trifecta_gate_uses_trio_board_not_trifecta_board() -> None:

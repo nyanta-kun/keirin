@@ -288,10 +288,11 @@ def test_judge_buys_and_sets_variable_stake(cand_7c):
     from scripts.notify_prerace_wt import judge_rank_7c
     decision, detail = judge_rank_7c(cand_7c, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
     assert decision == "buy"
-    # 2026-08-09: 三連複側は**上位2点だけ**買う（足切り後の [1,3,4,6] の先頭2つ）。
-    assert detail["thirds"] == [1, 3]
-    assert len(detail["combos"]) == 2
-    assert detail["stake"] == sw.rank_7c_unit_stake(2) == 5000
+    # 2026-08-09: 相手はギャップ（3着内率の落差 >= 0.15）でだけ削る。
+    # このレースは 0.40/0.30/0.20/0.16 と落差が全て 0.15 未満なので**総流し**。
+    assert detail["thirds"] == [1, 3, 4, 6]        # 7番(0.05)は足切り
+    assert len(detail["combos"]) == 4
+    assert detail["stake"] == sw.rank_7c_unit_stake(4) == 2500
 
 
 def test_judge_keys_leg_odds_by_combo_label():
@@ -342,9 +343,8 @@ def test_judge_recomputes_legs_from_board_not_morning_json(cand_7c):
     from scripts.notify_prerace_wt import judge_rank_7c
     cand_7c["legs_7c"] = [6, 4]                   # 朝の値が壊れていても
     decision, detail = judge_rank_7c(cand_7c, _trio_lookup([1, 2, 3, 4, 5, 6, 7]))
-    # 盤面と確率から引き直した順（1,3,4,6）の上位2点になること。
-    # 朝の値をそのまま使っていれば [6, 4] になるので取り違えを検出できる。
-    assert decision == "buy" and detail["thirds"] == [1, 3]
+    # 盤面と確率から引き直すこと。朝の値をそのまま使えば [6, 4] になる。
+    assert decision == "buy" and detail["thirds"] == [1, 3, 4, 6]
 
 
 # ── walk-forward 再構築の登録漏れ防止 ───────────────────────────────

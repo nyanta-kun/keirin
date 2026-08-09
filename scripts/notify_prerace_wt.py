@@ -45,7 +45,7 @@ from src.strategy_wt import (
     RANK_9H1_SCORE_MIN,
     S1W_STAKE, S1W_TOP3_GAP_MIN, RANK_7S_STAKE, RANK_7A_STAKE, RANK_7B_STAKE,
     RANK_7C_NE, RANK_7C_LEGS_MIN, rank_7c_select_legs, rank_7c_unit_stake,
-    RANK_7C_TRIO_P3_SUM_MIN, RANK_7C_TRIO_LEGS,
+    RANK_7C_TRIO_P3_SUM_MIN, rank_7c_cut_legs_by_gap,
     unit_stake,
     rank_7b_select_legs, RANK_9S_STAKE, RANK_9A_STAKE, SS_STAKE,
     RANK_7SS_STAKE,
@@ -1534,10 +1534,10 @@ def judge_rank_7c(cand: dict, trio_lookup: dict,
             detail["skip_reason"] = (
                 f"二軸の3着内率合計が{RANK_7C_TRIO_P3_SUM_MIN}未満（三連複側のゲート）")
             return "skip", detail
-        # 買うのは上位2点だけ。盤面から再計算した legs に対して掛ける
-        # （欠車で相手が変われば買う2点も変わるべきなので、朝の
-        #  `legs_7c_buy` は使わない）。
-        legs = legs[:RANK_7C_TRIO_LEGS]
+        # 3着内率の落差で打ち切る（差が無ければ削らない）。盤面から再計算した
+        # legs に対して掛ける（欠車で相手が変われば削る位置も変わるべきなので、
+        # 朝の `legs_7c_buy` は使わない）。
+        legs = rank_7c_cut_legs_by_gap(legs, probs) if probs else legs
     combos, leg_odds = [], {}
     for t in legs:
         key = frozenset({axis1, axis2, t})
@@ -1562,7 +1562,8 @@ def judge_rank_7c(cand: dict, trio_lookup: dict,
     #    「相手が4点未満なら配当が付かないので見送る」という**選別**の閾値で、
     #    三連複側を上位2点に絞った後（2026-08-09）にここへ流用すると
     #    **常に見送りになる**。実際にそれで全件 skip になった。
-    min_pts = RANK_7C_LEGS_MIN if use_trifecta else RANK_7C_TRIO_LEGS
+    # 削った後は1点まで縮みうるので、必要点数も実際の買い目数に合わせる。
+    min_pts = RANK_7C_LEGS_MIN if use_trifecta else len(legs)
     if len(combos) < min_pts:
         detail["skip_reason"] = f"オッズ取得できた目が{len(combos)}点"
         return "skip", detail

@@ -409,10 +409,27 @@ RANK_7C_TRIFECTA_PW_MIN = 0.70
 #      1.60 では確認窓の実質的中が落ちる（31.58%）ので 1.55 を採る。
 RANK_7C_TRIO_P3_SUM_MIN = 1.55
 
-# 三連複で買う相手の点数（3着内率の降順に上位から）。
-# ⚠️ `RANK_7C_LEGS_MIN`（4点未満は見送り）とは別物。あちらは
-#    「相手が絞れる＝配当が付かない」を弾く**選別**で、こちらは**買う点数**。
-RANK_7C_TRIO_LEGS = 2
+# 🔴 三連複で相手を削る条件（2026-08-09・ユーザー指摘で一律の点数制限から変更）。
+#   3着内率の降順に並べ、**隣接する落差がこの値以上になった時点で打ち切る**。
+#
+#   ⚠️ **一律に上位N点へ削ってはいけない。** 当初 `RANK_7C_TRIO_LEGS = 2` として
+#      常に2点へ削っていたが、これは「割り込む余地が残っている車」まで捨てる。
+#      ユーザー指摘:「絞るべきは3着内率に差がある場合。割り込む余地なしという
+#      判断が必要。なんでも一律で買い目を削るのは意味がない」
+#      実例（2026-08-09 前橋7R）: 相手が 46.4/32.0/28.5/22.3/17.9% となだらかで、
+#      3着に来たのは4番目の車。一律2点なら外れ、ギャップ切りなら総流しで的中。
+#
+#   三連複側のみ（pw1>=RANK_7C_TRIFECTA_PW_MIN の三連単は絞らない）の実測
+#   n=11,600R（掃引 / 確認）:
+#     総流し(4〜5点)  実質的中 32.0/32.5  ROI 75.6/75.4
+#     一律 上位2点     実質的中 33.3/34.9  ROI **73.6**/76.5 ← 掃引でROIを落とす
+#     ギャップ切り0.15 実質的中 31.2/32.0  ROI **76.2/76.6** ← 両窓でROI最良
+#     ギャップ切り0.10 実質的中 29.4/30.1  ROI 75.3/76.0
+#
+#   ⚠️ 0.10 は 0.15 に**両指標で劣る**。閾値を下げて削りを強めても良くならない。
+#   ⚠️ この規則は「差がある時だけ切る」ので、差が無いレースは自動的に総流しになる。
+#      平均点数は 2.60（総流しは 4.40）。
+RANK_7C_TRIO_GAP_MIN = 0.15
 
 # 🔴 低配当パターンの除外（2026-08-07 追加・ユーザー発見）。
 #   **「複勝率の3位と4位が大きく離れている（＝上位3車が抜けている）」かつ
@@ -1887,6 +1904,29 @@ def rank_7c_use_trifecta(
     return float(win_probs.get(axis1, 0.0)) >= pw_min
 
 
+def rank_7c_cut_legs_by_gap(
+    legs: list[int], top3_probs: dict[int, float],
+    gap_min: float = RANK_7C_TRIO_GAP_MIN,
+) -> list[int]:
+    """3着内率の落差で相手を打ち切る。**差が無ければ削らない**。
+
+    legs: `rank_7c_select_legs` の結果（3着内率の降順）
+    returns 買う相手（先頭は必ず残る）
+
+    先頭から隣を見ていき、`top3_probs` の差が gap_min 以上になったらそこで止める。
+    「割り込む余地が消えた」と判断できるところだけを削るための規則で、
+    一律の点数制限とは目的が違う（`RANK_7C_TRIO_GAP_MIN` の定義部を参照）。
+    """
+    if not legs:
+        return []
+    out = [legs[0]]
+    for prev, cur in zip(legs, legs[1:]):
+        if top3_probs.get(prev, 0.0) - top3_probs.get(cur, 0.0) >= gap_min:
+            break
+        out.append(cur)
+    return out
+
+
 def rank_7c_buy_plan(
     top3_probs: dict[int, float], win_probs: dict[int, float] | None,
     axis1: int, legs: list[int],
@@ -1912,7 +1952,7 @@ def rank_7c_buy_plan(
     p3_sum = sum(sorted(top3_probs.values(), reverse=True)[:2])
     if p3_sum < RANK_7C_TRIO_P3_SUM_MIN:
         return None
-    return "trio", list(legs[:RANK_7C_TRIO_LEGS])
+    return "trio", rank_7c_cut_legs_by_gap(legs, top3_probs)
 
 
 def rank_7c_is_lowpay_pattern(

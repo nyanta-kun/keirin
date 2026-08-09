@@ -27,9 +27,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.strategy_wt import (  # noqa: E402
     RANK_7C_TRIFECTA_PW_MIN,
-    RANK_7C_TRIO_LEGS,
+    RANK_7C_TRIO_GAP_MIN,
     RANK_7C_TRIO_P3_SUM_MIN,
     rank_7c_buy_plan,
+    rank_7c_cut_legs_by_gap,
 )
 
 LEGS = [3, 4, 5, 6]
@@ -56,12 +57,38 @@ def test_trifecta_ignores_the_trio_gate() -> None:
     assert plan is not None and plan[0] == "trifecta"
 
 
-def test_trio_narrows_to_two_partners() -> None:
-    """三連複は上位2点だけ買う。"""
+def test_trio_cuts_only_where_there_is_a_gap() -> None:
+    """🔴 差がある所でだけ削る。**一律の点数制限ではない。**
+
+    ユーザー指摘（2026-08-09）:「絞るべきは3着内率に差がある場合。
+    割り込む余地なしという判断が必要。なんでも一律で買い目を削るのは意味がない」
+    """
     pw = {1: 0.30, 2: 0.20}
-    kind, legs = rank_7c_buy_plan(_p3(RANK_7C_TRIO_P3_SUM_MIN), pw, 1, LEGS)
+    # 相手がなだらか（落差が全て gap 未満）→ 削らない＝総流し
+    flat = {1: 0.80, 2: 0.76, 3: 0.46, 4: 0.32, 5: 0.29, 6: 0.22, 7: 0.18}
+    kind, legs = rank_7c_buy_plan(flat, pw, 1, [3, 4, 5, 6, 7])
     assert kind == "trio"
-    assert legs == LEGS[:RANK_7C_TRIO_LEGS] == [3, 4]
+    assert legs == [3, 4, 5, 6, 7], "差が無いのに削っている"
+
+    # 相手の先頭で大きく落ちる → そこで打ち切る
+    steep = {1: 0.80, 2: 0.76, 3: 0.55, 4: 0.30, 5: 0.22, 6: 0.13, 7: 0.13}
+    kind, legs = rank_7c_buy_plan(steep, pw, 1, [3, 4, 5, 6, 7])
+    assert legs == [3], f"落差 0.25 で切れていない: {legs}"
+
+
+def test_gap_cut_keeps_the_first_partner() -> None:
+    """先頭の相手は必ず残る（買い目が0点にならない）。"""
+    p3 = {3: 0.60, 4: 0.10, 5: 0.05}
+    assert rank_7c_cut_legs_by_gap([3, 4, 5], p3) == [3]
+    assert rank_7c_cut_legs_by_gap([], p3) == []
+
+
+def test_gap_cut_threshold_is_the_documented_value() -> None:
+    """閾値 0.15。0.10 は両指標で劣ることを検証済み（定義部のコメント参照）。"""
+    assert RANK_7C_TRIO_GAP_MIN == 0.15
+    p3 = {3: 0.50, 4: 0.50 - RANK_7C_TRIO_GAP_MIN, 5: 0.10}
+    # ちょうど閾値なら切る（>= 判定）
+    assert rank_7c_cut_legs_by_gap([3, 4, 5], p3) == [3]
 
 
 def test_trio_below_gate_is_not_bought() -> None:
