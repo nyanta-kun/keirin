@@ -246,16 +246,21 @@ def test_comment_body_does_not_mention_semifinals_for_7b():
     assert "準決勝" not in COMMENT_TEMPLATES["7B"]
 
 
-def test_comment_body_differentiates_ranks():
-    """全ランクが同一文だった状態へ戻らないこと（7C/7SS の実態不一致の再発防止）。"""
+def test_comment_body_has_no_bet_explanation_block():
+    """【この買い目について】（狙いの説明＋{stake_note}）を含まない。
+
+    2026-08-09 にユーザー指示で全ランクから削除した。**復活させないこと。**
+
+    ⚠️ このテストは以前 `test_comment_body_differentiates_ranks` として
+       「全ランクが同一文だった状態へ戻らないこと」を守っていた（7C/7SS の
+       実態不一致の再発防止）。ブロックごと消した結果**全ランクの本文は
+       意図的に同一**になったので、ガードの向きを反転させてある。
+       狙いの差はタイトルの `{shape}` と、商品に表示される買い目そのもので伝える。
+    """
     from scripts.update_netkeirin_templates import COMMENT_TEMPLATES
-    stances = {
-        rank: tpl.split("【この買い目について】")[1].split("{stake_note}")[0]
-        for rank, tpl in COMMENT_TEMPLATES.items()
-    }
-    # 9系は7系と同一文言でよい（購入者に車立ての区別は出さない）
-    unique = {rank: s for rank, s in stances.items() if rank not in RANK_ALIASES}
-    assert len(set(unique.values())) == len(unique), "ランク間で狙いの説明が重複している"
+    for rank, tpl in COMMENT_TEMPLATES.items():
+        for banned in ("【この買い目について】", "{stake_note}"):
+            assert banned not in tpl, f"{rank}: 削除済みの {banned} が復活している"
 
 
 def test_submitted_titles_stay_within_display_width():
