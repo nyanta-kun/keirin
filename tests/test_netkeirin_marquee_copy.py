@@ -60,6 +60,18 @@ def test_marquee_template_has_no_contradicting_claim(template: str) -> None:
     )
 
 
+def test_marquee_comment_has_no_self_promotion_block() -> None:
+    """看板レース用の文面も【予想者より】を含まない（2026-08-09 ユーザー指示）。
+
+    ランク別テンプレート（`update_netkeirin_templates.COMMENT_TEMPLATES`）とは
+    **別に定義されている**ので、片方だけ消すと看板レースにだけ宣伝が残る。
+    """
+    for banned in ("【予想者より】", "ウマい！", "お気に入り登録", "的中実績"):
+        assert banned not in _MARQUEE_COMMENT_TEMPLATE, (
+            f"看板レース用の文面に削除済みの宣伝文（{banned}）が復活している"
+        )
+
+
 @pytest.mark.parametrize("template", [_MARQUEE_TITLE_TEMPLATE, _MARQUEE_COMMENT_TEMPLATE])
 def test_marquee_template_placeholders_are_all_substituted(template: str) -> None:
     """`_apply_template` が看板用テンプレートの `{...}` を全て置換できる。
