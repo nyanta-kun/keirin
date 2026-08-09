@@ -1444,7 +1444,8 @@ def _insert_rank_7ss_pick(race_key: str, race_date: str, pred_combo: str, n_comb
 #    賭け金は 1レース RANK_7C_BUDGET 円の予算枠を点数で割る。
 #    根拠は strategy_wt.RANK_7C_P3_SUM_MIN 定義部のセクションコメント参照。
 
-def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
+def judge_rank_7c(cand: dict, trio_lookup: dict,
+                  trifecta_lookup: dict | None = None) -> tuple[str, dict]:
     """7Cの発走前ライブオッズ判定（純関数・DB非依存）。
 
     cand:        朝の7C候補JSON行（axis1/axis2 は _load_rank_7c_candidates が
@@ -1467,7 +1468,7 @@ def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
       detail:   axis1/axis2 / combos / leg_odds / stake / skip_reason
     """
     detail: dict = {"axis1": None, "axis2": None, "combos": [], "leg_odds": {},
-                    "stake": None, "skip_reason": None}
+                    "stake": None, "skip_reason": None, "bet_kind": "trio"}
     try:
         axis1 = int(cand["axis1"])
         axis2 = int(cand["axis2"])
@@ -1516,15 +1517,32 @@ def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     #    7S/9S/7B と同じ規約で、Discord のメッセージ生成が combos の各要素で
     #    leg_odds を引くため。3列目の車番をキーにすると全件「取得不可」表示になる
     #    （2026-08-07 の 7C 初日に実際にそうなった）。
+    # 🔴 三連単へ切り替えるレース（`trifecta_7c`）でも **点数のゲートは三連複の板で行う**。
+    #    三連単の板は三連複より薄く、そちらで足切りすると 7C の 16.9% が
+    #    「オッズ取得できた目が N点」で黙って見送りになる。買い方が変わっただけで
+    #    母集団まで変わってはいけない（点数・賭け金も三連複と同一が採用根拠）。
+    #    三連単オッズは**表示のためだけ**に引き、取れなくても見送らない。
+    use_trifecta = bool(cand.get("trifecta_7c"))
     combos, leg_odds = [], {}
     for t in legs:
         key = frozenset({axis1, axis2, t})
         ov = valid.get(key)
         if ov is None:
             continue
-        label = "-".join(map(str, sorted(key)))
+        if use_trifecta:
+            # 1着=軸1 / 2着=軸2 / 3着=相手 の順序付きラベル。
+            label = f"{axis1}-{axis2}-{t}"
+            tov = (trifecta_lookup or {}).get((axis1, axis2, t))
+            try:
+                fv = float(tov) if tov is not None else None
+            except (TypeError, ValueError):
+                fv = None
+            if fv is not None and 0 < fv < 9000:
+                leg_odds[label] = fv
+        else:
+            label = "-".join(map(str, sorted(key)))
+            leg_odds[label] = ov
         combos.append(label)
-        leg_odds[label] = ov
     if len(combos) < RANK_7C_LEGS_MIN:
         detail["skip_reason"] = f"オッズ取得できた目が{len(combos)}点"
         return "skip", detail
@@ -1533,6 +1551,9 @@ def judge_rank_7c(cand: dict, trio_lookup: dict) -> tuple[str, dict]:
     detail["leg_odds"] = leg_odds
     detail["thirds"] = legs
     detail["stake"] = rank_7c_unit_stake(len(combos))
+    # 🔴 採点側（`notify_results_wt.py`）はこの値で**着順を見るかどうか**を決める。
+    #    欠けると三連単を三連複として採点し、着順違いを的中に数えてしまう。
+    detail["bet_kind"] = "trifecta" if use_trifecta else "trio"
     return "buy", detail
 
 
@@ -1688,7 +1709,9 @@ def _process_rank_7c_candidates(today: str, now_unix: int, notified: set[str]) -
             continue
 
         trio_lookup = _build_odds_lookup(odds_data, "trio")
-        decision, detail = judge_rank_7c(cand, trio_lookup)
+        # 三連単へ切り替えるレースの表示用。取れなくても見送りにはしない。
+        trifecta_lookup = _build_odds_lookup(odds_data, "trifecta")
+        decision, detail = judge_rank_7c(cand, trio_lookup, trifecta_lookup)
         if decision == "不明":
             print(f"[prerace] {rk} 7C候補 → 盤面取得不可（次回再試行）", flush=True)
             time.sleep(0.3)
@@ -1703,8 +1726,15 @@ def _process_rank_7c_candidates(today: str, now_unix: int, notified: set[str]) -
         if decision == "buy":
             combos = detail["combos"]
             thirds = _u_third_list(combos, detail["axis1"], detail["axis2"])
-            pred = (f"{detail['axis1']}={detail['axis2']}-"
-                    + ",".join(map(str, thirds)))
+            # 🔴 pred_combo は「何を買ったか」の記録。三連単は **`三単:` を付け、
+            #    軸を `=`(順不同) ではなく `-`(着順) で書く**。結果通知
+            #    （notify_race_result_wt）に券種を伝える手段はこの表記だけ。
+            if detail.get("bet_kind") == "trifecta":
+                pred = (f"三単:{detail['axis1']}-{detail['axis2']}-"
+                        + ",".join(map(str, thirds)))
+            else:
+                pred = (f"{detail['axis1']}={detail['axis2']}-"
+                        + ",".join(map(str, thirds)))
             _insert_rank_7c_pick(rk, today, pred, len(combos), int(detail["stake"]))
             messages.append((rank_7c_key, _build_rank_7c_message(cand, ri, detail)))
             print(f"[prerace] {rk} 7C候補 → buy（ペーパー・{len(combos)}点）", flush=True)

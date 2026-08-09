@@ -1141,23 +1141,45 @@ def _main_inner(date):
                 c7_trio_pay = pm.get(rk, {}).get(("trio", c7_top3), 0)
                 c7_trifecta_pay = pm.get(rk, {}).get(("trifecta", tuple(c7_order[:3])), 0)
 
+                # 🔴 券種は**発走前の decision に記録された `bet_kind`** で決める。
+                #    7C は単勝率で三連複と三連単を出し分けるので（2026-08-09・
+                #    `RANK_7C_TRIFECTA_PW_MIN`）、三連複固定で採点すると
+                #    **着順違いを的中に数え、買っていない三連複の配当を payout に
+                #    書き込む**。picks_history は全ROI・的中率分析の台帳なので
+                #    ここが狂うと分析全体が静かに壊れる。
+                #    ⚠️ 既定は "trio"。古い decision（bet_kind 無し）は三連複として
+                #      採点する＝切替導入前の記録がそのまま正しく読める。
+                c7_is_tf = dec_7c.get("bet_kind") == "trifecta"
+                c7_order3 = tuple(c7_order[:3])
                 if is_buy:
                     try:
-                        c7_combos = [frozenset(int(x) for x in str(c).split("-"))
-                                     for c in dec_7c["combos"]]
+                        if c7_is_tf:
+                            c7_combos = [tuple(int(x) for x in str(c).split("-"))
+                                         for c in dec_7c["combos"]]
+                        else:
+                            c7_combos = [frozenset(int(x) for x in str(c).split("-"))
+                                         for c in dec_7c["combos"]]
                     except (TypeError, ValueError):
                         continue
                     c7_n_combos = len(c7_combos)
                     c7_stake = int(dec_7c.get("stake")
                                    or rank_7c_unit_stake(c7_n_combos))
-                    c7_hit = any(cs == c7_top3 for cs in c7_combos)
+                    c7_win_key = c7_order3 if c7_is_tf else c7_top3
+                    c7_hit = any(cs == c7_win_key for cs in c7_combos)
                     c7_pay, c7_bet = resolve_payout(
-                        conn, rk, "7C", hit=c7_hit, winning_key=c7_top3,
-                        odds_payout=c7_trio_pay, fallback_stake=c7_stake, n_combos=c7_n_combos)
-                    c7_thirds = sorted(
-                        next(iter(cs - {c7_axis1, c7_axis2}))
-                        for cs in c7_combos if len(cs - {c7_axis1, c7_axis2}) == 1)
-                    c7_pred = f"{c7_axis1}={c7_axis2}-" + ",".join(map(str, c7_thirds))
+                        conn, rk, "7C", hit=c7_hit, winning_key=c7_win_key,
+                        odds_payout=(c7_trifecta_pay if c7_is_tf else c7_trio_pay),
+                        fallback_stake=c7_stake, n_combos=c7_n_combos)
+                    if c7_is_tf:
+                        # 買い目は必ず「軸1-軸2-相手」なので3列目だけ集めれば復元できる。
+                        c7_thirds = sorted(cs[2] for cs in c7_combos if len(cs) == 3)
+                        c7_pred = ("三単:" + f"{c7_axis1}-{c7_axis2}-"
+                                   + ",".join(map(str, c7_thirds)))
+                    else:
+                        c7_thirds = sorted(
+                            next(iter(cs - {c7_axis1, c7_axis2}))
+                            for cs in c7_combos if len(cs - {c7_axis1, c7_axis2}) == 1)
+                        c7_pred = f"{c7_axis1}={c7_axis2}-" + ",".join(map(str, c7_thirds))
                 else:
                     c7_hit = c7_axis1 in c7_top3 and c7_axis2 in c7_top3
                     c7_pay = 0
