@@ -1279,7 +1279,7 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
         rank_7a_top2_threshold, rank_7a_top2_gate, load_7a_pool_axis_sums,
         rank_7b_daily_select, rank_7b_order_disagree, rank_7b_select_legs,
         rank_7c_daily_select, rank_7c_select_axis, rank_7c_select_legs,
-        rank_7c_is_lowpay_pattern,
+        rank_7c_is_lowpay_pattern, rank_7c_use_trifecta,
         RANK_7C_P3_SUM_MIN, RANK_7C_LEGS_MIN,
         rank_7ss_daily_select, rank_7ss_same_line,
         rank_9s_daily_select, rank_9a_daily_select, ss_policy,
@@ -1940,6 +1940,14 @@ def wave_picks_wt(target_date, output_path, model_name, only_races_file,
                     "p3_sum_top2": round(sel_7c[2], 6) if sel_7c else None,
                     "legs_7c": legs_7c,
                     "lowpay_pattern": lowpay_7c,
+                    # 三連単への切替（2026-08-09）。判定は朝の生予測で確定させ、
+                    # 入稿側は**この真偽値だけ**を読む。入稿時に win_probs から
+                    # 再判定すると、朝の予想（Web・Discord）と入稿の買い目が
+                    # 別々の根拠で決まりうる（同じ値の二重管理）。
+                    "pw1_7c": (round(win_probs.get(sel_7c[0], 0.0), 6)
+                               if sel_7c else None),
+                    "trifecta_7c": bool(
+                        sel_7c and rank_7c_use_trifecta(win_probs, sel_7c[0])),
                 })
         else:
             click.echo("[wt] lgbm_wt_win が見つかりません。S7候補は生成しません。", err=True)
