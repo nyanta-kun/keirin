@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import math
 import re
 import sys
 from datetime import datetime
@@ -74,6 +73,15 @@ from src.meeting_wave import (
     waves_due_by,
 )
 from src.dutch_allocation import dutch_allocate
+from src.race_shape import (
+    classify_shape,
+    logit,
+    shape_note_text,
+    shape_title_text,
+    sigmoid,
+    solve_logit_shift,
+    stake_note_text,
+)
 from src.stake_allocation import group_by_stake, tilted_stakes
 from src.strategy_wt import (
     RACE_BUDGET,
@@ -265,26 +273,11 @@ CONFIDENT_RANKS = {"7SS"}
 # 揃わないため、ロジット空間で一律シフトして単勝=100%・複勝=min(出走数,3)*100%に補正する。
 # ---------------------------------------------------------------------------
 
-def _sigmoid(x: float) -> float:
-    return 1 / (1 + math.exp(-x))
-
-
-def _logit(p: float) -> float:
-    eps = 1e-6
-    c = min(max(p, eps), 1 - eps)
-    return math.log(c / (1 - c))
-
-
-def _solve_logit_shift(probs: list[float], target: float) -> float:
-    lo, hi = -50.0, 50.0
-    for _ in range(60):
-        mid = (lo + hi) / 2
-        total = sum(_sigmoid(_logit(p) + mid) for p in probs)
-        if total < target:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2
+# 🔴 正規化の実装は `src/race_shape.py` が単一正本。タイトルの構造ラベルも
+#    同じ正規化値で判定するため、ここに再実装すると表と見立てが食い違いうる。
+_sigmoid = sigmoid
+_logit = logit
+_solve_logit_shift = solve_logit_shift
 
 
 def _build_entry_table(race_key: str, marks: dict[int, str]) -> str | None:
@@ -343,11 +336,59 @@ def _build_entry_table(race_key: str, marks: dict[int, str]) -> str | None:
 # テンプレート
 # ---------------------------------------------------------------------------
 
+def _load_shape_entries(race_key: str) -> list[dict]:
+    """構造ラベル判定に要る列だけを読む（`src/race_shape.py` の入力）。"""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT frame_no, pred_win_pct, pred_top3_pct, style, line_group "
+            "FROM wt_entries WHERE race_key = ? ORDER BY frame_no",
+            (race_key,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _shape_texts(race_key: str, rank_key: str, axis1: int, axis2: int) -> tuple[str, str]:
+    """(タイトル後半, 見解本文の冒頭) を返す。
+
+    ⚠️ 軸2車は**そのランク自身のもの**を渡すこと。7C だけ軸が `axis1_7c`/`axis2_7c`
+       で他ランクと別物なので、取り違えると全レースで line/split が入れ替わる。
+    """
+    entries = _load_shape_entries(race_key)
+    shape = classify_shape(rank_key, entries, axis1, axis2)
+    title_text, warning = shape_title_text(rank_key, shape)
+    note_text, _ = shape_note_text(rank_key, shape)
+    if warning:
+        print(f"[netkeirin_submit] WARN {race_key}: {warning}", flush=True)
+    return title_text, note_text
+
+
+def _shape_text(race_key: str, rank_key: str, axis1: int, axis2: int) -> str:
+    """タイトル後半だけが要る呼び出し向け（`draft_7h1_submission.py`）。"""
+    return _shape_texts(race_key, rank_key, axis1, axis2)[0]
+
+
+def _stake_note_for(rank_key: str, legs: list[BetLeg]) -> str:
+    """実際に入稿する買い目から配分の説明文を決める。
+
+    🔴 **legs から導く**のが肝。ダッチ配分も傾斜配分も朝オッズが揃わなければ均等へ
+       フォールバックする（欠損は約半数）ため、テンプレートに「オッズに応じて配分」と
+       固定で書くと**半分のレースで嘘になる**（仕様書 §4-6 実態一致の原則）。
+       券種ごとに単価がばらついているかで判定する（7H1 は三連単と三連複で単価が
+       違うのが正常なので、券種をまたいで比べてはいけない）。
+    """
+    by_kind: dict[str, set[int]] = {}
+    for leg in legs:
+        by_kind.setdefault(leg.bet_kind, set()).add(leg.stake_per_line)
+    tilted = any(len(v) > 1 for v in by_kind.values())
+    return stake_note_text(rank_key, tilted)
+
+
 def _apply_template(
     template: str, *, venue_name: str, race_no: int, rank_key: str, target_date: str,
-    axis1: int, axis2: int,
+    axis1: int, axis2: int, shape: str = "", shape_note: str = "",
+    stake_note: str = "",
 ) -> str:
-    """{venue}{race_no}{rank}{date}{axis1}{axis2} を置換する。
+    """{venue}{race_no}{rank}{date}{axis1}{axis2}{shape}{shape_note}{stake_note} を置換する。
     str.format ではなく固定辞書の逐次 str.replace を使う（未定義の{...}をユーザーが
     書いても例外にせず素通しするため）。
     """
@@ -358,6 +399,9 @@ def _apply_template(
         "{date}": target_date,
         "{axis1}": str(axis1),
         "{axis2}": str(axis2),
+        "{shape}": shape,
+        "{shape_note}": shape_note,
+        "{stake_note}": stake_note,
     }
     out = template
     for k, v in repl.items():
@@ -1069,13 +1113,17 @@ def _process_rank(
                   flush=True)
             continue
 
+        shape, shape_note = _shape_texts(race_key, rank_key, axis1, axis2_or_p1)
+        stake_note = _stake_note_for(rank_key, legs)
         title = _apply_template(
             title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
-            target_date=target_date, axis1=axis1, axis2=axis2_or_p1,
+            target_date=target_date, axis1=axis1, axis2=axis2_or_p1, shape=shape,
+            shape_note=shape_note, stake_note=stake_note,
         )
         comment = _apply_template(
             comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
-            target_date=target_date, axis1=axis1, axis2=axis2_or_p1,
+            target_date=target_date, axis1=axis1, axis2=axis2_or_p1, shape=shape,
+            shape_note=shape_note, stake_note=stake_note,
         )
         entry_table = _build_entry_table(race_key, marks)
         if entry_table:
@@ -1244,28 +1292,34 @@ def _process_manual(
     comment_template = ((setting or {}).get("comment_template")
                         or cfg.get("default_comment") or _DEFAULT_COMMENT_TEMPLATE)
 
-    title = _apply_template(
-        title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
-        target_date=target_date, axis1=axis1, axis2=axis2,
-    )
-    comment = _apply_template(
-        comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
-        target_date=target_date, axis1=axis1, axis2=axis2,
-    )
-    entry_table = _build_entry_table(race_key, {axis1: "◎", axis2: "○"})
-    if entry_table:
-        comment = f"{comment}\n\n{entry_table}"
-
     # 手動入稿も自動入稿と**同じ商品**なので配分方式を揃える。
     # 片方だけ均等のままだと、共通の文面「想定オッズに応じて配分しています」が
     # 手動入稿分だけ嘘になる。なおこちらは日中に呼ばれるため朝スナップショットが
     # 無ければ現在の wt_odds を使う＝自動入稿より新しいオッズで配分できる。
+    # 🔴 **文面より先に組む**。`{stake_note}` は実際に入稿する買い目から導くため、
+    #    legs が確定する前にテンプレートを適用すると常に「均等」になる。
     tilt_source = None
     tilt_stakes_map: dict[int, int] = {}
     legs: list[BetLeg] = []
     if cfg.get("tilt_stakes"):
         legs, tilt_source, tilt_stakes_map = _build_tilted_legs(
             race_key, cfg, axis1, axis2, partners)
+
+    shape, shape_note = _shape_texts(race_key, rank_key, axis1, axis2)
+    stake_note = _stake_note_for(rank_key, legs)
+    title = _apply_template(
+        title_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
+        target_date=target_date, axis1=axis1, axis2=axis2, shape=shape,
+        shape_note=shape_note, stake_note=stake_note,
+    )
+    comment = _apply_template(
+        comment_template, venue_name=venue_name, race_no=race_no, rank_key=rank_key,
+        target_date=target_date, axis1=axis1, axis2=axis2, shape=shape,
+        shape_note=shape_note, stake_note=stake_note,
+    )
+    entry_table = _build_entry_table(race_key, {axis1: "◎", axis2: "○"})
+    if entry_table:
+        comment = f"{comment}\n\n{entry_table}"
 
     if dry_run:
         detail = (

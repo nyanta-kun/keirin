@@ -37,13 +37,19 @@ from src.bet_display import (  # noqa: E402
     fold_trifecta_formation, fold_trio_box,
 )
 from src.database import get_connection  # noqa: E402
+# 🔴 自動入稿と**同じ関数**でタイトルを組む。ここで独自に組むと、下書きで確認した
+#    ものと本番の商品が食い違う（この下書きは手動投稿の原稿になるため致命的）。
+from scripts.netkeirin_submit_wt import (  # noqa: E402
+    RANK_CONFIGS, _apply_template, _normalize_multi_candidate, _shape_texts,
+    _stake_note_for,
+)
 
 JST = timezone(timedelta(hours=9))
 RANK_KEY = "7H1"
 
-# 既定のテンプレ。タイトルは既存ランクの `〜の二軸` に揃える
-# （7A=本日の二軸 / 7S=自信の二軸 / 7SS=ライン本線の二軸 / 7B=相手を絞った二軸）。
-DEFAULT_TITLE = "穴狙いの二軸"
+# 既定のテンプレ。タイトルは既存ランクの `〜の二軸｜{shape}` に揃える
+# （{shape} は `src/race_shape.py` が返すレース構造の見立て）。
+DEFAULT_TITLE = "穴狙いの二軸｜{shape}"
 DEFAULT_COMMENT = (
     "本日の穴狙いをお届けします。\n\n"
     "当方の指数で頭ひとつ抜けた1車が、それでも4着以下に沈むと読んだレースだけを"
@@ -96,14 +102,26 @@ def main() -> None:
             t = None
         if args.night_only and (t is None or t.hour < 17):
             continue
-        title = title_tpl.format(venue=c.get("venue_name") or "",
-                                 race_no=c.get("race_no") or "")
+        # 🔴 軸2車も買い目も**自動入稿と同じ関数**で組む。ここで独自に導出すると、
+        #    下書きで確認した原稿と実際の商品が食い違う。
+        legs, _marks, axis1, axis2, _src = _normalize_multi_candidate(
+            c, RANK_CONFIGS[RANK_KEY], c["race_key"].split("#")[0])
+        shape, shape_note = _shape_texts(c["race_key"], RANK_KEY, axis1, axis2)
+        stake_note = _stake_note_for(RANK_KEY, legs)
+        tmpl_args = dict(
+            venue_name=c.get("venue_name") or "",
+            race_no=int(c.get("race_no") or 0), rank_key=RANK_KEY,
+            target_date=args.date, axis1=axis1, axis2=axis2, shape=shape,
+            shape_note=shape_note, stake_note=stake_note,
+        )
+        title = _apply_template(title_tpl, **tmpl_args)
+        comment = _apply_template(comment_tpl, **tmpl_args)
         drafts.append({
             "race_key": c["race_key"], "venue": c.get("venue_name"),
             "race_no": c.get("race_no"),
             "start_time": t.strftime("%H:%M") if t else None,
             "race_type": c.get("race_type"),
-            "title": title, "comment": comment_tpl,
+            "title": title, "comment": comment,
             "excluded_fav": {"frame": c["fav"], "name": c.get("fav_name")},
             "gap12_pt": round(float(c.get("gap12") or 0) * 100, 1),
             "bust_prob_pct": round(float(c.get("bust_prob") or 0) * 100, 1),
@@ -140,7 +158,9 @@ def main() -> None:
         print(f"  合計 {d['bet_amount']:,}円")
     if drafts:
         print("─" * 66)
-        print("\n【本文（全レース共通）】")
+        # 本文は 2026-08-09 から**レースごとに変わる**（冒頭の見解 {shape_note} と
+        # 配分の説明 {stake_note} がレース依存）。全件は長いので1件目を例示する。
+        print(f"\n【本文（例: {drafts[0]['venue']}{drafts[0]['race_no']}R）】")
         print(drafts[0]["comment"])
 
 
