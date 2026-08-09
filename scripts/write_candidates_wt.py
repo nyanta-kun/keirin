@@ -395,7 +395,9 @@ def _write_paper_candidates(target_date: str) -> None:
                     f"wave_picks_wt_{target_date}_night_s7c_candidates.json")):
         rk = c.get("race_key")
         axis1, axis2 = c.get("axis1_7c"), c.get("axis2_7c")
-        legs = c.get("legs_7c") or []
+        # 買う相手は `legs_7c_buy`（三連単=全部 / 三連複=上位2点）。
+        # 旧形式の候補JSONは持たないので `legs_7c` へフォールバックする。
+        legs = c.get("legs_7c_buy") or c.get("legs_7c") or []
         if not rk or axis1 is None or axis2 is None or not legs:
             continue
         # 🔴 単勝率で三連単へ切り替えるレース（`trifecta_7c`・2026-08-09）は

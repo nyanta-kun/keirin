@@ -38,6 +38,9 @@ def _cand(trifecta: bool) -> dict:
     probs = {1: 0.95, 2: 0.80, 3: 0.40, 4: 0.35, 5: 0.30, 6: 0.20, 7: 0.05}
     return {
         "axis1": 1, "axis2": 2,
+        # 三連複側のゲート（RANK_7C_TRIO_P3_SUM_MIN）で使う。本番の候補JSONは
+        # 必ず持つ（`rank_7c_daily_select` が None を落とすため）。
+        "p3_sum_top2": probs[1] + probs[2],
         "top3_probs": {str(k): v for k, v in probs.items()},
         "trifecta_7c": trifecta,
     }
@@ -63,16 +66,20 @@ def test_trifecta_case_emits_ordered_labels_and_bet_kind() -> None:
         assert head[0] == "1" and head[1] == "2", f"1着=軸1/2着=軸2 になっていない: {c}"
 
 
-def test_trifecta_point_count_matches_trio() -> None:
-    """🔴 点数が三連複と同じであること。
+def test_trifecta_point_count_equals_full_legs() -> None:
+    """🔴 三連単は相手を絞らない（＝足切り後の全点数のまま）。
 
-    点数が増えるとガミ境界（＝点数倍）も上がり、切替の根拠が消える。
+    点数を増やすとガミ境界（＝点数倍）も上がって切替の根拠が消えるが、
+    **減らしても**効果が消える（相手2点の三連単は掃引84.4/確認80.9で
+    相手全部の82.9/86.2に劣る）。2026-08-09 に三連複側だけ上位2点へ
+    絞ったので、三連単と点数が一致しなくなった点に注意。
     """
     board = _trio_board(list(range(1, 8)))
-    _, trio = judge_rank_7c(_cand(False), board)
     _, tf = judge_rank_7c(_cand(True), board)
-    assert len(tf["combos"]) == len(trio["combos"])
-    assert tf["stake"] == trio["stake"]
+    _, trio = judge_rank_7c(_cand(False), board)
+    assert len(tf["combos"]) == 4          # 足切り後の相手そのまま
+    assert len(trio["combos"]) == 2        # 三連複は上位2点
+    assert tf["stake"] == 2500 and trio["stake"] == 5000
 
 
 def test_trifecta_gate_uses_trio_board_not_trifecta_board() -> None:
