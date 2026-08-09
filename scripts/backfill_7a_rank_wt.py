@@ -73,7 +73,7 @@ from src.models.trainer import load_model
 from src.preprocessing.feature_wt import build_features_wt, load_raw_data_wt, prepare_X
 from src.strategy_wt import (
     RANK_7A_STAKE, unit_stake, rank_7s_field_entropy, rank_7s_select_axis, rank_7s_wt_mark3_overlap_n,
-    rank_7s_wt_overlap_n, rank_7a_daily_select,
+    rank_7s_wt_overlap_n, rank_7a_daily_select, rank_7a_gate_chronological,
 )
 
 N_CAR = 7
@@ -136,7 +136,9 @@ def _load_board_frames_wt(race_keys: list[str]) -> dict[str, set[int]]:
 
 def build_rows(model_name: str, date_from: str, date_to: str,
                 win_model_name: str = "lgbm_wt_win",
-                bad_model_name: str | None = "lgbm_wt_bad") -> list[dict]:
+                bad_model_name: str | None = "lgbm_wt_bad",
+                pool_history: list[tuple[str, float]] | None = None,
+                apply_top2_gate: bool = True) -> list[dict]:
     """バックフィル対象の 7A(#7A) 行（採点済み）を構築する。
 
     bad_model_name: 大敗モデル名。**3ヘッド軸選定（2026-08-04〜の本番と同一）**で
@@ -238,7 +240,13 @@ def build_rows(model_name: str, date_from: str, date_to: str,
     # 朝オッズ盤面は 2026-06-08 以降にしか無い。無い期間は p3 単独へ落ちる。
     morning_boards = load_morning_boards([c["race_key"] for c in candidates])
     rows: list[dict] = []
-    for c_ in rank_7a_daily_select(candidates):
+    # 【2026-08-09】低配当レース見送りゲート。**live と同じ規則で日付順に**掛ける
+    # （その日より前のプールから q20）。ここを外すと毎朝 08:40 の tail 再構築が
+    # ゲート前の行を書き戻し、live のゲートが帳消しになる。
+    _pool = rank_7a_daily_select(candidates)
+    _selected = (rank_7a_gate_chronological(_pool, pool_history)
+                 if apply_top2_gate else _pool)
+    for c_ in _selected:
         axis1, axis2 = c_["axis1"], c_["axis2"]
         trio = c_["trio"]
         # combos/bought_thirds を同期して構築（pred_combo は実際に買った目のみを

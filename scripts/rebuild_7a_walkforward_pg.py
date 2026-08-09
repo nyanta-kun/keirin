@@ -34,6 +34,7 @@ from src.wt_rebuild_common import (
     rebuild_pg_atomic,
     split_by_model_availability,
 )
+from src.strategy_wt import load_7a_pool_axis_sums
 from src.wt_vintage_config import bad_model_name, monthly_windows, tail_windows
 
 _RANK_LABEL = "RANK_7A"
@@ -104,12 +105,22 @@ def main() -> None:
 
     per_window_rows: list[tuple[str, str, list[dict]]] = []
     all_rows: list[dict] = []
+    # 低配当見送りゲートの母集団。窓をまたいで時系列に引き継ぐ（引き継がないと
+    # 各窓の先頭がフォールバック閾値で走り、live と閾値がずれる）。
+    # 先頭の窓は live が書いた `_s7a_pool.json` があればそこから種を貰う。
+    pool_history: list[tuple[str, float]] = []
+    if windows:
+        seed = load_7a_pool_axis_sums(Path(__file__).parent.parent / "data" / "picks",
+                                      windows[0][0])
+        pool_history.extend((windows[0][0], v) for v in seed)
+        if seed:
+            print(f"[rebuild-7a-pg] ゲート閾値の種: プールJSONから{len(seed)}件", flush=True)
     for date_from, date_to, eval_model, win_model in windows:
         bad_model = bad_model_name(eval_model)
         print(f"\n[rebuild-7a-pg] {date_from}〜{date_to}  eval={eval_model} "
               f"win={win_model} bad={bad_model}", flush=True)
         rows = build_rows(eval_model, date_from, date_to, win_model_name=win_model,
-                          bad_model_name=bad_model)
+                          bad_model_name=bad_model, pool_history=pool_history)
         n_hit = sum(r["hit"] for r in rows)
         bet = sum(r["bet_amount"] for r in rows)
         pay = sum(r["payout"] for r in rows)

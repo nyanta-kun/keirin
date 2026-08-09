@@ -25,6 +25,7 @@ DB アクセスは全て monkeypatch で差し替え、実DBへは一切アク�
 from __future__ import annotations
 
 import math
+import inspect
 import sys
 from pathlib import Path
 
@@ -459,7 +460,13 @@ def _run_gate_variant(monkeypatch, module, build_fn_name: str, db: FakeDB,
     monkeypatch.setattr(module, "build_features_wt",
                          lambda _raw: _make_field_df(rk, n_car=len(probs), probs=probs))
     build_rows = getattr(module, build_fn_name)
-    return build_rows("lgbm_wt_eval", "2024-01-01", "2024-01-31", "lgbm_wt_win")
+    # 🔴 本テストの関心事は**欠車時の無効判定**であって選抜ではない。
+    #    7A の低配当見送りゲート(2026-08-09)は合成データを閾値で落としてしまうので
+    #    明示的に無効化する（ゲート自体は test_dutch_and_7a_gate.py で検査済み）。
+    kwargs = {}
+    if "apply_top2_gate" in inspect.signature(build_rows).parameters:
+        kwargs["apply_top2_gate"] = False
+    return build_rows("lgbm_wt_eval", "2024-01-01", "2024-01-31", "lgbm_wt_win", **kwargs)
 
 
 def test_rank_9s_partial_third_exclusion_does_not_void_race(monkeypatch):
