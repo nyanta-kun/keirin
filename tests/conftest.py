@@ -7,6 +7,14 @@
 警告が5通投稿された**（ローカルは .env に本番webhookが入っているため）。
 テストが本番の通知先を汚すのは検査として明確に誤りなので、個別テストの
 monkeypatch 漏れに依存しない形で塞ぐ。
+
+同じ経路で **状態ファイルの汚染**も起きる（下記 `_isolate_zero_row_state`）。
+2026-08-09、上記と同じ `test_three_head_rebuild_guard.py` の空窓ケースが
+`_zero_row_should_notify()` を通り、実ファイル `data/logs/zero_row_notified.json`
+へ既報を書き込んでいた。この既報は「同じランク・同じ月は1回だけ」の抑制に使われるため、
+**月内2回目以降のテスト実行では通知が抑制され**
+`test_rebuild_pg_atomic_zero_total_rows_never_touches_db` が落ちていた。
+CI は fresh clone で毎回1回目扱いになるため通り、ローカルでだけ落ちる。
 """
 import sys
 from pathlib import Path
@@ -44,3 +52,21 @@ def _block_discord(monkeypatch):
     `notify_discord_warning` 等を個別に monkeypatch すること。
     """
     monkeypatch.setattr("src.notify.discord._load_webhook_url", lambda channel: "")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_zero_row_state(tmp_path, monkeypatch):
+    """0件通知の既報状態を全テストで一時ファイルへ逃がす。
+
+    🔴 **テストが自分の実行痕で落ちるのを防ぐ**。`_zero_row_should_notify()` は
+       「同じランク・同じ月は1回だけ」を実ファイルへ記録するので、テストがそこへ
+       書くと2回目以降の実行で自分の既報にぶつかる（モジュール docstring 参照）。
+
+    `_block_discord` と同じく **repo 全体に効かせる**。書き込むのは
+    `rebuild_pg_atomic()` の0件経路を通る全テストで、
+    `test_wt_rebuild_common.py` だけの問題ではない（実際の書き込み元は
+    `test_three_head_rebuild_guard.py` だった）。
+    """
+    from src import wt_rebuild_common
+    monkeypatch.setattr(
+        wt_rebuild_common, "_ZERO_ROW_STATE", tmp_path / "zero_row_notified.json")

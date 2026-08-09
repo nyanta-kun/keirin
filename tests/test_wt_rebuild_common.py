@@ -32,6 +32,13 @@ if str(ROOT) not in sys.path:
 
 from src import wt_rebuild_common as wrc
 
+#: 本物の状態ファイル（import 時点＝差し替え前に控える）。下の隔離テストで使う。
+_REAL_ZERO_ROW_STATE = wrc._ZERO_ROW_STATE
+
+
+# 隔離そのものは `tests/conftest.py::_isolate_zero_row_state` が repo 全体へ効かせる
+# （書き込み元は本ファイルではなく test_three_head_rebuild_guard.py だったため）。
+
 
 # ---------------------------------------------------------------------------
 # split_by_model_availability
@@ -255,6 +262,11 @@ def test_rebuild_pg_atomic_exception_mid_loop_propagates_for_rollback(monkeypatc
 #   9S のように候補がほぼ出ないランクが毎朝同じ警告を流すと、
 #   警告そのものが読まれなくなるため。
 # ---------------------------------------------------------------------------
+
+def test_zero_row_state_is_isolated_from_the_repo_file():
+    """状態ファイルの差し替えが効いていること（効いていないと自己汚染する）。"""
+    assert wrc._ZERO_ROW_STATE != _REAL_ZERO_ROW_STATE
+
 
 def test_zero_row_初回は通知し2回目は抑制する(tmp_path, monkeypatch):
     import src.wt_rebuild_common as m
